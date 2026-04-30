@@ -1,0 +1,22 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "ESNext",
+		"moduleResolution": "Bundler",
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		"noImplicitOverride": true,
+		"exactOptionalPropertyTypes": true,
+		"verbatimModuleSyntax": true,
+		"isolatedModules": true,
+		"esModuleInterop": true,
+		"resolveJsonModule": true,
+		"skipLibCheck": true,
+		"lib": ["ES2022"],
+		"types": ["bun"],
+		"outDir": "dist",
+		"noEmit": true
+	},
+	"include": ["src/**/*", "tests/**/*", "scripts/**/*"],
+	"exclude": ["node_modules", "dist", "fixtures/templates/**"]
+}

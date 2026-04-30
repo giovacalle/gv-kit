@@ -1,0 +1,9 @@
+{
+	"useTabs": true,
+	"singleQuote": true,
+	"trailingComma": "none",
+	"printWidth": 100,
+	"semi": false,
+	"plugins": ["@ianvs/prettier-plugin-sort-imports"],
+	"importOrder": ["^node:", "<THIRD_PARTY_MODULES>", "^@/(.*)$", "^[./]"]
+}

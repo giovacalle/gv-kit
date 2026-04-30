@@ -1,0 +1,6 @@
+dist/
+node_modules/
+fixtures/__snapshots__/
+fixtures/templates/
+src/generated/
+bun.lock

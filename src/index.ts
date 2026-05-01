@@ -1,0 +1,6 @@
+export { runGenerators } from './generators/index.js'
+export type { FileEntry, GeneratorFn } from './lib/files.js'
+export { buildScaffoldPlan } from './pipeline/plan.js'
+export { validate } from './pipeline/validate.js'
+export { GvKitConfig } from './schema/config.js'
+export type { Choices } from './schema/config.js'

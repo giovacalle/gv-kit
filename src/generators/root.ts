@@ -1,0 +1,331 @@
+import type { FileEntry } from '../lib/files.js'
+import type { GvKitConfig } from '../schema/config.js'
+
+/** Generator for the scaffolded project's root files (workspace + lint/format shims). */
+export function generateRoot(cfg: GvKitConfig): FileEntry[] {
+	return [
+		{ path: 'package.json', content: renderRootPackageJson(cfg) },
+		{ path: 'pnpm-workspace.yaml', content: PNPM_WORKSPACE_YAML },
+		{ path: 'turbo.json', content: TURBO_JSON },
+		{ path: 'tsconfig.json', content: TSCONFIG_ROOT },
+		{ path: '.gitignore', content: GITIGNORE },
+		{ path: 'prettier.config.js', content: PRETTIER_CONFIG_SHIM },
+		{ path: '.prettierignore', content: PRETTIERIGNORE },
+		{ path: 'eslint.config.js', content: ESLINT_CONFIG_SHIM },
+		{ path: 'README.md', content: renderReadme(cfg) },
+		{ path: '.env.example', content: renderEnvExample(cfg) },
+		{ path: 'LICENSE', content: LICENSE_MIT }
+	]
+}
+
+function renderRootPackageJson(cfg: GvKitConfig): string {
+	const pkg = {
+		name: cfg.choices.name,
+		version: '0.0.0',
+		private: true,
+		type: 'module',
+		packageManager: 'pnpm@11.1.1',
+		scripts: {
+			dev: 'turbo run dev',
+			build: 'turbo run build',
+			test: 'turbo run test',
+			typecheck: 'turbo run typecheck',
+			lint: 'turbo run lint',
+			format: 'prettier --write "**/*.{ts,tsx,svelte,json,md}"',
+			prepare: 'husky'
+		},
+		devDependencies: {
+			'@commitlint/cli': '^19.6.0',
+			'@commitlint/config-conventional': '^19.6.0',
+			'@ianvs/prettier-plugin-sort-imports': '^4.4.0',
+			'@repo/tooling-eslint': 'workspace:*',
+			'@repo/tooling-prettier': 'workspace:*',
+			eslint: '^9.0.0',
+			husky: '^9.1.7',
+			'lint-staged': '^15.2.10',
+			prettier: '^3.4.0',
+			turbo: '^2.9.0',
+			typescript: '~5.9.0'
+		},
+		'lint-staged': {
+			'**/*.{ts,tsx,svelte,svelte.ts,svelte.js}': ['prettier --write', 'eslint --fix'],
+			'**/*.{json,css,html,md}': ['prettier --write']
+		},
+		overrides: {
+			zod: '^4.3.0'
+		},
+		engines: {
+			node: '>=20',
+			pnpm: '>=11'
+		}
+	}
+	return JSON.stringify(pkg, null, 2) + '\n'
+}
+
+const PNPM_WORKSPACE_YAML = `packages:
+  - 'apps/*'
+  - 'apps/api/*'
+  - 'packages/*'
+  - 'packages/tooling/*'
+
+# Pre-approve native build scripts so \`pnpm install\` never stops to prompt
+# (pnpm 10+ otherwise writes a placeholder here that blocks subsequent commands).
+allowBuilds:
+  '@tailwindcss/oxide': true
+  better-sqlite3: true
+  core-js: false
+  esbuild: true
+  protobufjs: false
+  sharp: true
+  workerd: true
+`
+
+const TURBO_JSON =
+	JSON.stringify(
+		{
+			$schema: 'https://turbo.build/schema.json',
+			ui: 'tui',
+			tasks: {
+				build: {
+					dependsOn: ['^build'],
+					outputs: ['dist/**', '.svelte-kit/**', '.wrangler/**', 'src/paraglide/**']
+				},
+				typecheck: {
+					dependsOn: ['^build']
+				},
+				test: {
+					dependsOn: ['^build'],
+					outputs: []
+				},
+				lint: {
+					outputs: []
+				},
+				dev: {
+					cache: false,
+					persistent: true
+				}
+			}
+		},
+		null,
+		2
+	) + '\n'
+
+const TSCONFIG_ROOT = `{
+	"extends": "@repo/tooling-typescript/base.json",
+	"compilerOptions": {
+		"noEmit": true
+	},
+	"include": ["apps/**/*", "apps/api/**/*", "packages/**/*"],
+	"exclude": [
+		"node_modules",
+		"dist",
+		".svelte-kit",
+		".wrangler",
+		".turbo",
+		"**/node_modules",
+		"**/dist",
+		"**/.svelte-kit",
+		"**/.wrangler"
+	]
+}
+`
+
+const GITIGNORE = `node_modules/
+.pnpm-store/
+dist/
+.turbo/
+.svelte-kit/
+.wrangler/
+**/worker-configuration.d.ts
+.DS_Store
+.env
+.env.local
+.env.*.local
+**/.dev.vars
+*.local
+*.tsbuildinfo
+`
+
+const PRETTIER_CONFIG_SHIM = `export { default } from '@repo/tooling-prettier'
+`
+
+const PRETTIERIGNORE = `node_modules/
+dist/
+.svelte-kit/
+.wrangler/
+.turbo/
+pnpm-lock.yaml
+**/openapi-client/src/*/
+`
+
+const ESLINT_CONFIG_SHIM = `export { default } from '@repo/tooling-eslint'
+`
+
+function renderReadme(cfg: GvKitConfig): string {
+	const { name } = cfg.choices
+	const stackLines: string[] = []
+	stackLines.push(`- Frontend: SvelteKit`)
+	if (cfg.choices.backend === 'hono') {
+		stackLines.push('- Backend: Hono workers (containerised under `apps/api/`)')
+	} else {
+		stackLines.push('- Backend: SvelteKit endpoints (no separate API)')
+	}
+	stackLines.push(`- Database: ${cfg.choices.db === 'postgres' ? 'PostgreSQL' : 'SQLite'} via Drizzle`)
+	if (cfg.choices.auth.length > 0) {
+		const methods = cfg.choices.auth.join(', ')
+		stackLines.push(`- Auth: better-auth (${methods})`)
+	}
+	if (cfg.choices.i18n === 'paraglide') stackLines.push('- i18n: Paraglide')
+	if (cfg.choices.email !== 'skip') stackLines.push(`- Email: ${cfg.choices.email}`)
+	if (cfg.choices.deploy !== 'skip') {
+		const deployLabel = cfg.choices.deploy === 'cf-workers' ? 'Cloudflare Workers' : 'Docker'
+		stackLines.push(`- Deploy: ${deployLabel}`)
+	}
+
+	return `# ${name}
+
+Type-safe full-stack monorepo with sensible defaults — install, run, ship.
+
+## Quickstart
+
+\`\`\`bash
+pnpm install
+pnpm dev
+\`\`\`
+
+## Common commands
+
+| Command | What it does |
+|---------|--------------|
+| \`pnpm dev\` | Start every app and service in watch mode |
+| \`pnpm build\` | Build every workspace package |
+| \`pnpm test\` | Run all tests |
+| \`pnpm typecheck\` | TypeScript check across the workspace |
+| \`pnpm lint\` | ESLint across the workspace |
+| \`pnpm format\` | Format with Prettier |
+
+## Environment
+
+Copy \`.env.example\` to \`.env\` and fill in any secrets your services need.
+For workers, secrets go through \`wrangler secret put <NAME>\` rather than \`.env\`.
+
+## Stack
+
+${stackLines.join('\n')}
+
+## Layout
+
+- \`apps/web/\` — SvelteKit app
+${cfg.choices.backend === 'hono' ? '- `apps/api/<service>/` — independently deployable Hono workers\n' : ''}- \`packages/db/\` — Drizzle schema + client factory
+- \`packages/backend/\` — shared backend helpers (logger, error helpers, middleware)
+${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages and runtime\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — generated TypeScript clients per service\n' : ''}${
+		cfg.choices.aiTooling.length > 0
+			? `\nSee \`.ai/rules/\` for architecture rules, in particular the service\nboundary policy.\n`
+			: ''
+	}
+## Workspace
+
+\`pnpm-workspace.yaml\` lists the packages. \`pnpm install\` uses strict mode by default, so each package only sees the dependencies declared in its own \`package.json\` — there is no hoisted root \`node_modules\` to lean on.
+
+Every runtime and type-only import must be declared explicitly in the importing package's \`package.json\` (including ambient types from \`@repo/tooling-typescript\` such as \`@types/node\` or \`@cloudflare/workers-types\`). ESLint's \`import/no-extraneous-dependencies\` rule catches anything that slips through (\`pnpm lint\`).
+`
+}
+
+function renderEnvExample(cfg: GvKitConfig): string {
+	const lines: string[] = []
+	lines.push('# Copy to .env and fill in. NEVER commit .env.')
+
+	const isHono = cfg.choices.backend === 'hono'
+	const isCf = cfg.choices.deploy === 'cf-workers'
+
+	if (cfg.choices.auth.length > 0) {
+		lines.push('')
+		lines.push('# Auth (better-auth)')
+		lines.push('BETTER_AUTH_SECRET=')
+		lines.push('BETTER_AUTH_URL=http://localhost:5173')
+	}
+
+	if (cfg.choices.auth.includes('google')) {
+		lines.push('')
+		lines.push('# Google OAuth')
+		lines.push('GOOGLE_CLIENT_ID=')
+		lines.push('GOOGLE_CLIENT_SECRET=')
+	}
+
+	if (cfg.choices.db === 'postgres') {
+		lines.push('')
+		lines.push('# PostgreSQL')
+		lines.push('DATABASE_URL=postgres://user:pass@localhost:5432/' + cfg.choices.name)
+	} else if (cfg.choices.db === 'sqlite' && isHono && !isCf) {
+		lines.push('')
+		lines.push('# SQLite (services use libsql — defaults to file:./local.db each)')
+		lines.push('# SQLITE_PATH=file:./local.db')
+	}
+
+	if (cfg.choices.email === 'resend') {
+		lines.push('')
+		lines.push('# Resend')
+		lines.push('RESEND_API_KEY=')
+	} else if (cfg.choices.email === 'notifuse') {
+		lines.push('')
+		lines.push('# Notifuse (self-hosted instance)')
+		lines.push('NOTIFUSE_API_KEY=')
+		lines.push('NOTIFUSE_WORKSPACE_ID=')
+		lines.push('NOTIFUSE_BASE_URL=https://notifuse.example.com')
+	}
+
+	if (cfg.choices.auth.includes('emailOTP')) {
+		lines.push('')
+		lines.push('# Cloudflare Turnstile (auth Worker only — apps/web holds the public site key)')
+		lines.push('TURNSTILE_SECRET_KEY=')
+	}
+
+	if (cfg.choices.monitoring.includes('umami')) {
+		lines.push('')
+		lines.push('# Umami')
+		lines.push('PUBLIC_UMAMI_WEBSITE_ID=')
+		lines.push('PUBLIC_UMAMI_HOST=')
+	}
+	if (cfg.choices.monitoring.includes('posthog')) {
+		lines.push('')
+		lines.push('# PostHog')
+		lines.push('PUBLIC_POSTHOG_KEY=')
+		lines.push('PUBLIC_POSTHOG_HOST=https://eu.posthog.com')
+	}
+
+	if (isHono) {
+		lines.push('')
+		if (isCf) {
+			lines.push('# Local dev only — used by users-worker when AUTH service binding is unset')
+			lines.push('AUTH_URL=http://localhost:8787')
+		} else {
+			lines.push('# Service URLs (apps/api/{auth,users} run as standalone Node/Bun servers)')
+			lines.push('AUTH_URL=http://localhost:8787')
+			lines.push('PUBLIC_AUTH_URL=http://localhost:8787/api/auth')
+			lines.push('PUBLIC_API_URL=http://localhost:8788')
+		}
+	}
+
+	return lines.join('\n') + '\n'
+}
+
+const LICENSE_MIT = `MIT License
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+`

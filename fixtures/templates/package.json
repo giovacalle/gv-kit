@@ -1,0 +1,5 @@
+{
+	"name": "gv-kit-fixtures",
+	"private": true,
+	"workspaces": ["packages/*", "ui/base", "web/base"]
+}

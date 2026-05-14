@@ -1,0 +1,5 @@
+{
+	"dependencies": {
+		"@svelte-put/cloudflare-turnstile": "^1.2.0"
+	}
+}

@@ -1,0 +1,23 @@
+{
+	// SvelteKit + Cloudflare adapter on Workers.
+	// JSONC: comments and trailing $schema are honored by wrangler.
+	"$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
+	"name": "__PROJECT__-web",
+	"main": ".svelte-kit/cloudflare/_worker.js",
+	"compatibility_date": "__COMPAT_DATE__",
+	"compatibility_flags": ["nodejs_als"],
+	// Replace <domain> with the project's apex domain.
+	"routes": [{ "pattern": "<domain>/*", "custom_domain": true }],
+	"assets": {
+		"binding": "ASSETS",
+		"directory": ".svelte-kit/cloudflare"
+	},
+	"observability": {
+		"enabled": true
+	}
+	/*@gvkit:if insideFrontendAuth*/
+	// inside-frontend mode: this Worker holds BETTER_AUTH_SECRET.
+	// Set via:  wrangler secret put BETTER_AUTH_SECRET
+	// All auth state lives here — there is no separate auth Worker.
+	/*@gvkit:endif*/
+}

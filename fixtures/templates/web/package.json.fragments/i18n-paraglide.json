@@ -1,0 +1,8 @@
+{
+	"dependencies": {
+		"@repo/i18n": "workspace:*"
+	},
+	"devDependencies": {
+		"@inlang/paraglide-js": "^2.0.0"
+	}
+}

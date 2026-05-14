@@ -1,0 +1,6 @@
+{
+	"dependencies": {
+		"@repo/openapi-client": "workspace:*",
+		"@tanstack/svelte-query": "^6.1.33"
+	}
+}

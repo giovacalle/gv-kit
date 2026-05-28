@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "node-auth-sqlite",
+		"frontend": "sveltekit",
+		"backend": "hono",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP", "google"],
+		"email": "resend",
+		"aiTooling": ["claude"],
+		"deploy": "docker"
+	}
+}

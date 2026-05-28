@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "inside-frontend-docker-sqlite",
+		"frontend": "sveltekit",
+		"backend": "inside-frontend",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "skip",
+		"auth": [],
+		"email": "skip",
+		"aiTooling": [],
+		"deploy": "docker"
+	}
+}

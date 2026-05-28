@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "inside-frontend-typical",
+		"frontend": "sveltekit",
+		"backend": "inside-frontend",
+		"i18n": "paraglide",
+		"monitoring": ["umami"],
+		"db": "postgres",
+		"apiClient": "skip",
+		"auth": ["emailOTP", "google"],
+		"email": "resend",
+		"aiTooling": ["claude"],
+		"deploy": "cf-workers"
+	}
+}

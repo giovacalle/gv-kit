@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "hono-docker-google-only",
+		"frontend": "sveltekit",
+		"backend": "hono",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "postgres",
+		"apiClient": "hey-api",
+		"auth": ["google"],
+		"email": "skip",
+		"aiTooling": ["claude"],
+		"deploy": "docker"
+	}
+}

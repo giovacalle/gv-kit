@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "hono-docker-full",
+		"frontend": "sveltekit",
+		"backend": "hono",
+		"i18n": "paraglide",
+		"monitoring": ["posthog"],
+		"db": "postgres",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP", "google"],
+		"email": "notifuse",
+		"aiTooling": ["claude"],
+		"deploy": "docker"
+	}
+}

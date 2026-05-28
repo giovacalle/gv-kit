@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "hono-cf-workers-full",
+		"frontend": "sveltekit",
+		"backend": "hono",
+		"i18n": "paraglide",
+		"monitoring": ["umami", "posthog"],
+		"db": "postgres",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP", "google"],
+		"email": "resend",
+		"aiTooling": ["claude", "codex", "opencode"],
+		"deploy": "cf-workers"
+	}
+}

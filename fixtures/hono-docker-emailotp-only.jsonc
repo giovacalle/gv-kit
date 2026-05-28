@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "hono-docker-emailotp-only",
+		"frontend": "sveltekit",
+		"backend": "hono",
+		"i18n": "paraglide",
+		"monitoring": ["umami"],
+		"db": "postgres",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP"],
+		"email": "resend",
+		"aiTooling": ["claude"],
+		"deploy": "docker"
+	}
+}

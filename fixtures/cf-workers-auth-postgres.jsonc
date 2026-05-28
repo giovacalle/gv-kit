@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "cf-workers-auth-postgres",
+		"frontend": "sveltekit",
+		"backend": "hono",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "postgres",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP", "google"],
+		"email": "resend",
+		"aiTooling": ["claude"],
+		"deploy": "cf-workers"
+	}
+}

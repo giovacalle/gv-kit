@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  cli-unit:
+    name: CLI unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Lint
+        run: bun run lint
+      - name: Typecheck
+        run: bun run typecheck
+      - name: Test
+        run: bun test
+
+  scaffold-matrix:
+    name: Scaffold (${{ matrix.fixture }})
+    needs: cli-unit
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        fixture:
+          - minimal
+          - inside-frontend-typical
+          - hono-cf-workers-full
+          - hono-docker-full
+          - hono-skip-deploy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.13
+      - name: Enable Corepack (scaffolded output uses pnpm)
+        run: corepack enable
+      - name: Configure Git (the CLI makes an initial scaffold commit)
+        run: |
+          git config --global user.name "gv-kit-ci"
+          git config --global user.email "ci@users.noreply.github.com"
+      - name: Install gv-kit
+        run: bun install --frozen-lockfile
+      - name: Scaffold project
+        run: bun run src/cli.ts new /tmp/scaffold --yes --config fixtures/${{ matrix.fixture }}.jsonc
+      - name: Generate API client (Hey API codegen)
+        working-directory: /tmp/scaffold
+        run: pnpm -r --if-present codegen
+      - name: Typecheck scaffolded
+        working-directory: /tmp/scaffold
+        run: pnpm run typecheck

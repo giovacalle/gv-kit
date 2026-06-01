@@ -104,10 +104,11 @@ apps/web/wrangler.jsonc  b4b2bb3cfb6ba295
 eslint.config.js  cfd85b071f7c820c
 gv-kit.config.jsonc  71203d424b6231eb
 package.json  8f2c3f95a5fcabc5
-packages/backend/package.json  6a3d011e750c31b6
+packages/backend/package.json  4a48887b472652b9
 packages/backend/src/core/data-access/users.ts  3cee1df896a23f1b
 packages/backend/src/core/types.ts  ba34cd9886b09156
 packages/backend/src/core/use-cases/users.ts  20f5c1ae10620433
+packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
 packages/backend/src/middleware/auth/client.ts  ffe0e6c517e47d2d
 packages/backend/src/middleware/auth/index.ts  e8a5c5bb198bc36e

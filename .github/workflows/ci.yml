@@ -58,3 +58,6 @@ jobs:
       - name: Typecheck scaffolded
         working-directory: /tmp/scaffold
         run: pnpm run typecheck
+      - name: Test scaffolded
+        working-directory: /tmp/scaffold
+        run: pnpm -r --if-present test

@@ -16,7 +16,8 @@ export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 			content: renderPackageJson({ isHono, isCf, isSqlite, hasAuth })
 		},
 		{ path: 'packages/backend/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
-		{ path: 'packages/backend/src/helpers/index.ts', content: HELPERS_INDEX }
+		{ path: 'packages/backend/src/helpers/index.ts', content: HELPERS_INDEX },
+		{ path: 'packages/backend/src/helpers/index.test.ts', content: HELPERS_TEST }
 	]
 
 	// users DAO + use-cases require the better-auth `user` table emitted by
@@ -83,7 +84,8 @@ function renderPackageJson({
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
 		'@types/node': '^22.10.0',
-		typescript: '~5.9.0'
+		typescript: '~5.9.0',
+		vitest: '^4.1.7'
 	}
 	if (isCf) devDependencies['@cloudflare/workers-types'] = '^4.20251101.0'
 
@@ -95,6 +97,7 @@ function renderPackageJson({
 		exports: exportsBlock,
 		scripts: {
 			typecheck: 'tsc --noEmit',
+			test: 'vitest run',
 			lint: 'eslint .'
 		},
 		dependencies,
@@ -154,6 +157,29 @@ export const errors = {
 	internal: (message = 'internal server error', code?: string): HttpError =>
 		new HttpError(500, message, code)
 }
+`
+
+const HELPERS_TEST = `import { describe, expect, test } from 'vitest'
+
+import { errors, HttpError } from './index.js'
+
+describe('errors', () => {
+	test('notFound builds a 404 HttpError', () => {
+		const err = errors.notFound('user not found', 'USER_NOT_FOUND')
+		expect(err).toBeInstanceOf(HttpError)
+		expect(err.status).toBe(404)
+		expect(err.message).toBe('user not found')
+		expect(err.code).toBe('USER_NOT_FOUND')
+	})
+
+	test('each factory carries its HTTP status', () => {
+		expect(errors.badRequest().status).toBe(400)
+		expect(errors.unauthorized().status).toBe(401)
+		expect(errors.forbidden().status).toBe(403)
+		expect(errors.conflict().status).toBe(409)
+		expect(errors.internal().status).toBe(500)
+	})
+})
 `
 
 /* ------------------------------------------------------------------ */

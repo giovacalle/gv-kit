@@ -4,10 +4,25 @@
 	"description": "Scaffolding CLI for Turborepo monorepos (SvelteKit + Hono on CF Workers)",
 	"license": "MIT",
 	"author": "giovacalle",
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/giovacalle/gv-kit.git"
+	},
+	"homepage": "https://github.com/giovacalle/gv-kit#readme",
+	"bugs": "https://github.com/giovacalle/gv-kit/issues",
+	"keywords": [
+		"scaffolding",
+		"cli",
+		"turborepo",
+		"sveltekit",
+		"hono",
+		"cloudflare-workers",
+		"monorepo"
+	],
 	"type": "module",
 	"main": "./dist/cli.js",
 	"bin": {
-		"gv-kit": "./dist/cli.js"
+		"gv-kit": "dist/cli.js"
 	},
 	"files": [
 		"dist",
@@ -30,7 +45,7 @@
 		"typecheck": "tsc --noEmit",
 		"lint": "eslint src tests",
 		"format": "prettier --write \"src/**/*.{ts,json,md}\" \"tests/**/*.ts\"",
-		"release": "changeset publish"
+		"release": "bun run build && changeset publish"
 	},
 	"dependencies": {
 		"@clack/prompts": "^1.2.0",

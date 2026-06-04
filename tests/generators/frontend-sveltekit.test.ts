@@ -95,6 +95,23 @@ describe('generateFrontendSveltekit — auth inclusion / exclusion', () => {
 		expect(loginNoGoogle.content).not.toContain('Continue with Google')
 	})
 
+	test('auth pages constrain long identity text on mobile', () => {
+		const entries = generateFrontendSveltekit(
+			makeCfg({ auth: ['emailOTP'], email: 'resend' })
+		)
+		const nav = findEntry(entries, 'apps/web/src/lib/components/layout/nav.svelte')!
+		const login = findEntry(entries, 'apps/web/src/routes/login/+page.svelte')!
+		const me = findEntry(entries, 'apps/web/src/routes/me/+page.svelte')!
+		const account = findEntry(entries, 'apps/web/src/routes/me/account/+page.svelte')!
+
+		expect(nav.content).toContain('w-full max-w-5xl')
+		expect(nav.content).toContain('min-w-0 truncate')
+		expect(login.content).toContain('break-all font-medium')
+		expect(me.content).toContain('grid-cols-[80px_minmax(0,1fr)]')
+		expect(me.content).toContain('min-w-0 break-all')
+		expect(account.content).toContain('min-w-0 break-all')
+	})
+
 	test('passwordless-only routes are NEVER emitted (no register / forgot-password / logout)', () => {
 		for (const auth of AUTH_VARIANTS) {
 			const email = auth.length > 0 ? 'resend' : 'skip'

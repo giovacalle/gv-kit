@@ -31,15 +31,15 @@
 			</Card.Title>
 		</Card.Header>
 		<Card.Content>
-			<dl class="grid grid-cols-[80px_1fr] gap-y-2 text-sm">
+			<dl class="grid grid-cols-[80px_minmax(0,1fr)] gap-y-2 text-sm">
 				<dt class="text-muted-foreground">
 					<!--@gvkit:if i18nParaglide-->{m.me_email_label()}<!--@gvkit:else-->Email<!--@gvkit:endif-->
 				</dt>
-				<dd>{email}</dd>
+				<dd class="min-w-0 break-all">{email}</dd>
 				<dt class="text-muted-foreground">
 					<!--@gvkit:if i18nParaglide-->{m.me_name_label()}<!--@gvkit:else-->Name<!--@gvkit:endif-->
 				</dt>
-				<dd>{name ?? '—'}</dd>
+				<dd class="min-w-0 break-words">{name ?? '—'}</dd>
 			</dl>
 		</Card.Content>
 		<Card.Footer>

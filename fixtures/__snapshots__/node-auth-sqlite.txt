@@ -56,7 +56,6 @@ apps/api/users/src/routes/me/index.ts  15a1bddfd03e9c31
 apps/api/users/src/routes/me/route.ts  4b19b276a8ac470c
 apps/api/users/src/routes/me/schema.ts  dfb72772dfcd8402
 apps/api/users/tsconfig.json  f5cee125f468d286
-apps/web/.env  ff54bf081440e26f
 apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  e44493b14989d54c
@@ -69,7 +68,7 @@ apps/web/src/app.html  9574b98f54286c0b
 apps/web/src/hooks.server.ts  27d1eebdeecb655b
 apps/web/src/lib/auth/client.ts  4b861f9ec374beab
 apps/web/src/lib/components/layout/footer.svelte  58d0e7441e7d2d7f
-apps/web/src/lib/components/layout/nav.svelte  b34734cf98ddfd8a
+apps/web/src/lib/components/layout/nav.svelte  672ff3827e2f6a33
 apps/web/src/lib/components/seo.svelte  7f7aed0c1efc6402
 apps/web/src/lib/config/site.ts  dfee5d9c933dfcb7
 apps/web/src/lib/context/auth-context.svelte.ts  84cdf07d5d08b7ec
@@ -85,11 +84,11 @@ apps/web/src/routes/+layout.ts  a10f188f71094046
 apps/web/src/routes/+page.svelte  998d512947fc17a4
 apps/web/src/routes/healthz/+server.ts  304fd1274599ff2b
 apps/web/src/routes/login/+page.server.ts  404a09fcdddf9a5c
-apps/web/src/routes/login/+page.svelte  ed0ce65603373e16
+apps/web/src/routes/login/+page.svelte  20c427a590578683
 apps/web/src/routes/me/+layout.server.ts  905e6d19d5a6f089
-apps/web/src/routes/me/+page.svelte  5d95b9d3efaaea8c
+apps/web/src/routes/me/+page.svelte  09764b34a0fdca13
 apps/web/src/routes/me/account/+page.server.ts  17caccb5db26bf5d
-apps/web/src/routes/me/account/+page.svelte  a660f72428e119da
+apps/web/src/routes/me/account/+page.svelte  27e27cc73ab00027
 apps/web/src/routes/robots.txt/+server.ts  66aea35efb4ee1b1
 apps/web/src/routes/sitemap.xml/+server.ts  2e783c699ce31baf
 apps/web/src/routes/users/+page.svelte  7033c27e64a0dc89
@@ -278,7 +277,7 @@ packages/ui/src/lib/components/primitives/tooltip/tooltip.svelte  59f4fe4843d205
 packages/ui/src/lib/components/theme-watcher/index.ts  40f5516d66f1e209
 packages/ui/src/lib/components/theme-watcher/theme-watcher.svelte  cf7712d487a151dc
 packages/ui/src/lib/hooks/.gitkeep  e3b0c44298fc1c14
-packages/ui/src/lib/styles/app.css  ec69d17b9db12ebb
+packages/ui/src/lib/styles/app.css  51a6f0fbaadbf1d4
 packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e

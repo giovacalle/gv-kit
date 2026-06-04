@@ -56,7 +56,6 @@ apps/api/users/src/routes/me/index.ts  15a1bddfd03e9c31
 apps/api/users/src/routes/me/route.ts  4b19b276a8ac470c
 apps/api/users/src/routes/me/schema.ts  dfb72772dfcd8402
 apps/api/users/tsconfig.json  f5cee125f468d286
-apps/web/.env  ff54bf081440e26f
 apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  6c2f2127f8c6a2d5
@@ -70,7 +69,7 @@ apps/web/src/hooks.server.ts  9fed1b8c4e9e0b8b
 apps/web/src/lib/auth/client.ts  4b861f9ec374beab
 apps/web/src/lib/components/layout/footer.svelte  7ada74173add1662
 apps/web/src/lib/components/layout/locale-switcher.svelte  0e595ee3cfa1c9fd
-apps/web/src/lib/components/layout/nav.svelte  94d5dc4f7e93e43d
+apps/web/src/lib/components/layout/nav.svelte  4e50286b9f8542e7
 apps/web/src/lib/components/seo.svelte  6ca680f7c10d966b
 apps/web/src/lib/config/site.ts  53ba57c5ce66f660
 apps/web/src/lib/context/auth-context.svelte.ts  84cdf07d5d08b7ec
@@ -87,11 +86,11 @@ apps/web/src/routes/+layout.ts  a10f188f71094046
 apps/web/src/routes/+page.svelte  59e9c2b5a4f7fcf8
 apps/web/src/routes/healthz/+server.ts  304fd1274599ff2b
 apps/web/src/routes/login/+page.server.ts  404a09fcdddf9a5c
-apps/web/src/routes/login/+page.svelte  cebb36316383d752
+apps/web/src/routes/login/+page.svelte  0ebaed9a36aa42d1
 apps/web/src/routes/me/+layout.server.ts  905e6d19d5a6f089
-apps/web/src/routes/me/+page.svelte  ec05e1786f90d379
+apps/web/src/routes/me/+page.svelte  a8fecace8a72f338
 apps/web/src/routes/me/account/+page.server.ts  17caccb5db26bf5d
-apps/web/src/routes/me/account/+page.svelte  55e49be1e2c5f58e
+apps/web/src/routes/me/account/+page.svelte  42fe66e0210c8ff4
 apps/web/src/routes/robots.txt/+server.ts  66aea35efb4ee1b1
 apps/web/src/routes/sitemap.xml/+server.ts  2e783c699ce31baf
 apps/web/src/routes/users/+page.svelte  db7e9aae6b22c8be
@@ -287,7 +286,7 @@ packages/ui/src/lib/components/primitives/tooltip/tooltip.svelte  59f4fe4843d205
 packages/ui/src/lib/components/theme-watcher/index.ts  40f5516d66f1e209
 packages/ui/src/lib/components/theme-watcher/theme-watcher.svelte  cf7712d487a151dc
 packages/ui/src/lib/hooks/.gitkeep  e3b0c44298fc1c14
-packages/ui/src/lib/styles/app.css  ec69d17b9db12ebb
+packages/ui/src/lib/styles/app.css  51a6f0fbaadbf1d4
 packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e

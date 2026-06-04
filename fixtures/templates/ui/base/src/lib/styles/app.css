@@ -94,14 +94,24 @@
 
 @layer base {
 	* {
+		box-sizing: border-box;
 		border-color: var(--color-border);
 	}
 
+	*::before,
+	*::after {
+		box-sizing: border-box;
+	}
+
 	html {
+		max-width: 100%;
+		overflow-x: clip;
 		-webkit-text-size-adjust: 100%;
 	}
 
 	body {
+		max-width: 100%;
+		overflow-x: clip;
 		background-color: var(--color-background);
 		color: var(--color-foreground);
 		-webkit-font-smoothing: antialiased;

@@ -130,7 +130,7 @@
 					<!--@gvkit:if i18nParaglide-->{m.auth_otp_lede()}<!--@gvkit:else-->No password. We'll email you a 6-digit code.<!--@gvkit:endif-->
 				{:else}
 					<!--@gvkit:if i18nParaglide-->{m.auth_otp_sent_to_prefix()}<!--@gvkit:else-->Sent to<!--@gvkit:endif-->
-					<span class="text-foreground font-medium">{$formData.email}</span>.
+					<span class="text-foreground break-all font-medium">{$formData.email}</span>.
 				{/if}
 			</Card.Description>
 			<!--@gvkit:endif-->

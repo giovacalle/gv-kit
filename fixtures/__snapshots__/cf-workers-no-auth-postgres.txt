@@ -57,7 +57,6 @@ apps/api/users/src/routes/me/route.ts  4b19b276a8ac470c
 apps/api/users/src/routes/me/schema.ts  548dd639807027b1
 apps/api/users/tsconfig.json  8f92267ccfe597ec
 apps/api/users/wrangler.jsonc  e6ad8db307706040
-apps/web/.env  ff54bf081440e26f
 apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  213baa95f537fa67
@@ -69,7 +68,7 @@ apps/web/src/app.d.ts  fab01a79ba576330
 apps/web/src/app.html  cc8d9336373ee738
 apps/web/src/hooks.server.ts  c91ca24aeda59378
 apps/web/src/lib/components/layout/footer.svelte  58d0e7441e7d2d7f
-apps/web/src/lib/components/layout/nav.svelte  e8e6c25892140b36
+apps/web/src/lib/components/layout/nav.svelte  e0af5b131c5d833a
 apps/web/src/lib/components/seo.svelte  7f7aed0c1efc6402
 apps/web/src/lib/config/site.ts  5bf1eedeeb0655ae
 apps/web/src/lib/schemas/.gitkeep  e3b0c44298fc1c14
@@ -246,7 +245,7 @@ packages/ui/src/lib/components/primitives/tooltip/tooltip.svelte  59f4fe4843d205
 packages/ui/src/lib/components/theme-watcher/index.ts  40f5516d66f1e209
 packages/ui/src/lib/components/theme-watcher/theme-watcher.svelte  cf7712d487a151dc
 packages/ui/src/lib/hooks/.gitkeep  e3b0c44298fc1c14
-packages/ui/src/lib/styles/app.css  ec69d17b9db12ebb
+packages/ui/src/lib/styles/app.css  51a6f0fbaadbf1d4
 packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e

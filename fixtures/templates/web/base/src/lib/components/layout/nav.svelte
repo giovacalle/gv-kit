@@ -22,10 +22,10 @@
 </script>
 
 <header class="border-border/60 bg-background/80 sticky top-0 z-30 border-b backdrop-blur">
-	<div class="mx-auto flex h-14 max-w-5xl items-center justify-between px-6">
-		<a href="/" class="text-sm font-semibold tracking-tight">{siteConfig.name}</a>
+	<div class="mx-auto flex h-14 w-full max-w-5xl items-center justify-between gap-3 px-4 sm:px-6">
+		<a href="/" class="min-w-0 truncate text-sm font-semibold tracking-tight">{siteConfig.name}</a>
 
-		<div class="flex items-center gap-2">
+		<div class="flex shrink-0 items-center gap-2">
 			<ModeToggle />
 			<!--@gvkit:if i18nParaglide-->
 			<LocaleSwitcher current={getLocale()} />

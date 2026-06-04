@@ -130,6 +130,11 @@ describe('generateUi — design tokens', () => {
 	test('app.css has a .dark variant block', () => {
 		expect(css.content).toContain('.dark')
 	})
+
+	test('app.css prevents bordered full-width elements from widening mobile viewports', () => {
+		expect(css.content).toContain('box-sizing: border-box')
+		expect(css.content).toContain('overflow-x: clip')
+	})
 })
 
 describe('generateUi — boundary regression', () => {

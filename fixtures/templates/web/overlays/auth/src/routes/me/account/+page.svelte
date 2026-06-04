@@ -102,7 +102,7 @@
 					<dt class="text-muted-foreground">
 						<!--@gvkit:if i18nParaglide-->{m.account_email_label()}<!--@gvkit:else-->Email<!--@gvkit:endif-->
 					</dt>
-					<dd>{data.user.email}</dd>
+					<dd class="min-w-0 break-all">{data.user.email}</dd>
 				</dl>
 			</Card.Content>
 			<Card.Footer>

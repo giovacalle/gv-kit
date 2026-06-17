@@ -443,7 +443,7 @@ wrangler d1 migrations apply <database-name> --remote  # remote
 }
 ${
 	!isSqlite && isCf
-		? `For Cloudflare Postgres, this scaffold expects Neon. Production uses \`DATABASE_URL\`;
+		? `For Cloudflare Postgres, use Neon. Production uses \`DATABASE_URL\`;
 PR previews can use Neon branches with their own temporary \`DATABASE_URL\`.
 
 `

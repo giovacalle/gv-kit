@@ -290,18 +290,25 @@ describe('generateDeploy — .dockerignore', () => {
 })
 
 describe('generateDeploy — cf-workers workflows', () => {
+	test('generated workflows do not contain YAML tab indentation', () => {
+		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
+		for (const entry of entries.filter((entry) => entry.path.endsWith('.yml'))) {
+			expect(entry.content, entry.path).not.toContain('\t')
+		}
+	})
+
 	test('deploy-production.yml triggers on push to main and deploys affected Workers via turbo', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		const yml = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
 		expect(yml).toMatch(/on:\s*\n\s+push:\s*\n\s+branches:\s*\[main\]/)
 		expect(yml).toContain('pnpm turbo run deploy:production --affected')
-		expect(yml).toContain('db-migrations:')
-		expect(yml).toContain('needs: db-migrations')
+		expect(yml).toContain('Run production database migrations')
 		expect(yml).toContain('pnpm --filter @repo/db db:migrate:production')
 		expect(yml).toContain('DATABASE_URL: ${{ secrets.DATABASE_URL }}')
 		expect(yml).toContain('TURBO_SCM_BASE')
 		expect(yml).toContain('TURBO_SCM_HEAD')
 		expect(yml).toContain('fetch-depth: 0')
+		expect(yml.match(/pnpm install --frozen-lockfile/g)).toHaveLength(1)
 		expect(yml).not.toContain('working-directory: apps/web')
 		expect(yml).not.toContain('working-directory: apps/api/auth')
 		expect(yml).not.toContain('working-directory: apps/api/users')
@@ -336,6 +343,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		expect(yml).toContain('github.event.pull_request.head.ref')
+		expect(yml).toContain("sed -E 's/[^a-z0-9-]+/-/g")
 		expect(yml).toContain('STAGING_ALIAS')
 		expect(yml).toContain('pnpm turbo run deploy:staging --affected')
 		expect(yml).not.toContain('working-directory: apps/api/auth')
@@ -346,7 +354,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'postgres' }))
 		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		expect(yml).toContain('preview-db:')
-		expect(yml).toContain('needs: [preview-db, db-migrations]')
+		expect(yml).toContain('needs: preview-db')
 		expect(yml).toContain('neondatabase/create-branch-action@v6')
 		expect(yml).toContain('branch_name: ${{ steps.meta.outputs.neon_branch_name }}')
 		expect(yml).toContain('expires_at: ${{ steps.expiration.outputs.expires_at }}')
@@ -357,6 +365,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).toContain('STAGING_DATABASE_URL: ${{ needs.preview-db.outputs.database_url }}')
 		expect(yml).toContain('pnpm --filter @repo/db db:migrate:production')
 		expect(yml).toContain('wrangler.staging.jsonc')
+		expect(yml.match(/pnpm install --frozen-lockfile/g)).toHaveLength(1)
 		expect(yml).not.toContain('wrangler d1 create')
 	})
 
@@ -364,7 +373,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'sqlite' }))
 		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		expect(yml).toContain('preview-db:')
-		expect(yml).toContain('needs: [preview-db, db-migrations]')
+		expect(yml).toContain('needs: preview-db')
 		expect(yml).toContain('Create or reuse D1 preview database')
 		expect(yml).toContain('npx wrangler d1 list --json')
 		expect(yml).toContain('npx wrangler d1 create "$db_name"')
@@ -378,6 +387,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		)
 		expect(yml).toContain('STAGING_D1_DATABASE_ID: ${{ needs.preview-db.outputs.d1_database_id }}')
 		expect(yml).toContain('wrangler.staging.jsonc')
+		expect(yml.match(/pnpm install --frozen-lockfile/g)).toHaveLength(1)
 		expect(yml).not.toContain('neondatabase/create-branch-action')
 	})
 
@@ -545,9 +555,14 @@ describe('generated cf-workers deploy task contract', () => {
 		expect(findEntry(postgresEntries, 'README.md')!.content).toContain(
 			'Database: PostgreSQL (Neon) via Drizzle'
 		)
+		expect(findEntry(postgresEntries, 'README.md')!.content).toContain('NEON_API_KEY')
+		expect(findEntry(postgresEntries, 'README.md')!.content).toContain('NEON_PROJECT_ID')
 		expect(findEntry(postgresEntries, 'packages/db/README.md')!.content).toContain('Neon Postgres')
 		expect(findEntry(postgresEntries, 'packages/db/README.md')!.content).toContain(
 			'PR previews can use Neon branches'
+		)
+		expect(findEntry(postgresEntries, 'packages/db/README.md')!.content).not.toContain(
+			'this scaffold'
 		)
 
 		const sqliteEntries = runGenerators(makeCfg({ deploy: 'cf-workers', db: 'sqlite' }))

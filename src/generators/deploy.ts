@@ -21,15 +21,16 @@ export function generateDeploy(cfg: GvKitConfig): FileEntry[] {
 /* ------------------------------------------------------------------ */
 
 function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
-	const opts = { project: cfg.choices.name, db: cfg.choices.db }
+	const project = cfg.choices.name
+	const db = cfg.choices.db
 	return [
-		{ path: '.github/workflows/deploy-production.yml', content: deployProductionWorkflow(opts) },
-		{ path: '.github/workflows/deploy-staging.yml', content: deployStagingWorkflow(opts) },
-		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(opts) }
+		{ path: '.github/workflows/deploy-production.yml', content: deployProductionWorkflow(project) },
+		{ path: '.github/workflows/deploy-staging.yml', content: deployStagingWorkflow(project, db) },
+		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) }
 	]
 }
 
-function deployProductionWorkflow({ project }: { project: string }): string {
+function deployProductionWorkflow(project: string): string {
 	return `# Deploy ${project} to production on push to main.
 #
 # Required GitHub Secrets:
@@ -47,7 +48,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  db-migrations:
+  deploy:
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -67,7 +68,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - id: scm
-        name: Resolve migration range
+        name: Resolve deployment range
         run: |
           base="\${{ github.event.before }}"
           if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
@@ -97,36 +98,6 @@ jobs:
         if: steps.db_changes.outputs.should_run != 'true'
         run: echo "No database migration inputs changed."
 
-  deploy:
-    needs: db-migrations
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          filter: blob:none
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.1.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-
-      - id: scm
-        name: Resolve affected range
-        run: |
-          base="\${{ github.event.before }}"
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            base="HEAD^1"
-          fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "head=\${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-
       - name: Deploy affected Workers
         run: pnpm turbo run deploy:production --affected
         env:
@@ -137,23 +108,11 @@ jobs:
 `
 }
 
-function deployStagingWorkflow({
-	project,
-	db
-}: {
-	project: string
-	db: GvKitConfig['choices']['db']
-}): string {
+function deployStagingWorkflow(project: string, db: GvKitConfig['choices']['db']): string {
 	const previewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
-	const previewMigrationJob = previewDbMigrationJob(db)
 	const stagingConfigStep = writeStagingWranglerConfigStep(db)
-	return `# Per-PR staging deploys. Every push to a PR gets isolated Workers named with
-# the branch slug. Deployable packages derive their own Worker names from
-# STAGING_ALIAS, so adding a new Worker package does not require editing this
-# workflow.
-# This workflow provisions a PR-scoped preview database. Preview migrations and
-# preview Worker DB binding are handled by separate serial gates in this file.
-# Production migrations remain a separate serial gate in deploy-production.yml.
+	return `# Per-PR staging deploy for ${project}.
+# Staging uses PR-scoped preview database resources and temporary Wrangler configs.
 # Tear-down lives in cleanup-staging.yml.
 #
 # Required GitHub Secrets:
@@ -178,10 +137,8 @@ concurrency:
 jobs:
 ${previewDbJob}
 
-${previewMigrationJob}
-
   deploy:
-    needs: [preview-db, db-migrations]
+    needs: preview-db
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -208,6 +165,11 @@ ${previewMigrationJob}
 
 ${stagingConfigStep}
 
+      - name: Run preview database migrations
+        run: ${previewMigrationCommand(db)}
+        env:
+${previewMigrationEnv(db)}
+
       - name: Deploy affected Workers (staging)
         run: pnpm turbo run deploy:staging --affected
         env:
@@ -231,40 +193,6 @@ ${stagingConfigStep}
             **Commit**: \`\${{ steps.meta.outputs.short_sha }}\`
             **Updated**: \${{ github.event.pull_request.updated_at }}
 `
-}
-
-function previewDbMigrationJob(db: GvKitConfig['choices']['db']): string {
-	const migrationCommand =
-		db === 'sqlite'
-			? 'pnpm --filter @repo/db exec wrangler d1 migrations apply "${{ needs.preview-db.outputs.d1_database_name }}" --remote'
-			: 'pnpm --filter @repo/db db:migrate:production'
-	const envLines =
-		db === 'sqlite'
-			? `          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
-			: `          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
-
-	return `  db-migrations:
-    needs: preview-db
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.1.1
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-      - run: pnpm install --frozen-lockfile
-      - name: Run preview database migrations
-        run: ${migrationCommand}
-        env:
-${envLines}`
 }
 
 function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): string {
@@ -375,6 +303,26 @@ function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): strin
 ${envLines}`
 }
 
+function previewMigrationCommand(db: GvKitConfig['choices']['db']): string {
+	return db === 'sqlite'
+		? 'pnpm --filter @repo/db exec wrangler d1 migrations apply "${{ needs.preview-db.outputs.d1_database_name }}" --remote'
+		: 'pnpm --filter @repo/db db:migrate:production'
+}
+
+function previewMigrationEnv(db: GvKitConfig['choices']['db']): string {
+	return db === 'sqlite'
+		? `          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
+		: `          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
+}
+
+const PREVIEW_ALIAS_SCRIPT = `raw="\${{ github.event.pull_request.head.ref }}"
+          alias=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g' | cut -c1-48)
+          if [ -z "$alias" ]; then
+            alias="pr-\${{ github.event.pull_request.number }}"
+          fi
+          echo "alias=$alias" >> "$GITHUB_OUTPUT"`
+
 function d1PreviewDbJob(project: string): string {
 	return `  preview-db:
     runs-on: ubuntu-latest
@@ -387,8 +335,7 @@ function d1PreviewDbJob(project: string): string {
     steps:
       - id: meta
         run: |
-          alias=$(echo \${{ github.event.pull_request.head.ref }} | tr '/' '-' | tr '[:upper:]' '[:lower:]')
-          echo "alias=$alias" >> "$GITHUB_OUTPUT"
+          ${PREVIEW_ALIAS_SCRIPT}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -426,8 +373,7 @@ function neonPreviewDbJob(project: string): string {
     steps:
       - id: meta
         run: |
-          alias=$(echo \${{ github.event.pull_request.head.ref }} | tr '/' '-' | tr '[:upper:]' '[:lower:]')
-          echo "alias=$alias" >> "$GITHUB_OUTPUT"
+          ${PREVIEW_ALIAS_SCRIPT}
           echo "neon_branch_name=${project}-db-$alias" >> "$GITHUB_OUTPUT"
       - id: expiration
         run: echo "expires_at=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
@@ -441,13 +387,7 @@ function neonPreviewDbJob(project: string): string {
           expires_at: \${{ steps.expiration.outputs.expires_at }}`
 }
 
-function cleanupStagingWorkflow({
-	project,
-	db
-}: {
-	project: string
-	db: GvKitConfig['choices']['db']
-}): string {
+function cleanupStagingWorkflow(project: string, db: GvKitConfig['choices']['db']): string {
 	const previewDbCleanupStep =
 		db === 'sqlite' ? d1PreviewDbCleanupStep(project) : neonPreviewDbCleanupStep(project)
 	return `# Tear down a staging deploy when its PR closes (merged or rejected). Also
@@ -476,7 +416,8 @@ jobs:
         with:
           node-version: '20'
       - id: branch
-        run: echo "alias=$(echo \${{ github.event.pull_request.head.ref }} | tr '/' '-' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+        run: |
+          ${PREVIEW_ALIAS_SCRIPT}
 
       - name: Delete staging Workers
         run: |

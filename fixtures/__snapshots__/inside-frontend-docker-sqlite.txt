@@ -7,7 +7,7 @@
 .prettierignore  00ccef47c63de1e9
 Dockerfile  ffab4a176c6dd24e
 LICENSE  508a77d2e7b51d98
-README.md  e7f1c1f5d5a24eb2
+README.md  acbbb801d155fb8e
 apps/web/.env  ff54bf081440e26f
 apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4

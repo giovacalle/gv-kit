@@ -230,6 +230,7 @@ pnpm dev
 
 Copy \`.env.example\` to \`.env\` and fill in any secrets your services need.
 For workers, secrets go through \`wrangler secret put <NAME>\` rather than \`.env\`.
+${renderCloudflareDatabaseSetup(cfg)}
 
 ## Stack
 
@@ -258,6 +259,25 @@ function databaseLabel(cfg: GvKitConfig): string {
 		return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
 	}
 	return cfg.choices.deploy === 'cf-workers' ? 'SQLite (Cloudflare D1)' : 'SQLite'
+}
+
+function renderCloudflareDatabaseSetup(cfg: GvKitConfig): string {
+	if (cfg.choices.deploy !== 'cf-workers') return ''
+	if (cfg.choices.db === 'postgres') {
+		return `
+
+Cloudflare Postgres uses Neon. Configure GitHub Actions before enabling staging deploys:
+
+- Secret: \`NEON_API_KEY\`
+- Variable: \`NEON_PROJECT_ID\`
+
+Production deploys use \`DATABASE_URL\`. Preview deploys create Neon branches and inject their
+temporary connection strings into generated staging Wrangler configs.`
+	}
+	return `
+
+Cloudflare SQLite uses D1. Configure \`CLOUDFLARE_API_TOKEN\` and
+\`CLOUDFLARE_ACCOUNT_ID\` in GitHub Actions so staging can create preview D1 databases.`
 }
 
 function renderEnvExample(cfg: GvKitConfig): string {

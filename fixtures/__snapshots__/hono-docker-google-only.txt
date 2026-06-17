@@ -32,7 +32,7 @@
 CLAUDE.md  0084a31dd58e2580
 Dockerfile  ffab4a176c6dd24e
 LICENSE  508a77d2e7b51d98
-README.md  7fcfbb77d654b7ba
+README.md  29f8b8e919b884a1
 apps/api/auth/README.md  b6a49234d23b4f24
 apps/api/auth/env.d.ts  dcc6d6a04585d201
 apps/api/auth/package.json  e37b1f9a3335d346

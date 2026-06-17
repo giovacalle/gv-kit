@@ -5,7 +5,7 @@
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
 LICENSE  508a77d2e7b51d98
-README.md  25c8440e7649bbd0
+README.md  86f06bc378915365
 apps/web/.env  ff54bf081440e26f
 apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4

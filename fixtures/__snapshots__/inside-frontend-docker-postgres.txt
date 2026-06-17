@@ -30,7 +30,7 @@
 CLAUDE.md  8391c324564408ff
 Dockerfile  ffab4a176c6dd24e
 LICENSE  508a77d2e7b51d98
-README.md  883164bb44c97993
+README.md  a0e47c82f696bdc1
 apps/web/.env  ff54bf081440e26f
 apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4

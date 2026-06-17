@@ -338,10 +338,47 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).toContain('github.event.pull_request.head.ref')
 		expect(yml).toContain('STAGING_ALIAS')
 		expect(yml).toContain('pnpm turbo run deploy:staging --affected')
-		expect(yml).toContain('intentionally does not run database migrations')
-		expect(yml).not.toContain('db:migrate:production')
 		expect(yml).not.toContain('working-directory: apps/api/auth')
 		expect(yml).not.toContain('working-directory: apps/api/users')
+	})
+
+	test('deploy-staging.yml provisions a Neon preview branch for postgres projects', () => {
+		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'postgres' }))
+		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
+		expect(yml).toContain('preview-db:')
+		expect(yml).toContain('needs: [preview-db, db-migrations]')
+		expect(yml).toContain('neondatabase/create-branch-action@v6')
+		expect(yml).toContain('branch_name: ${{ steps.meta.outputs.neon_branch_name }}')
+		expect(yml).toContain('expires_at: ${{ steps.expiration.outputs.expires_at }}')
+		expect(yml).toContain('NEON_API_KEY')
+		expect(yml).toContain('NEON_PROJECT_ID')
+		expect(yml).toContain('database_url: ${{ steps.create_neon_branch.outputs.db_url_pooled }}')
+		expect(yml).toContain('DATABASE_URL: ${{ needs.preview-db.outputs.database_url }}')
+		expect(yml).toContain('STAGING_DATABASE_URL: ${{ needs.preview-db.outputs.database_url }}')
+		expect(yml).toContain('pnpm --filter @repo/db db:migrate:production')
+		expect(yml).toContain('wrangler.staging.jsonc')
+		expect(yml).not.toContain('wrangler d1 create')
+	})
+
+	test('deploy-staging.yml provisions a D1 preview database for sqlite projects', () => {
+		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'sqlite' }))
+		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
+		expect(yml).toContain('preview-db:')
+		expect(yml).toContain('needs: [preview-db, db-migrations]')
+		expect(yml).toContain('Create or reuse D1 preview database')
+		expect(yml).toContain('npx wrangler d1 list --json')
+		expect(yml).toContain('npx wrangler d1 create "$db_name"')
+		expect(yml).toContain('d1_database_name: ${{ steps.d1.outputs.database_name }}')
+		expect(yml).toContain('d1_database_id: ${{ steps.d1.outputs.database_id }}')
+		expect(yml).toContain(
+			'pnpm --filter @repo/db exec wrangler d1 migrations apply "${{ needs.preview-db.outputs.d1_database_name }}" --remote'
+		)
+		expect(yml).toContain(
+			'STAGING_D1_DATABASE_NAME: ${{ needs.preview-db.outputs.d1_database_name }}'
+		)
+		expect(yml).toContain('STAGING_D1_DATABASE_ID: ${{ needs.preview-db.outputs.d1_database_id }}')
+		expect(yml).toContain('wrangler.staging.jsonc')
+		expect(yml).not.toContain('neondatabase/create-branch-action')
 	})
 
 	test('cleanup-staging.yml triggers on PR closed, discovers Workers, and deletes branch', () => {
@@ -353,6 +390,25 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).toContain('deleteRef')
 		expect(yml).not.toContain(`${baseChoices.name}-auth-\${{ steps.branch.outputs.alias }}`)
 		expect(yml).not.toContain(`${baseChoices.name}-users-\${{ steps.branch.outputs.alias }}`)
+	})
+
+	test('cleanup-staging.yml deletes Neon preview branch for postgres projects', () => {
+		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'postgres' }))
+		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
+		expect(yml).toContain('neondatabase/delete-branch-by-name-action@main')
+		expect(yml).toContain('branch_name: demo-db-${{ steps.branch.outputs.alias }}')
+		expect(yml).toContain('NEON_PROJECT_ID')
+		expect(yml).toContain('NEON_API_KEY')
+		expect(yml).not.toContain('wrangler d1 delete')
+	})
+
+	test('cleanup-staging.yml deletes D1 preview database for sqlite projects', () => {
+		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'sqlite' }))
+		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
+		expect(yml).toContain('Delete preview D1 database')
+		expect(yml).toContain('db_name="demo-db-${{ steps.branch.outputs.alias }}"')
+		expect(yml).toContain('npx wrangler d1 delete "$db_name" --skip-confirmation || true')
+		expect(yml).not.toContain('neondatabase/delete-branch-by-name-action')
 	})
 
 	test('cleanup-staging.yml overwrites the staging-deploy sticky comment', () => {
@@ -447,7 +503,9 @@ describe('generated cf-workers deploy task contract', () => {
 			}
 			expect(pkg.scripts['deploy:production']).toContain('wrangler deploy')
 			expect(pkg.scripts['deploy:staging']).toContain('STAGING_ALIAS')
-			expect(pkg.scripts['deploy:staging']).toContain('wrangler deploy --name')
+			expect(pkg.scripts['deploy:staging']).toContain('--config')
+			expect(pkg.scripts['deploy:staging']).toContain('STAGING_WRANGLER_CONFIG')
+			expect(pkg.scripts['deploy:staging']).toContain('--name')
 		}
 	})
 

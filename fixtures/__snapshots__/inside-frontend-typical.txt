@@ -23,9 +23,9 @@
 .claude/stack.json  51a20d88c04095f7
 .commitlintrc.json  1a921be1aa693bb1
 .env.example  b0bb4ef83b35f11c
-.github/workflows/cleanup-staging.yml  5954c5dbf429daac
+.github/workflows/cleanup-staging.yml  03689af525c4b6eb
 .github/workflows/deploy-production.yml  769b654f1093a960
-.github/workflows/deploy-staging.yml  6722d6e9829aa70e
+.github/workflows/deploy-staging.yml  6ac2fdaf6bb2686c
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -38,7 +38,7 @@ apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  1561e4cedb9a8d7c
 apps/web/eslint.config.js  cfd85b071f7c820c
-apps/web/package.json  e9a98ab21b562909
+apps/web/package.json  660d47875d79d538
 apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
 apps/web/src/app.d.ts  8ec53843c7f7fd40

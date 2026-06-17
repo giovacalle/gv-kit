@@ -21,11 +21,11 @@ export function generateDeploy(cfg: GvKitConfig): FileEntry[] {
 /* ------------------------------------------------------------------ */
 
 function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
-	const opts = { project: cfg.choices.name }
+	const opts = { project: cfg.choices.name, db: cfg.choices.db }
 	return [
 		{ path: '.github/workflows/deploy-production.yml', content: deployProductionWorkflow(opts) },
 		{ path: '.github/workflows/deploy-staging.yml', content: deployStagingWorkflow(opts) },
-		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow() }
+		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(opts) }
 	]
 }
 
@@ -137,18 +137,29 @@ jobs:
 `
 }
 
-function deployStagingWorkflow({ project }: { project: string }): string {
+function deployStagingWorkflow({
+	project,
+	db
+}: {
+	project: string
+	db: GvKitConfig['choices']['db']
+}): string {
+	const previewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
+	const previewMigrationJob = previewDbMigrationJob(db)
+	const stagingConfigStep = writeStagingWranglerConfigStep(db)
 	return `# Per-PR staging deploys. Every push to a PR gets isolated Workers named with
 # the branch slug. Deployable packages derive their own Worker names from
 # STAGING_ALIAS, so adding a new Worker package does not require editing this
 # workflow.
-# This workflow intentionally does not run database migrations; production
-# migrations are a separate serial gate in deploy-production.yml.
+# This workflow provisions a PR-scoped preview database. Preview migrations and
+# preview Worker DB binding are handled by separate serial gates in this file.
+# Production migrations remain a separate serial gate in deploy-production.yml.
 # Tear-down lives in cleanup-staging.yml.
 #
 # Required GitHub Secrets:
 #   - CLOUDFLARE_API_TOKEN
 #   - CLOUDFLARE_ACCOUNT_ID
+${db === 'postgres' ? '#   - NEON_API_KEY\n# Required GitHub Variables:\n#   - NEON_PROJECT_ID\n' : ''}
 
 name: deploy-staging
 
@@ -165,7 +176,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+${previewDbJob}
+
+${previewMigrationJob}
+
   deploy:
+    needs: [preview-db, db-migrations]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -179,7 +195,7 @@ jobs:
           ref: \${{ github.event.pull_request.head.sha }}
       - id: meta
         run: |
-          echo "alias=$(echo \${{ github.event.pull_request.head.ref }} | tr '/' '-' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          echo "alias=\${{ needs.preview-db.outputs.alias }}" >> $GITHUB_OUTPUT
           echo "short_sha=\${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
       - uses: pnpm/action-setup@v4
         with:
@@ -190,12 +206,15 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
 
+${stagingConfigStep}
+
       - name: Deploy affected Workers (staging)
         run: pnpm turbo run deploy:staging --affected
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          STAGING_ALIAS: \${{ steps.meta.outputs.alias }}
+          STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
+          STAGING_WRANGLER_CONFIG: wrangler.staging.jsonc
           TURBO_SCM_BASE: \${{ github.event.pull_request.base.sha }}
           TURBO_SCM_HEAD: \${{ github.event.pull_request.head.sha }}
 
@@ -207,17 +226,234 @@ jobs:
 
             | Worker | URL |
             |---|---|
-            | affected packages | \`${project}-<worker>-\${{ steps.meta.outputs.alias }}.<your-workers-subdomain>.workers.dev\` |
+            | affected packages | \`${project}-<worker>-\${{ needs.preview-db.outputs.alias }}.<your-workers-subdomain>.workers.dev\` |
 
             **Commit**: \`\${{ steps.meta.outputs.short_sha }}\`
             **Updated**: \${{ github.event.pull_request.updated_at }}
 `
 }
 
-function cleanupStagingWorkflow(): string {
+function previewDbMigrationJob(db: GvKitConfig['choices']['db']): string {
+	const migrationCommand =
+		db === 'sqlite'
+			? 'pnpm --filter @repo/db exec wrangler d1 migrations apply "${{ needs.preview-db.outputs.d1_database_name }}" --remote'
+			: 'pnpm --filter @repo/db db:migrate:production'
+	const envLines =
+		db === 'sqlite'
+			? `          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
+			: `          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
+
+	return `  db-migrations:
+    needs: preview-db
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+      - name: Run preview database migrations
+        run: ${migrationCommand}
+        env:
+${envLines}`
+}
+
+function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): string {
+	const envLines =
+		db === 'sqlite'
+			? `          PREVIEW_DB_KIND: d1
+          STAGING_D1_DATABASE_NAME: \${{ needs.preview-db.outputs.d1_database_name }}
+          STAGING_D1_DATABASE_ID: \${{ needs.preview-db.outputs.d1_database_id }}`
+			: `          PREVIEW_DB_KIND: neon
+          STAGING_DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
+
+	return `      - name: Write temporary staging Wrangler configs
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const path = require('node:path')
+          const { execFileSync } = require('node:child_process')
+
+          function stripJsonc(input) {
+            let output = ''
+            let inString = false
+            let quote = ''
+            let escaped = false
+            let inLineComment = false
+            let inBlockComment = false
+            for (let i = 0; i < input.length; i++) {
+              const ch = input[i]
+              const next = input[i + 1]
+              if (inLineComment) {
+                if (ch === '\\n') {
+                  inLineComment = false
+                  output += ch
+                }
+                continue
+              }
+              if (inBlockComment) {
+                if (ch === '*' && next === '/') {
+                  inBlockComment = false
+                  i++
+                }
+                continue
+              }
+              if (inString) {
+                output += ch
+                if (escaped) {
+                  escaped = false
+                } else if (ch === '\\\\') {
+                  escaped = true
+                } else if (ch === quote) {
+                  inString = false
+                }
+                continue
+              }
+              if (ch === '"' || ch === "'") {
+                inString = true
+                quote = ch
+                output += ch
+                continue
+              }
+              if (ch === '/' && next === '/') {
+                inLineComment = true
+                i++
+                continue
+              }
+              if (ch === '/' && next === '*') {
+                inBlockComment = true
+                i++
+                continue
+              }
+              output += ch
+            }
+            return output
+          }
+
+          const configs = execFileSync('find', ['apps', '-name', 'wrangler.jsonc'], {
+            encoding: 'utf8'
+          })
+            .trim()
+            .split('\\n')
+            .filter(Boolean)
+
+          for (const configPath of configs) {
+            const config = JSON.parse(stripJsonc(fs.readFileSync(configPath, 'utf8')))
+            if (process.env.PREVIEW_DB_KIND === 'd1' && Array.isArray(config.d1_databases)) {
+              config.d1_databases = config.d1_databases.map((database) =>
+                database.binding === 'DB'
+                  ? {
+                      ...database,
+                      database_name: process.env.STAGING_D1_DATABASE_NAME,
+                      database_id: process.env.STAGING_D1_DATABASE_ID
+                    }
+                  : database
+              )
+            }
+            if (process.env.PREVIEW_DB_KIND === 'neon') {
+              config.vars = {
+                ...(config.vars ?? {}),
+                DATABASE_URL: process.env.STAGING_DATABASE_URL
+              }
+            }
+            fs.writeFileSync(
+              path.join(path.dirname(configPath), 'wrangler.staging.jsonc'),
+              JSON.stringify(config, null, 2) + '\\n'
+            )
+          }
+          NODE
+        env:
+${envLines}`
+}
+
+function d1PreviewDbJob(project: string): string {
+	return `  preview-db:
+    runs-on: ubuntu-latest
+    outputs:
+      alias: \${{ steps.meta.outputs.alias }}
+      d1_database_name: \${{ steps.d1.outputs.database_name }}
+      d1_database_id: \${{ steps.d1.outputs.database_id }}
+    permissions:
+      contents: read
+    steps:
+      - id: meta
+        run: |
+          alias=$(echo \${{ github.event.pull_request.head.ref }} | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+          echo "alias=$alias" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - id: d1
+        name: Create or reuse D1 preview database
+        run: |
+          set -euo pipefail
+          db_name="${project}-db-\${{ steps.meta.outputs.alias }}"
+          db_id=$(npx wrangler d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
+          if [ -z "$db_id" ]; then
+            npx wrangler d1 create "$db_name"
+            db_id=$(npx wrangler d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
+          fi
+          if [ -z "$db_id" ]; then
+            echo "Could not resolve D1 database id for $db_name" >&2
+            exit 1
+          fi
+          echo "database_name=$db_name" >> "$GITHUB_OUTPUT"
+          echo "database_id=$db_id" >> "$GITHUB_OUTPUT"
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
+}
+
+function neonPreviewDbJob(project: string): string {
+	return `  preview-db:
+    runs-on: ubuntu-latest
+    outputs:
+      alias: \${{ steps.meta.outputs.alias }}
+      neon_branch_name: \${{ steps.meta.outputs.neon_branch_name }}
+      neon_branch_id: \${{ steps.create_neon_branch.outputs.branch_id }}
+      database_url: \${{ steps.create_neon_branch.outputs.db_url_pooled }}
+    permissions:
+      contents: read
+    steps:
+      - id: meta
+        run: |
+          alias=$(echo \${{ github.event.pull_request.head.ref }} | tr '/' '-' | tr '[:upper:]' '[:lower:]')
+          echo "alias=$alias" >> "$GITHUB_OUTPUT"
+          echo "neon_branch_name=${project}-db-$alias" >> "$GITHUB_OUTPUT"
+      - id: expiration
+        run: echo "expires_at=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
+      - id: create_neon_branch
+        name: Create or reuse Neon preview branch
+        uses: neondatabase/create-branch-action@v6
+        with:
+          project_id: \${{ vars.NEON_PROJECT_ID }}
+          branch_name: \${{ steps.meta.outputs.neon_branch_name }}
+          api_key: \${{ secrets.NEON_API_KEY }}
+          expires_at: \${{ steps.expiration.outputs.expires_at }}`
+}
+
+function cleanupStagingWorkflow({
+	project,
+	db
+}: {
+	project: string
+	db: GvKitConfig['choices']['db']
+}): string {
+	const previewDbCleanupStep =
+		db === 'sqlite' ? d1PreviewDbCleanupStep(project) : neonPreviewDbCleanupStep(project)
 	return `# Tear down a staging deploy when its PR closes (merged or rejected). Also
 # deletes the remote branch — staging is ephemeral. Worker names are discovered
 # from checked-in wrangler.jsonc files and suffixed with the branch alias.
+${db === 'postgres' ? '# Neon preview branch cleanup uses NEON_API_KEY and NEON_PROJECT_ID.\n' : ''}
 
 name: cleanup-staging
 
@@ -259,6 +495,8 @@ jobs:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
+${previewDbCleanupStep}
+
       - name: Delete remote branch
         uses: actions/github-script@v7
         with:
@@ -283,6 +521,28 @@ jobs:
 
             Workers and branch \`\${{ github.event.pull_request.head.ref }}\` removed.
 `
+}
+
+function d1PreviewDbCleanupStep(project: string): string {
+	return `      - name: Delete preview D1 database
+        run: |
+          set -euo pipefail
+          db_name="${project}-db-\${{ steps.branch.outputs.alias }}"
+          echo "Deleting preview D1 database $db_name"
+          npx wrangler d1 delete "$db_name" --skip-confirmation || true
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
+}
+
+function neonPreviewDbCleanupStep(project: string): string {
+	return `      - name: Delete preview Neon branch
+        uses: neondatabase/delete-branch-by-name-action@main
+        continue-on-error: true
+        with:
+          project_id: \${{ vars.NEON_PROJECT_ID }}
+          branch_name: ${project}-db-\${{ steps.branch.outputs.alias }}
+          api_key: \${{ secrets.NEON_API_KEY }}`
 }
 
 /* ------------------------------------------------------------------ */

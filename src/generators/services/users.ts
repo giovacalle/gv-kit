@@ -117,7 +117,7 @@ function pkgJson({
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:staging'] =
-			`pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --name ${project}-users-$STAGING_ALIAS`
+			`pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --config "\${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --name ${project}-users-$STAGING_ALIAS`
 		scripts.typecheck = 'pnpm cf-typegen && tsc --noEmit'
 	} else {
 		dependencies['@hono/node-server'] = '^1.13.0'

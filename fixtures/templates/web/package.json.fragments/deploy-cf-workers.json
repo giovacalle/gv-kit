@@ -1,7 +1,7 @@
 {
 	"scripts": {
 		"deploy:production": "wrangler deploy",
-		"deploy:staging": "test -n \"$STAGING_ALIAS\" && wrangler deploy --name __PROJECT__-web-$STAGING_ALIAS"
+		"deploy:staging": "test -n \"$STAGING_ALIAS\" && wrangler deploy --config \"${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}\" --name __PROJECT__-web-$STAGING_ALIAS"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260504.0",

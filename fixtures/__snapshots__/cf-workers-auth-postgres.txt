@@ -26,9 +26,9 @@
 .claude/stack.json  b49709988c6fcb92
 .commitlintrc.json  1a921be1aa693bb1
 .env.example  15a846222f13e8cc
-.github/workflows/cleanup-staging.yml  5954c5dbf429daac
+.github/workflows/cleanup-staging.yml  bbbdea385c0f02cf
 .github/workflows/deploy-production.yml  28b864b19fb490d0
-.github/workflows/deploy-staging.yml  3a5e5f350aa89454
+.github/workflows/deploy-staging.yml  51c0c8fae9493dee
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -39,7 +39,7 @@ README.md  824b237e207149a0
 apps/api/auth/.dev.vars  43cbd0379e4feb55
 apps/api/auth/README.md  50e6358cf89ff9bf
 apps/api/auth/env.d.ts  108e558ba29e422d
-apps/api/auth/package.json  c5c72df6f58dfaf5
+apps/api/auth/package.json  6f9d3a5013a86520
 apps/api/auth/src/app.ts  5a915f2e8ed334e6
 apps/api/auth/src/auth.ts  fb16759b2fb2244f
 apps/api/auth/src/index.ts  7cd0934010f03dbd
@@ -50,7 +50,7 @@ apps/api/auth/wrangler.jsonc  9aeb61db2d247a00
 apps/api/users/README.md  1303bff2fff12914
 apps/api/users/env.d.ts  f2f9be2a7925925f
 apps/api/users/openapi.json  92fb2907320984fe
-apps/api/users/package.json  62291d3000962d58
+apps/api/users/package.json  c77b9387a8aa61b0
 apps/api/users/src/app.ts  4509990cdd5a369c
 apps/api/users/src/index.ts  4b7b9fa09cb7de89
 apps/api/users/src/openapi.ts  c186f591e7b71f52
@@ -65,7 +65,7 @@ apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  bc76a199b80eef05
 apps/web/eslint.config.js  cfd85b071f7c820c
-apps/web/package.json  9aa19cf58fa5bf84
+apps/web/package.json  d08df388a65aeb31
 apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
 apps/web/src/app.d.ts  04d4864efaef9126

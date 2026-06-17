@@ -6,7 +6,7 @@
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  dfc35b9ad8ba0a21
 .ai/rules/core-workflow.md  30ddaad5a684cb81
-.ai/rules/db-drizzle.md  d7e7bbcd4c92ba36
+.ai/rules/db-drizzle.md  5eb099272c381d3f
 .ai/rules/deploy-cf-workers.md  81ca4ee29e294eb8
 .ai/rules/email-templates.md  f58e0bafccda69df
 .ai/rules/hooks.md  6dd03126d2ec9420
@@ -30,9 +30,9 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
-CLAUDE.md  7bc4caf29b97235c
+CLAUDE.md  4891bdd2d55163ad
 LICENSE  508a77d2e7b51d98
-README.md  50d2784be98ef70c
+README.md  d9ed57491138550e
 apps/web/.env  ff54bf081440e26f
 apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4
@@ -84,7 +84,7 @@ packages/backend/src/core/use-cases/users.ts  20f5c1ae10620433
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
 packages/backend/tsconfig.json  be01ed046ecbcd8b
-packages/db/README.md  77380114742f4c26
+packages/db/README.md  079f20df43da43c9
 packages/db/drizzle.config.ts  6f07aa5d8ce8d2fc
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  7876434910215db3

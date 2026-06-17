@@ -394,7 +394,7 @@ function renderReadme({
 			: isSqlite
 				? 'libsql (`@libsql/client` + `drizzle-orm/libsql`)'
 				: isCf
-					? 'Postgres via Hyperdrive (`postgres.js`)'
+					? 'Neon Postgres (`postgres.js` + `drizzle-orm/postgres-js`)'
 					: 'Postgres (`postgres.js`)'
 
 	return `# @repo/db
@@ -409,7 +409,7 @@ This project uses **${driverLabel}**.
 |--------|--------|
 | sqlite + cf-workers | \`drizzle-orm/d1\` |
 | sqlite + non-cf | \`@libsql/client\` (file: or libsql:// URLs) |
-| postgres + cf-workers | \`postgres.js\` (connection from Hyperdrive binding) |
+| postgres + cf-workers | Neon Postgres via \`postgres.js\` |
 | postgres + non-cf | \`postgres.js\` |
 
 The active driver is selected at scaffold time. To switch, regenerate.
@@ -438,6 +438,14 @@ runs them against the database:
 wrangler d1 migrations apply <database-name> --local   # local
 wrangler d1 migrations apply <database-name> --remote  # remote
 \`\`\`
+`
+		: ''
+}
+${
+	!isSqlite && isCf
+		? `For Cloudflare Postgres, this scaffold expects Neon. Production uses \`DATABASE_URL\`;
+PR previews can use Neon branches with their own temporary \`DATABASE_URL\`.
+
 `
 		: ''
 }

@@ -481,4 +481,27 @@ describe('generated cf-workers deploy task contract', () => {
 		}
 		expect(dockerPkg.scripts['db:migrate:production']).toBeUndefined()
 	})
+
+	test('cf-workers generated docs name D1 and Neon provider semantics', () => {
+		const postgresEntries = runGenerators(makeCfg({ deploy: 'cf-workers', db: 'postgres' }))
+		expect(findEntry(postgresEntries, 'README.md')!.content).toContain(
+			'Database: PostgreSQL (Neon) via Drizzle'
+		)
+		expect(findEntry(postgresEntries, 'packages/db/README.md')!.content).toContain('Neon Postgres')
+		expect(findEntry(postgresEntries, 'packages/db/README.md')!.content).toContain(
+			'PR previews can use Neon branches'
+		)
+
+		const sqliteEntries = runGenerators(makeCfg({ deploy: 'cf-workers', db: 'sqlite' }))
+		expect(findEntry(sqliteEntries, 'README.md')!.content).toContain(
+			'Database: SQLite (Cloudflare D1) via Drizzle'
+		)
+		expect(findEntry(sqliteEntries, 'packages/db/README.md')!.content).toContain('Cloudflare D1')
+
+		const dockerEntries = runGenerators(makeCfg({ deploy: 'docker', db: 'postgres' }))
+		expect(findEntry(dockerEntries, 'README.md')!.content).toContain(
+			'Database: PostgreSQL via Drizzle'
+		)
+		expect(findEntry(dockerEntries, 'README.md')!.content).not.toContain('Neon')
+	})
 })

@@ -209,7 +209,7 @@ export function renderDbRule(cfg: GvKitConfig): string {
 
 	const driverDescription = isPostgres
 		? isCfWorkers
-			? 'PostgreSQL via Cloudflare Hyperdrive (`postgres.js` + `drizzle-orm/postgres-js`)'
+			? 'Neon Postgres (`postgres.js` + `drizzle-orm/postgres-js`)'
 			: 'PostgreSQL via `postgres.js` + `drizzle-orm/postgres-js`'
 		: isCfWorkers
 			? 'SQLite via Cloudflare D1 (`drizzle-orm/d1`)'
@@ -228,7 +228,17 @@ wrangler d1 migrations apply <database> --remote  # 3. apply to remote D1
 \`\`\`
 
 Each step is reviewable in isolation. Do NOT skip the \`generate\` step.`
-			: `## Migration safety
+			: isCfWorkers && isPostgres
+				? `## Migration safety (Neon Postgres)
+
+\`\`\`bash
+pnpm --filter @repo/db drizzle-kit generate   # 1. emit SQL
+DATABASE_URL=<neon-url> pnpm --filter @repo/db db:migrate:production
+\`\`\`
+
+Production uses the production Neon connection string. PR previews should use a
+Neon branch connection string and must never run against production.`
+				: `## Migration safety
 
 \`\`\`bash
 pnpm --filter @repo/db drizzle-kit generate   # 1. emit SQL
@@ -257,7 +267,7 @@ Each new domain gets its own file under \`schema/\`, re-exported from
 ## Conventions
 
 - IDs: \`text('id').primaryKey()\` (matches better-auth)
-- Timestamps: ${isPostgres ? '`timestamp({ withTimezone: true })`' : '`integer({ mode: \'timestamp\' })`'}
+- Timestamps: ${isPostgres ? '`timestamp({ withTimezone: true })`' : "`integer({ mode: 'timestamp' })`"}
 - Foreign keys: \`.references(() => table.id, { onDelete: 'cascade' })\` is the default
 - Drizzle-zod schemas (\`createInsertSchema\`, \`createSelectSchema\`) live next to the table they describe
 

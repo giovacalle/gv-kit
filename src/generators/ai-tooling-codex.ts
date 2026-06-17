@@ -105,9 +105,7 @@ function renderStackBullets(cfg: GvKitConfig): string {
 	if (cfg.choices.backend === 'hono')
 		lines.push('- Backend: Hono Workers under `apps/api/<service>/`')
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
-	lines.push(
-		`- Database: ${cfg.choices.db === 'postgres' ? 'PostgreSQL' : 'SQLite'} via Drizzle (\`packages/db\`)`
-	)
+	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
 	if (cfg.choices.auth.length > 0)
 		lines.push(`- Auth: better-auth (${cfg.choices.auth.join(', ')})`)
 	if (cfg.choices.i18n === 'paraglide')
@@ -122,6 +120,13 @@ function renderStackBullets(cfg: GvKitConfig): string {
 	if (cfg.choices.apiClient === 'hey-api')
 		lines.push('- API client: Hey API + TanStack Query (`packages/openapi-client`)')
 	return lines.join('\n')
+}
+
+function databaseLabel(cfg: GvKitConfig): string {
+	if (cfg.choices.db === 'postgres') {
+		return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
+	}
+	return cfg.choices.deploy === 'cf-workers' ? 'SQLite (Cloudflare D1)' : 'SQLite'
 }
 
 function renderLayoutBullets(cfg: GvKitConfig): string {

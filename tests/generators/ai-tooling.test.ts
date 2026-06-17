@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-
 import { generateAiTooling } from '../../src/generators/ai-tooling.js'
 import type { GvKitConfig } from '../../src/schema/config.js'
 
-function makeCfg(aiTooling: ('claude' | 'codex' | 'opencode')[]): GvKitConfig {
+function makeCfg(
+	aiTooling: ('claude' | 'codex' | 'opencode')[],
+	overrides: Partial<GvKitConfig['choices']> = {}
+): GvKitConfig {
 	return {
 		configVersion: 1,
 		choices: {
@@ -17,7 +19,8 @@ function makeCfg(aiTooling: ('claude' | 'codex' | 'opencode')[]): GvKitConfig {
 			auth: ['emailOTP'],
 			email: 'resend',
 			aiTooling,
-			deploy: 'cf-workers'
+			deploy: 'cf-workers',
+			...overrides
 		}
 	}
 }
@@ -162,5 +165,20 @@ describe('generateAiTooling — content gating', () => {
 			const p = paths(generateAiTooling(makeCfg([...combo])))
 			expect(p.some((x) => x.startsWith('.claude/rules/'))).toBe(false)
 		}
+	})
+
+	test('cf-workers database rules name Neon for postgres and D1 for sqlite', () => {
+		const postgresEntries = generateAiTooling(makeCfg(['codex'], { db: 'postgres' }))
+		const postgresDbRule = content(postgresEntries, '.ai/rules/db-drizzle.md')
+		const postgresAgents = content(postgresEntries, 'AGENTS.md')
+		expect(postgresDbRule).toContain('Neon Postgres')
+		expect(postgresDbRule).toContain('Neon branch connection string')
+		expect(postgresAgents).toContain('PostgreSQL (Neon)')
+
+		const sqliteEntries = generateAiTooling(makeCfg(['codex'], { db: 'sqlite' }))
+		const sqliteDbRule = content(sqliteEntries, '.ai/rules/db-drizzle.md')
+		const sqliteAgents = content(sqliteEntries, 'AGENTS.md')
+		expect(sqliteDbRule).toContain('SQLite via Cloudflare D1')
+		expect(sqliteAgents).toContain('SQLite (Cloudflare D1)')
 	})
 })

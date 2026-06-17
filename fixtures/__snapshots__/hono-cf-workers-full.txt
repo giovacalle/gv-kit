@@ -6,7 +6,7 @@
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  dfc35b9ad8ba0a21
 .ai/rules/core-workflow.md  30ddaad5a684cb81
-.ai/rules/db-drizzle.md  ddbd459db92f9d8a
+.ai/rules/db-drizzle.md  98ebdba8b01de803
 .ai/rules/deploy-cf-workers.md  4611291ed9b2d58d
 .ai/rules/email-templates.md  f58e0bafccda69df
 .ai/rules/hooks.md  6dd03126d2ec9420
@@ -21,7 +21,7 @@
 .claude/agents/plan.md  f462aa3dff0bd792
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
-.claude/agents/service-architect.md  3dc4467b68b81d8a
+.claude/agents/service-architect.md  df1bb67f9bef2139
 .claude/settings.json  86e746112b35d3a9
 .claude/stack.json  aac8c0ebaab49c0f
 .commitlintrc.json  1a921be1aa693bb1
@@ -33,10 +33,10 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
-AGENTS.md  5a175de5d46dd8a9
-CLAUDE.md  13d074e85c9aa4aa
+AGENTS.md  22d54b8430848e63
+CLAUDE.md  bb14cd596cdacfce
 LICENSE  508a77d2e7b51d98
-README.md  a56c3e0c12621ff0
+README.md  e39555251ce0fdbc
 apps/api/auth/.dev.vars  43cbd0379e4feb55
 apps/api/auth/README.md  1fad00bfd58be708
 apps/api/auth/env.d.ts  108e558ba29e422d
@@ -122,7 +122,7 @@ packages/backend/src/middleware/error-handler.ts  e067b583aa792d3c
 packages/backend/src/middleware/index.ts  0de27dc7c47e8d8f
 packages/backend/src/middleware/logger.ts  d42cac4964dd5371
 packages/backend/tsconfig.json  be01ed046ecbcd8b
-packages/db/README.md  77380114742f4c26
+packages/db/README.md  079f20df43da43c9
 packages/db/drizzle.config.ts  6f07aa5d8ce8d2fc
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  7876434910215db3

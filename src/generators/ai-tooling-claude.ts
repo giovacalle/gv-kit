@@ -48,9 +48,7 @@ function renderStackSummary(cfg: GvKitConfig): string {
 	if (cfg.choices.backend === 'hono')
 		lines.push('- Backend: Hono workers under `apps/api/<service>/`')
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
-	lines.push(
-		`- Database: ${cfg.choices.db === 'postgres' ? 'PostgreSQL' : 'SQLite'} via Drizzle (\`packages/db\`)`
-	)
+	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
 	if (cfg.choices.auth.length > 0)
 		lines.push(`- Auth: better-auth (${cfg.choices.auth.join(', ')})`)
 	if (cfg.choices.i18n === 'paraglide') lines.push('- i18n: Paraglide v2')
@@ -300,7 +298,7 @@ Pick a UNIQUE \`dev.port\` and \`inspector_port\` per service (auth uses 8787/92
 \`\`\`ts
 declare global {
 	interface Env {
-${isCfWorkers ? '\t\tAUTH: Fetcher\n\t\tDB: D1Database // or DATABASE_URL: string + HYPERDRIVE for postgres' : '\t\tAUTH_URL: string\n\t\tDATABASE_URL?: string'}
+${isCfWorkers ? '\t\tAUTH: Fetcher\n\t\tDB: D1Database // or DATABASE_URL: string for Neon Postgres' : '\t\tAUTH_URL: string\n\t\tDATABASE_URL?: string'}
 	}
 }
 
@@ -316,4 +314,11 @@ export {}
 5. Run \`pnpm typecheck\` and \`pnpm lint\` from the repo root.
 6. Report: paths created, ports assigned, bindings declared.
 `
+}
+
+function databaseLabel(cfg: GvKitConfig): string {
+	if (cfg.choices.db === 'postgres') {
+		return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
+	}
+	return cfg.choices.deploy === 'cf-workers' ? 'SQLite (Cloudflare D1)' : 'SQLite'
 }

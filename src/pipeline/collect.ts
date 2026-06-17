@@ -1,5 +1,4 @@
 import { cancel, intro, isCancel, multiselect, select, text } from '@clack/prompts'
-
 import type { Choices } from '../schema/config.js'
 
 function exitIfCancelled<T>(value: T | symbol): asserts value is T {
@@ -59,8 +58,8 @@ export async function collect(): Promise<{ choices: Choices }> {
 	const db = await select({
 		message: 'Database',
 		options: [
-			{ value: 'postgres', label: 'Postgres' },
-			{ value: 'sqlite', label: 'SQLite' }
+			{ value: 'postgres', label: 'Postgres (Neon on Cloudflare)' },
+			{ value: 'sqlite', label: 'SQLite (D1 on Cloudflare)' }
 		]
 	})
 	exitIfCancelled(db)

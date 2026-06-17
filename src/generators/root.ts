@@ -192,9 +192,7 @@ function renderReadme(cfg: GvKitConfig): string {
 	} else {
 		stackLines.push('- Backend: SvelteKit endpoints (no separate API)')
 	}
-	stackLines.push(
-		`- Database: ${cfg.choices.db === 'postgres' ? 'PostgreSQL' : 'SQLite'} via Drizzle`
-	)
+	stackLines.push(`- Database: ${databaseLabel(cfg)} via Drizzle`)
 	if (cfg.choices.auth.length > 0) {
 		const methods = cfg.choices.auth.join(', ')
 		stackLines.push(`- Auth: better-auth (${methods})`)
@@ -253,6 +251,13 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages 
 
 Every runtime and type-only import must be declared explicitly in the importing package's \`package.json\` (including ambient types from \`@repo/tooling-typescript\` such as \`@types/node\` or \`@cloudflare/workers-types\`). ESLint's \`import/no-extraneous-dependencies\` rule catches anything that slips through (\`pnpm lint\`).
 `
+}
+
+function databaseLabel(cfg: GvKitConfig): string {
+	if (cfg.choices.db === 'postgres') {
+		return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
+	}
+	return cfg.choices.deploy === 'cf-workers' ? 'SQLite (Cloudflare D1)' : 'SQLite'
 }
 
 function renderEnvExample(cfg: GvKitConfig): string {

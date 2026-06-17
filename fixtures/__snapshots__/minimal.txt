@@ -42,7 +42,7 @@ packages/backend/package.json  f594ecbc5b367e1e
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
 packages/backend/tsconfig.json  8b32452841b0fe8e
-packages/db/README.md  54e35b4544bd1932
+packages/db/README.md  b07c165d8a4418b3
 packages/db/drizzle.config.ts  a0c540ca51839bc4
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  bfb878c0c5fd4c29

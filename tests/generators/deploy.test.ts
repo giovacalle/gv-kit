@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-
 import { generateDeploy } from '../../src/generators/deploy.js'
+import { runGenerators } from '../../src/generators/index.js'
 import type { FileEntry } from '../../src/lib/files.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
@@ -193,9 +193,7 @@ describe('generateDeploy — backend topology', () => {
 	})
 
 	test('inside-frontend + postgres → web has DATABASE_URL and depends_on postgres', () => {
-		const yaml = compose(
-			makeCfg({ backend: 'inside-frontend', apiClient: 'skip', db: 'postgres' })
-		)
+		const yaml = compose(makeCfg({ backend: 'inside-frontend', apiClient: 'skip', db: 'postgres' }))
 		const webBlock = yaml.split(/^ {2}web:/m)[1]!
 		expect(webBlock).toContain('DATABASE_URL')
 		expect(webBlock).toMatch(/depends_on:[\s\S]*postgres:[\s\S]*condition: service_healthy/)
@@ -292,13 +290,22 @@ describe('generateDeploy — .dockerignore', () => {
 })
 
 describe('generateDeploy — cf-workers workflows', () => {
-	test('deploy-production.yml triggers on push to main, deploys web Worker', () => {
+	test('deploy-production.yml triggers on push to main and deploys affected Workers via turbo', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		const yml = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
 		expect(yml).toMatch(/on:\s*\n\s+push:\s*\n\s+branches:\s*\[main\]/)
-		expect(yml).toContain('apps/web')
-		expect(yml).toContain('wrangler deploy')
-		expect(yml).not.toContain('--name')
+		expect(yml).toContain('pnpm turbo run deploy:production --affected')
+		expect(yml).toContain('db-migrations:')
+		expect(yml).toContain('needs: db-migrations')
+		expect(yml).toContain('pnpm --filter @repo/db db:migrate:production')
+		expect(yml).toContain('DATABASE_URL: ${{ secrets.DATABASE_URL }}')
+		expect(yml).toContain('TURBO_SCM_BASE')
+		expect(yml).toContain('TURBO_SCM_HEAD')
+		expect(yml).toContain('fetch-depth: 0')
+		expect(yml).not.toContain('working-directory: apps/web')
+		expect(yml).not.toContain('working-directory: apps/api/auth')
+		expect(yml).not.toContain('working-directory: apps/api/users')
+		expect(yml).not.toContain('wrangler deploy --name')
 	})
 
 	test('deploy-staging.yml triggers on pull_request open/sync/reopen with paths-ignore', () => {
@@ -329,15 +336,23 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		expect(yml).toContain('github.event.pull_request.head.ref')
-		expect(yml).toContain('wrangler deploy --name')
+		expect(yml).toContain('STAGING_ALIAS')
+		expect(yml).toContain('pnpm turbo run deploy:staging --affected')
+		expect(yml).toContain('intentionally does not run database migrations')
+		expect(yml).not.toContain('db:migrate:production')
+		expect(yml).not.toContain('working-directory: apps/api/auth')
+		expect(yml).not.toContain('working-directory: apps/api/users')
 	})
 
-	test('cleanup-staging.yml triggers on PR closed, deletes Workers + branch', () => {
+	test('cleanup-staging.yml triggers on PR closed, discovers Workers, and deletes branch', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
 		expect(yml).toMatch(/on:\s*\n\s+pull_request:\s*\n\s+types:\s*\[closed\]/)
+		expect(yml).toContain('find apps -name wrangler.jsonc')
 		expect(yml).toContain('wrangler delete --name')
 		expect(yml).toContain('deleteRef')
+		expect(yml).not.toContain(`${baseChoices.name}-auth-\${{ steps.branch.outputs.alias }}`)
+		expect(yml).not.toContain(`${baseChoices.name}-users-\${{ steps.branch.outputs.alias }}`)
 	})
 
 	test('cleanup-staging.yml overwrites the staging-deploy sticky comment', () => {
@@ -366,14 +381,14 @@ describe('generateDeploy — cf-workers workflows', () => {
 		}
 	})
 
-	test('hono backend → production + staging deploy auth + users Workers', () => {
+	test('hono backend → production + staging do not enumerate auth/users Workers', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', backend: 'hono' }))
 		const prod = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
 		const staging = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
-		expect(prod).toContain('apps/api/auth')
-		expect(prod).toContain('apps/api/users')
-		expect(staging).toContain('apps/api/auth')
-		expect(staging).toContain('apps/api/users')
+		expect(prod).not.toContain('apps/api/auth')
+		expect(prod).not.toContain('apps/api/users')
+		expect(staging).not.toContain('apps/api/auth')
+		expect(staging).not.toContain('apps/api/users')
 	})
 
 	test('inside-frontend mode emits no api deploy steps', () => {
@@ -389,5 +404,81 @@ describe('generateDeploy — cf-workers workflows', () => {
 			expect(yml).not.toContain('apps/api/auth')
 			expect(yml).not.toContain('apps/api/users')
 		}
+	})
+})
+
+describe('generated cf-workers deploy task contract', () => {
+	test('root package and turbo config expose non-cacheable deploy tasks only for cf-workers', () => {
+		const cfEntries = runGenerators(makeCfg({ deploy: 'cf-workers' }))
+		const cfRootPkg = JSON.parse(findEntry(cfEntries, 'package.json')!.content) as {
+			scripts: Record<string, string>
+		}
+		const cfTurbo = JSON.parse(findEntry(cfEntries, 'turbo.json')!.content) as {
+			tasks: Record<string, { cache?: boolean; dependsOn?: string[] }>
+		}
+
+		expect(cfRootPkg.scripts['deploy:production']).toBe('turbo run deploy:production --affected')
+		expect(cfRootPkg.scripts['deploy:staging']).toBe('turbo run deploy:staging --affected')
+		expect(cfTurbo.tasks['deploy:production']).toEqual({ dependsOn: ['build'], cache: false })
+		expect(cfTurbo.tasks['deploy:staging']).toEqual({ dependsOn: ['build'], cache: false })
+
+		const dockerEntries = runGenerators(makeCfg({ deploy: 'docker' }))
+		const dockerRootPkg = JSON.parse(findEntry(dockerEntries, 'package.json')!.content) as {
+			scripts: Record<string, string>
+		}
+		const dockerTurbo = JSON.parse(findEntry(dockerEntries, 'turbo.json')!.content) as {
+			tasks: Record<string, unknown>
+		}
+		expect(dockerRootPkg.scripts['deploy:production']).toBeUndefined()
+		expect(dockerRootPkg.scripts['deploy:staging']).toBeUndefined()
+		expect(dockerTurbo.tasks['deploy:production']).toBeUndefined()
+		expect(dockerTurbo.tasks['deploy:staging']).toBeUndefined()
+	})
+
+	test('deployable cf-workers packages expose production and staging deploy scripts', () => {
+		const entries = runGenerators(makeCfg({ deploy: 'cf-workers', backend: 'hono' }))
+		for (const path of [
+			'apps/web/package.json',
+			'apps/api/auth/package.json',
+			'apps/api/users/package.json'
+		]) {
+			const pkg = JSON.parse(findEntry(entries, path)!.content) as {
+				scripts: Record<string, string>
+			}
+			expect(pkg.scripts['deploy:production']).toContain('wrangler deploy')
+			expect(pkg.scripts['deploy:staging']).toContain('STAGING_ALIAS')
+			expect(pkg.scripts['deploy:staging']).toContain('wrangler deploy --name')
+		}
+	})
+
+	test('cf-workers db package exposes one-shot production migration scripts', () => {
+		const postgresEntries = runGenerators(makeCfg({ deploy: 'cf-workers', db: 'postgres' }))
+		const postgresPkg = JSON.parse(
+			findEntry(postgresEntries, 'packages/db/package.json')!.content
+		) as {
+			devDependencies: Record<string, string>
+			scripts: Record<string, string>
+		}
+		expect(postgresPkg.scripts['db:migrate:production']).toBe('drizzle-kit migrate')
+		expect(postgresPkg.devDependencies.wrangler).toBeUndefined()
+
+		const sqliteEntries = runGenerators(makeCfg({ deploy: 'cf-workers', db: 'sqlite' }))
+		const sqlitePkg = JSON.parse(findEntry(sqliteEntries, 'packages/db/package.json')!.content) as {
+			devDependencies: Record<string, string>
+			scripts: Record<string, string>
+		}
+		expect(sqlitePkg.scripts['db:migrate:production']).toBe(
+			'wrangler d1 migrations apply demo-db --remote'
+		)
+		expect(sqlitePkg.scripts['db:migrate:local']).toBe(
+			'wrangler d1 migrations apply demo-db --local'
+		)
+		expect(sqlitePkg.devDependencies.wrangler).toBeDefined()
+
+		const dockerEntries = runGenerators(makeCfg({ deploy: 'docker', db: 'postgres' }))
+		const dockerPkg = JSON.parse(findEntry(dockerEntries, 'packages/db/package.json')!.content) as {
+			scripts: Record<string, string>
+		}
+		expect(dockerPkg.scripts['db:migrate:production']).toBeUndefined()
 	})
 })

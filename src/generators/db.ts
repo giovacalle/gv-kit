@@ -6,9 +6,10 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 	const isSqlite = cfg.choices.db === 'sqlite'
 	const isCf = cfg.choices.deploy === 'cf-workers'
 	const hasAuth = cfg.choices.auth.length > 0
+	const project = cfg.choices.name
 
 	const entries: FileEntry[] = [
-		{ path: 'packages/db/package.json', content: renderPackageJson({ isSqlite, isCf }) },
+		{ path: 'packages/db/package.json', content: renderPackageJson({ project, isSqlite, isCf }) },
 		{ path: 'packages/db/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
 		{ path: 'packages/db/drizzle.config.ts', content: renderDrizzleConfig({ isSqlite, isCf }) },
 		{ path: 'packages/db/src/client.ts', content: renderClient({ isSqlite, isCf }) },
@@ -19,12 +20,21 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 		{ path: 'packages/db/README.md', content: renderReadme({ isSqlite, isCf, hasAuth }) }
 	]
 
-	if (hasAuth) entries.push({ path: 'packages/db/src/schema/auth.ts', content: renderAuthSchema(isSqlite) })
+	if (hasAuth)
+		entries.push({ path: 'packages/db/src/schema/auth.ts', content: renderAuthSchema(isSqlite) })
 
 	return entries
 }
 
-function renderPackageJson({ isSqlite, isCf }: { isSqlite: boolean; isCf: boolean }): string {
+function renderPackageJson({
+	project,
+	isSqlite,
+	isCf
+}: {
+	project: string
+	isSqlite: boolean
+	isCf: boolean
+}): string {
 	const dependencies: Record<string, string> = {
 		'drizzle-orm': '^0.45.0',
 		'drizzle-zod': '^0.8.3',
@@ -41,6 +51,24 @@ function renderPackageJson({ isSqlite, isCf }: { isSqlite: boolean; isCf: boolea
 		typescript: '~5.9.0'
 	}
 	if (isCf) devDependencies['@cloudflare/workers-types'] = '^4.20251101.0'
+	if (isCf && isSqlite) devDependencies.wrangler = '^4.85.0'
+
+	const scripts: Record<string, string> = {
+		'db:generate': 'drizzle-kit generate',
+		'db:migrate': 'drizzle-kit migrate',
+		'db:push': 'drizzle-kit push',
+		'db:studio': 'drizzle-kit studio',
+		typecheck: 'tsc --noEmit',
+		lint: 'eslint .'
+	}
+	if (isCf) {
+		scripts['db:migrate:production'] = isSqlite
+			? `wrangler d1 migrations apply ${project}-db --remote`
+			: 'drizzle-kit migrate'
+	}
+	if (isCf && isSqlite) {
+		scripts['db:migrate:local'] = `wrangler d1 migrations apply ${project}-db --local`
+	}
 
 	const pkg = {
 		name: '@repo/db',
@@ -52,21 +80,20 @@ function renderPackageJson({ isSqlite, isCf }: { isSqlite: boolean; isCf: boolea
 			'./client': './src/client.ts',
 			'./schema': './src/schema/index.ts'
 		},
-		scripts: {
-			'db:generate': 'drizzle-kit generate',
-			'db:migrate': 'drizzle-kit migrate',
-			'db:push': 'drizzle-kit push',
-			'db:studio': 'drizzle-kit studio',
-			typecheck: 'tsc --noEmit',
-			lint: 'eslint .'
-		},
+		scripts,
 		dependencies,
 		devDependencies
 	}
 	return JSON.stringify(pkg, null, 2) + '\n'
 }
 
-function renderTsconfig({ isCf, isSqlite: _isSqlite }: { isCf: boolean; isSqlite: boolean }): string {
+function renderTsconfig({
+	isCf,
+	isSqlite: _isSqlite
+}: {
+	isCf: boolean
+	isSqlite: boolean
+}): string {
 	if (isCf) {
 		return `{
 	"extends": "@repo/tooling-typescript/library.json",

@@ -21,33 +21,15 @@ export function generateDeploy(cfg: GvKitConfig): FileEntry[] {
 /* ------------------------------------------------------------------ */
 
 function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
-	const opts = { project: cfg.choices.name, isHono: cfg.choices.backend === 'hono' }
+	const opts = { project: cfg.choices.name }
 	return [
 		{ path: '.github/workflows/deploy-production.yml', content: deployProductionWorkflow(opts) },
 		{ path: '.github/workflows/deploy-staging.yml', content: deployStagingWorkflow(opts) },
-		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(opts) }
+		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow() }
 	]
 }
 
-function deployProductionWorkflow({ project, isHono }: { project: string; isHono: boolean }): string {
-	const apiSteps = isHono
-		? `
-      - name: Deploy auth Worker
-        working-directory: apps/api/auth
-        run: pnpm exec wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Deploy users Worker
-        working-directory: apps/api/users
-        run: pnpm exec wrangler deploy
-        env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-`
-		: ''
-
+function deployProductionWorkflow({ project }: { project: string }): string {
 	return `# Deploy ${project} to production on push to main.
 #
 # Required GitHub Secrets:
@@ -65,7 +47,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  deploy:
+  db-migrations:
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -73,7 +55,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
+          filter: blob:none
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.1
@@ -82,43 +65,85 @@ jobs:
           node-version: '20'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-${apiSteps}
-      - name: Deploy web Worker
-        working-directory: apps/web
-        run: pnpm exec wrangler deploy
+
+      - id: scm
+        name: Resolve migration range
+        run: |
+          base="\${{ github.event.before }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^1"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=\${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - id: db_changes
+        name: Check DB migration inputs
+        run: |
+          if git diff --name-only "\${{ steps.scm.outputs.base }}" "\${{ steps.scm.outputs.head }}" | grep -E '^packages/db/(migrations/|src/schema/|drizzle\\.config\\.ts)'; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run production database migrations
+        if: steps.db_changes.outputs.should_run == 'true'
+        run: pnpm --filter @repo/db db:migrate:production
+        env:
+          DATABASE_URL: \${{ secrets.DATABASE_URL }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Skip database migrations
+        if: steps.db_changes.outputs.should_run != 'true'
+        run: echo "No database migration inputs changed."
+
+  deploy:
+    needs: db-migrations
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'pnpm'
+      - run: pnpm install --frozen-lockfile
+
+      - id: scm
+        name: Resolve affected range
+        run: |
+          base="\${{ github.event.before }}"
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            base="HEAD^1"
+          fi
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "head=\${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Deploy affected Workers
+        run: pnpm turbo run deploy:production --affected
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TURBO_SCM_BASE: \${{ steps.scm.outputs.base }}
+          TURBO_SCM_HEAD: \${{ steps.scm.outputs.head }}
 `
 }
 
-function deployStagingWorkflow({ project, isHono }: { project: string; isHono: boolean }): string {
-	const apiSteps = isHono
-		? `
-      - name: Deploy auth Worker (staging)
-        working-directory: apps/api/auth
-        run: pnpm exec wrangler deploy --name ${project}-auth-\${{ steps.meta.outputs.alias }}
-        env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-
-      - name: Deploy users Worker (staging)
-        working-directory: apps/api/users
-        run: pnpm exec wrangler deploy --name ${project}-users-\${{ steps.meta.outputs.alias }}
-        env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-`
-		: ''
-
-	const apiCommentRows = isHono
-		? `            | \`auth\` | https://${project}-auth-\${{ steps.meta.outputs.alias }}.<your-workers-subdomain>.workers.dev |
-            | \`users\` | https://${project}-users-\${{ steps.meta.outputs.alias }}.<your-workers-subdomain>.workers.dev |
-`
-		: ''
-
+function deployStagingWorkflow({ project }: { project: string }): string {
 	return `# Per-PR staging deploys. Every push to a PR gets isolated Workers named with
-# the branch slug, and a sticky comment on the PR with URLs.
+# the branch slug. Deployable packages derive their own Worker names from
+# STAGING_ALIAS, so adding a new Worker package does not require editing this
+# workflow.
+# This workflow intentionally does not run database migrations; production
+# migrations are a separate serial gate in deploy-production.yml.
 # Tear-down lives in cleanup-staging.yml.
 #
 # Required GitHub Secrets:
@@ -149,7 +174,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
+          filter: blob:none
           ref: \${{ github.event.pull_request.head.sha }}
       - id: meta
         run: |
@@ -163,13 +189,15 @@ jobs:
           node-version: '20'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
-${apiSteps}
-      - name: Deploy web Worker (staging)
-        working-directory: apps/web
-        run: pnpm exec wrangler deploy --name ${project}-web-\${{ steps.meta.outputs.alias }}
+
+      - name: Deploy affected Workers (staging)
+        run: pnpm turbo run deploy:staging --affected
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STAGING_ALIAS: \${{ steps.meta.outputs.alias }}
+          TURBO_SCM_BASE: \${{ github.event.pull_request.base.sha }}
+          TURBO_SCM_HEAD: \${{ github.event.pull_request.head.sha }}
 
       - uses: marocchino/sticky-pull-request-comment@v2
         with:
@@ -179,34 +207,17 @@ ${apiSteps}
 
             | Worker | URL |
             |---|---|
-${apiCommentRows}            | \`web\` | https://${project}-web-\${{ steps.meta.outputs.alias }}.<your-workers-subdomain>.workers.dev |
+            | affected packages | \`${project}-<worker>-\${{ steps.meta.outputs.alias }}.<your-workers-subdomain>.workers.dev\` |
 
             **Commit**: \`\${{ steps.meta.outputs.short_sha }}\`
             **Updated**: \${{ github.event.pull_request.updated_at }}
 `
 }
 
-function cleanupStagingWorkflow({ project, isHono }: { project: string; isHono: boolean }): string {
-	const apiDeletes = isHono
-		? `
-      - name: Delete auth Worker (staging)
-        run: npx wrangler delete --name ${project}-auth-\${{ steps.branch.outputs.alias }} --force
-        env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        continue-on-error: true
-
-      - name: Delete users Worker (staging)
-        run: npx wrangler delete --name ${project}-users-\${{ steps.branch.outputs.alias }} --force
-        env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        continue-on-error: true
-`
-		: ''
-
+function cleanupStagingWorkflow(): string {
 	return `# Tear down a staging deploy when its PR closes (merged or rejected). Also
-# deletes the remote branch — staging is ephemeral.
+# deletes the remote branch — staging is ephemeral. Worker names are discovered
+# from checked-in wrangler.jsonc files and suffixed with the branch alias.
 
 name: cleanup-staging
 
@@ -221,18 +232,32 @@ jobs:
       contents: write
       pull-requests: write
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          ref: \${{ github.event.pull_request.head.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
       - id: branch
         run: echo "alias=$(echo \${{ github.event.pull_request.head.ref }} | tr '/' '-' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
-${apiDeletes}
-      - name: Delete web Worker (staging)
-        run: npx wrangler delete --name ${project}-web-\${{ steps.branch.outputs.alias }} --force
+
+      - name: Delete staging Workers
+        run: |
+          set -euo pipefail
+          find apps -name wrangler.jsonc -print | while read -r config; do
+            base_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$config" | head -n 1)
+            if [ -z "$base_name" ]; then
+              echo "Skipping $config: no top-level name found"
+              continue
+            fi
+            worker_name="$base_name-\${{ steps.branch.outputs.alias }}"
+            echo "Deleting $worker_name"
+            npx wrangler delete --name "$worker_name" --force || true
+          done
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        continue-on-error: true
 
       - name: Delete remote branch
         uses: actions/github-script@v7
@@ -485,7 +510,9 @@ function authService(opts: DockerOpts): string {
 	}
 	if (opts.wantsGoogle) {
 		env.push('      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}')
-		env.push('      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET in .env}')
+		env.push(
+			'      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET in .env}'
+		)
 	}
 	if (opts.wantsEmailOTP && opts.emailProvider === 'resend') {
 		env.push('      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}')

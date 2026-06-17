@@ -23,9 +23,9 @@
 .claude/stack.json  51a20d88c04095f7
 .commitlintrc.json  1a921be1aa693bb1
 .env.example  b0bb4ef83b35f11c
-.github/workflows/cleanup-staging.yml  f444067e28f72244
-.github/workflows/deploy-production.yml  583dd75d9f8e7f62
-.github/workflows/deploy-staging.yml  1d2542b89d9f8364
+.github/workflows/cleanup-staging.yml  5954c5dbf429daac
+.github/workflows/deploy-production.yml  769b654f1093a960
+.github/workflows/deploy-staging.yml  6722d6e9829aa70e
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -38,7 +38,7 @@ apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  1561e4cedb9a8d7c
 apps/web/eslint.config.js  cfd85b071f7c820c
-apps/web/package.json  1968ce9063c5c35e
+apps/web/package.json  e9a98ab21b562909
 apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
 apps/web/src/app.d.ts  8ec53843c7f7fd40
@@ -76,7 +76,7 @@ apps/web/vite.config.ts  89c6c7068f62a061
 apps/web/wrangler.jsonc  ccfa7b213418de2d
 eslint.config.js  cfd85b071f7c820c
 gv-kit.config.jsonc  5bc969f2b009d76a
-package.json  0fff725b96354d8f
+package.json  866eb5815e84e806
 packages/backend/package.json  779fe6b56ab43697
 packages/backend/src/core/data-access/users.ts  3cee1df896a23f1b
 packages/backend/src/core/types.ts  ba34cd9886b09156
@@ -87,7 +87,7 @@ packages/backend/tsconfig.json  be01ed046ecbcd8b
 packages/db/README.md  77380114742f4c26
 packages/db/drizzle.config.ts  6f07aa5d8ce8d2fc
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
-packages/db/package.json  629e0d34e84318e8
+packages/db/package.json  7876434910215db3
 packages/db/src/client.ts  09602c79d47e2fab
 packages/db/src/index.ts  4d7894d63bb774e7
 packages/db/src/schema/auth.ts  09a50c94e121c988
@@ -255,4 +255,4 @@ packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e
 prettier.config.js  76a534fdcb4541a5
 tsconfig.json  30916d65cceb0f5a
-turbo.json  a71501a3945d1141
+turbo.json  7ad18044dd3cf3fa

@@ -24,9 +24,9 @@
 .claude/stack.json  5b53cb6d19706b63
 .commitlintrc.json  1a921be1aa693bb1
 .env.example  861e8a1407b97fec
-.github/workflows/cleanup-staging.yml  e003c425eaaaaf15
-.github/workflows/deploy-production.yml  73d9b8a2fcd82c24
-.github/workflows/deploy-staging.yml  72a27ef129815fac
+.github/workflows/cleanup-staging.yml  5954c5dbf429daac
+.github/workflows/deploy-production.yml  53221b48d82d6de5
+.github/workflows/deploy-staging.yml  0d54bbbcb9f70c19
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -36,7 +36,7 @@ LICENSE  508a77d2e7b51d98
 README.md  6e45991df26cc403
 apps/api/auth/README.md  f2f1b652690d44ba
 apps/api/auth/env.d.ts  e80516d451f9058f
-apps/api/auth/package.json  90437d9d63562786
+apps/api/auth/package.json  75d31a056f247aca
 apps/api/auth/src/app.ts  5a915f2e8ed334e6
 apps/api/auth/src/auth.ts  8c8e593d1cb9a73c
 apps/api/auth/src/index.ts  7cd0934010f03dbd
@@ -47,7 +47,7 @@ apps/api/auth/wrangler.jsonc  ccd355d5c5cb28ea
 apps/api/users/README.md  b6ea29e306f100a2
 apps/api/users/env.d.ts  f2f9be2a7925925f
 apps/api/users/openapi.json  9032ecb56f592d57
-apps/api/users/package.json  b48d373d1829d9d6
+apps/api/users/package.json  427673d2a61abb54
 apps/api/users/src/app.ts  4509990cdd5a369c
 apps/api/users/src/index.ts  4b7b9fa09cb7de89
 apps/api/users/src/openapi.ts  b081e3092b14c219
@@ -62,7 +62,7 @@ apps/web/.env.example  ff54bf081440e26f
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  213baa95f537fa67
 apps/web/eslint.config.js  cfd85b071f7c820c
-apps/web/package.json  942ad47dda50dda5
+apps/web/package.json  f8ecea91fe129aec
 apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
 apps/web/src/app.d.ts  fab01a79ba576330
@@ -90,7 +90,7 @@ apps/web/vite.config.ts  669d0b2cc2b254e0
 apps/web/wrangler.jsonc  8791f7f81f7c5476
 eslint.config.js  cfd85b071f7c820c
 gv-kit.config.jsonc  1ad4e32c9855aae7
-package.json  381b85ccbd81f8e3
+package.json  8ba504a62329a908
 packages/backend/package.json  1e82d498b139f031
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
@@ -104,7 +104,7 @@ packages/backend/tsconfig.json  be01ed046ecbcd8b
 packages/db/README.md  760be3501dad67c9
 packages/db/drizzle.config.ts  6f07aa5d8ce8d2fc
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
-packages/db/package.json  629e0d34e84318e8
+packages/db/package.json  7876434910215db3
 packages/db/src/client.ts  09602c79d47e2fab
 packages/db/src/index.ts  62cad5656dffb51b
 packages/db/src/schema/index.ts  3659fc2681f8688d
@@ -252,4 +252,4 @@ packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e
 prettier.config.js  76a534fdcb4541a5
 tsconfig.json  30916d65cceb0f5a
-turbo.json  a71501a3945d1141
+turbo.json  7ad18044dd3cf3fa

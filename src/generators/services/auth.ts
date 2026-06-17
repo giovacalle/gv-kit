@@ -119,6 +119,9 @@ function pkgJson({
 		scripts.dev = 'pnpm cf-typegen && wrangler dev'
 		scripts.build = 'pnpm cf-typegen && wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
+		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
+		scripts['deploy:staging'] =
+			`pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --name ${project}-auth-$STAGING_ALIAS`
 		scripts.typecheck = 'pnpm cf-typegen && tsc --noEmit'
 	} else {
 		dependencies['@hono/node-server'] = '^1.13.0'
@@ -148,7 +151,13 @@ function pkgJson({
 	)
 }
 
-function tsconfig({ runtime, usesSqlite: _usesSqlite }: { runtime: Runtime; usesSqlite: boolean }): string {
+function tsconfig({
+	runtime,
+	usesSqlite: _usesSqlite
+}: {
+	runtime: Runtime
+	usesSqlite: boolean
+}): string {
 	if (runtime === 'cf-workers') {
 		return (
 			JSON.stringify(
@@ -223,9 +232,7 @@ function wranglerJsonc({
 		"inspector_port": 9229
 	},
 	// Secrets: \`wrangler secret put BETTER_AUTH_SECRET\` (and OAuth secrets). NEVER commit values.${
-		wantsEmailOTP
-			? '\n\t// SECRET: TURNSTILE_SECRET_KEY — required when emailOTP is enabled.'
-			: ''
+		wantsEmailOTP ? '\n\t// SECRET: TURNSTILE_SECRET_KEY — required when emailOTP is enabled.' : ''
 	}${
 		wantsEmailOTP && email === 'notifuse'
 			? '\n\t// SECRETS: NOTIFUSE_API_KEY, NOTIFUSE_WORKSPACE_ID, NOTIFUSE_BASE_URL — self-hosted Notifuse instance.'
@@ -843,8 +850,9 @@ preference; otherwise the browser's \`Accept-Language\` is used as a sensible
 default.`
 		: ''
 
-	const trustedOriginsNote = runtime === 'cf-workers'
-		? `
+	const trustedOriginsNote =
+		runtime === 'cf-workers'
+			? `
 
 ## Trusted origins
 
@@ -855,7 +863,7 @@ origins (e.g. local frontend, preview deploys) set a comma-separated list:
 wrangler secret put BETTER_AUTH_TRUSTED_ORIGINS
 # value: https://app.example.com,https://preview-*.example.com
 \`\`\``
-		: `
+			: `
 
 ## Trusted origins
 
@@ -915,9 +923,7 @@ The auth service. **Sole owner** of authentication state and secrets.
 - Call other services (no \`services\` bindings, no outbound HTTP)
 
 Other services MUST call \`/internal/session\` ${
-		runtime === 'cf-workers'
-			? 'through a CF service binding'
-			: 'via HTTP using `AUTH_URL`'
+		runtime === 'cf-workers' ? 'through a CF service binding' : 'via HTTP using `AUTH_URL`'
 	} —
 **never** import this service's code or read its secrets.
 

@@ -6,7 +6,7 @@ export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 	return [
 		{ path: 'package.json', content: renderRootPackageJson(cfg) },
 		{ path: 'pnpm-workspace.yaml', content: PNPM_WORKSPACE_YAML },
-		{ path: 'turbo.json', content: TURBO_JSON },
+		{ path: 'turbo.json', content: renderTurboJson(cfg) },
 		{ path: 'tsconfig.json', content: TSCONFIG_ROOT },
 		{ path: '.gitignore', content: GITIGNORE },
 		{ path: 'prettier.config.js', content: PRETTIER_CONFIG_SHIM },
@@ -19,21 +19,27 @@ export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 }
 
 function renderRootPackageJson(cfg: GvKitConfig): string {
+	const scripts: Record<string, string> = {
+		dev: 'turbo run dev',
+		build: 'turbo run build',
+		test: 'turbo run test',
+		typecheck: 'turbo run typecheck',
+		lint: 'turbo run lint',
+		format: 'prettier --write "**/*.{ts,tsx,svelte,json,md}"',
+		prepare: 'husky'
+	}
+	if (cfg.choices.deploy === 'cf-workers') {
+		scripts['deploy:production'] = 'turbo run deploy:production --affected'
+		scripts['deploy:staging'] = 'turbo run deploy:staging --affected'
+	}
+
 	const pkg = {
 		name: cfg.choices.name,
 		version: '0.0.0',
 		private: true,
 		type: 'module',
 		packageManager: 'pnpm@11.1.1',
-		scripts: {
-			dev: 'turbo run dev',
-			build: 'turbo run build',
-			test: 'turbo run test',
-			typecheck: 'turbo run typecheck',
-			lint: 'turbo run lint',
-			format: 'prettier --write "**/*.{ts,tsx,svelte,json,md}"',
-			prepare: 'husky'
-		},
+		scripts,
 		devDependencies: {
 			'@commitlint/cli': '^19.6.0',
 			'@commitlint/config-conventional': '^19.6.0',
@@ -80,35 +86,51 @@ allowBuilds:
   workerd: true
 `
 
-const TURBO_JSON =
-	JSON.stringify(
-		{
-			$schema: 'https://turbo.build/schema.json',
-			ui: 'tui',
-			tasks: {
-				build: {
-					dependsOn: ['^build'],
-					outputs: ['dist/**', '.svelte-kit/**', '.wrangler/**', 'src/paraglide/**']
-				},
-				typecheck: {
-					dependsOn: ['^build']
-				},
-				test: {
-					dependsOn: ['^build'],
-					outputs: []
-				},
-				lint: {
-					outputs: []
-				},
-				dev: {
-					cache: false,
-					persistent: true
-				}
-			}
+function renderTurboJson(cfg: GvKitConfig): string {
+	const tasks: Record<string, unknown> = {
+		build: {
+			dependsOn: ['^build'],
+			outputs: ['dist/**', '.svelte-kit/**', '.wrangler/**', 'src/paraglide/**']
 		},
-		null,
-		2
-	) + '\n'
+		typecheck: {
+			dependsOn: ['^build']
+		},
+		test: {
+			dependsOn: ['^build'],
+			outputs: []
+		},
+		lint: {
+			outputs: []
+		},
+		dev: {
+			cache: false,
+			persistent: true
+		}
+	}
+
+	if (cfg.choices.deploy === 'cf-workers') {
+		tasks['deploy:production'] = {
+			dependsOn: ['build'],
+			cache: false
+		}
+		tasks['deploy:staging'] = {
+			dependsOn: ['build'],
+			cache: false
+		}
+	}
+
+	return (
+		JSON.stringify(
+			{
+				$schema: 'https://turbo.build/schema.json',
+				ui: 'tui',
+				tasks
+			},
+			null,
+			2
+		) + '\n'
+	)
+}
 
 const TSCONFIG_ROOT = `{
 	"extends": "@repo/tooling-typescript/base.json",
@@ -170,7 +192,9 @@ function renderReadme(cfg: GvKitConfig): string {
 	} else {
 		stackLines.push('- Backend: SvelteKit endpoints (no separate API)')
 	}
-	stackLines.push(`- Database: ${cfg.choices.db === 'postgres' ? 'PostgreSQL' : 'SQLite'} via Drizzle`)
+	stackLines.push(
+		`- Database: ${cfg.choices.db === 'postgres' ? 'PostgreSQL' : 'SQLite'} via Drizzle`
+	)
 	if (cfg.choices.auth.length > 0) {
 		const methods = cfg.choices.auth.join(', ')
 		stackLines.push(`- Auth: better-auth (${methods})`)

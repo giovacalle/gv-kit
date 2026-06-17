@@ -408,10 +408,19 @@ jobs:
       contents: write
       pull-requests: write
     steps:
-      - uses: actions/checkout@v4
+      - id: checkout_head
+        uses: actions/checkout@v4
+        continue-on-error: true
         with:
           fetch-depth: 1
           ref: \${{ github.event.pull_request.head.sha }}
+      - id: checkout_base
+        if: steps.checkout_head.outcome != 'success'
+        uses: actions/checkout@v4
+        continue-on-error: true
+        with:
+          fetch-depth: 1
+          ref: \${{ github.event.pull_request.base.sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -420,6 +429,7 @@ jobs:
           ${PREVIEW_ALIAS_SCRIPT}
 
       - name: Delete staging Workers
+        if: steps.checkout_head.outcome == 'success' || steps.checkout_base.outcome == 'success'
         run: |
           set -euo pipefail
           find apps -name wrangler.jsonc -print | while read -r config; do
@@ -435,6 +445,10 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+      - name: Skip staging Worker cleanup
+        if: steps.checkout_head.outcome != 'success' && steps.checkout_base.outcome != 'success'
+        run: echo "Could not check out PR head or base; skipping dynamic Worker cleanup."
 
 ${previewDbCleanupStep}
 
@@ -467,10 +481,18 @@ ${previewDbCleanupStep}
 function d1PreviewDbCleanupStep(project: string): string {
 	return `      - name: Delete preview D1 database
         run: |
-          set -euo pipefail
+          set -uo pipefail
           db_name="${project}-db-\${{ steps.branch.outputs.alias }}"
-          echo "Deleting preview D1 database $db_name"
-          npx wrangler d1 delete "$db_name" --skip-confirmation || true
+          db_id=$(npx wrangler d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
+          if [ -z "$db_id" ]; then
+            echo "Preview D1 database $db_name is missing or already deleted."
+            exit 0
+          fi
+          if npx wrangler d1 delete "$db_name" --skip-confirmation; then
+            echo "Deleted preview D1 database $db_name."
+          else
+            echo "Could not delete preview D1 database $db_name; continuing cleanup."
+          fi
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
@@ -478,12 +500,26 @@ function d1PreviewDbCleanupStep(project: string): string {
 
 function neonPreviewDbCleanupStep(project: string): string {
 	return `      - name: Delete preview Neon branch
-        uses: neondatabase/delete-branch-by-name-action@main
-        continue-on-error: true
-        with:
-          project_id: \${{ vars.NEON_PROJECT_ID }}
-          branch_name: ${project}-db-\${{ steps.branch.outputs.alias }}
-          api_key: \${{ secrets.NEON_API_KEY }}`
+        run: |
+          set -uo pipefail
+          branch_name="${project}-db-\${{ steps.branch.outputs.alias }}"
+          branches_json=$(curl -fsS -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches") || {
+              echo "Could not list Neon branches; continuing cleanup."
+              exit 0
+            }
+          branch_id=$(printf '%s' "$branches_json" | jq -r --arg name "$branch_name" '.branches[]? | select(.name == $name) | .id' | head -n 1)
+          if [ -z "$branch_id" ]; then
+            echo "Preview Neon branch $branch_name is missing or already deleted."
+            exit 0
+          fi
+          if curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$branch_id" >/dev/null; then
+            echo "Deleted preview Neon branch $branch_name."
+          else
+            echo "Could not delete preview Neon branch $branch_name; continuing cleanup."
+          fi
+        env:
+          NEON_PROJECT_ID: \${{ vars.NEON_PROJECT_ID }}
+          NEON_API_KEY: \${{ secrets.NEON_API_KEY }}`
 }
 
 /* ------------------------------------------------------------------ */

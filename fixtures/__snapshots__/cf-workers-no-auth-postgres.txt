@@ -24,7 +24,7 @@
 .claude/stack.json  5b53cb6d19706b63
 .commitlintrc.json  1a921be1aa693bb1
 .env.example  861e8a1407b97fec
-.github/workflows/cleanup-staging.yml  a59f86a3e58f40ff
+.github/workflows/cleanup-staging.yml  8b4e11c4bb00ba33
 .github/workflows/deploy-production.yml  caea1b11bdcd1841
 .github/workflows/deploy-staging.yml  581c8bb81dc0350a
 .gitignore  a25779a56f76a8b9

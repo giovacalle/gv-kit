@@ -395,7 +395,16 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
 		expect(yml).toMatch(/on:\s*\n\s+pull_request:\s*\n\s+types:\s*\[closed\]/)
+		expect(yml).toContain('id: checkout_head')
+		expect(yml).toContain('ref: ${{ github.event.pull_request.head.sha }}')
+		expect(yml).toContain('id: checkout_base')
+		expect(yml).toContain('ref: ${{ github.event.pull_request.base.sha }}')
+		expect(yml).toContain("if: steps.checkout_head.outcome != 'success'")
 		expect(yml).toContain('find apps -name wrangler.jsonc')
+		expect(yml).toContain(
+			"if: steps.checkout_head.outcome == 'success' || steps.checkout_base.outcome == 'success'"
+		)
+		expect(yml).toContain('Could not check out PR head or base')
 		expect(yml).toContain('wrangler delete --name')
 		expect(yml).toContain('deleteRef')
 		expect(yml).not.toContain(`${baseChoices.name}-auth-\${{ steps.branch.outputs.alias }}`)
@@ -405,8 +414,10 @@ describe('generateDeploy — cf-workers workflows', () => {
 	test('cleanup-staging.yml deletes Neon preview branch for postgres projects', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'postgres' }))
 		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
-		expect(yml).toContain('neondatabase/delete-branch-by-name-action@main')
-		expect(yml).toContain('branch_name: demo-db-${{ steps.branch.outputs.alias }}')
+		expect(yml).toContain('branch_name="demo-db-${{ steps.branch.outputs.alias }}"')
+		expect(yml).toContain('https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches')
+		expect(yml).toContain('Preview Neon branch $branch_name is missing or already deleted.')
+		expect(yml).toContain('Could not delete preview Neon branch $branch_name; continuing cleanup.')
 		expect(yml).toContain('NEON_PROJECT_ID')
 		expect(yml).toContain('NEON_API_KEY')
 		expect(yml).not.toContain('wrangler d1 delete')
@@ -417,7 +428,10 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
 		expect(yml).toContain('Delete preview D1 database')
 		expect(yml).toContain('db_name="demo-db-${{ steps.branch.outputs.alias }}"')
-		expect(yml).toContain('npx wrangler d1 delete "$db_name" --skip-confirmation || true')
+		expect(yml).toContain('npx wrangler d1 list --json')
+		expect(yml).toContain('Preview D1 database $db_name is missing or already deleted.')
+		expect(yml).toContain('npx wrangler d1 delete "$db_name" --skip-confirmation')
+		expect(yml).toContain('Could not delete preview D1 database $db_name; continuing cleanup.')
 		expect(yml).not.toContain('neondatabase/delete-branch-by-name-action')
 	})
 

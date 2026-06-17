@@ -112,7 +112,7 @@ packages/backend/src/middleware/error-handler.ts  e067b583aa792d3c
 packages/backend/src/middleware/index.ts  0de27dc7c47e8d8f
 packages/backend/src/middleware/logger.ts  d42cac4964dd5371
 packages/backend/tsconfig.json  8b32452841b0fe8e
-packages/db/README.md  b187d020d257f673
+packages/db/README.md  b366d509e2a67a94
 packages/db/drizzle.config.ts  6f07aa5d8ce8d2fc
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  8dafb198746e7e68

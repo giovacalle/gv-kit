@@ -84,7 +84,7 @@ packages/backend/src/core/use-cases/users.ts  20f5c1ae10620433
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
 packages/backend/tsconfig.json  be01ed046ecbcd8b
-packages/db/README.md  17b10c8075e31a05
+packages/db/README.md  d6159964dcb1956e
 packages/db/drizzle.config.ts  6f07aa5d8ce8d2fc
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  7876434910215db3

@@ -396,6 +396,16 @@ function renderReadme({
 				: isCf
 					? 'Neon Postgres (`postgres.js` + `drizzle-orm/postgres-js`)'
 					: 'Postgres (`postgres.js`)'
+	const cfPostgresDriver = isCf
+		? 'Neon Postgres via `postgres.js`'
+		: '`postgres.js` (connection from Hyperdrive binding)'
+	const cfPostgresNotes =
+		!isSqlite && isCf
+			? `For Cloudflare Postgres, use Neon. Production uses \`DATABASE_URL\`;
+PR previews can use Neon branches with their own temporary \`DATABASE_URL\`.
+
+`
+			: ''
 
 	return `# @repo/db
 
@@ -409,7 +419,7 @@ This project uses **${driverLabel}**.
 |--------|--------|
 | sqlite + cf-workers | \`drizzle-orm/d1\` |
 | sqlite + non-cf | \`@libsql/client\` (file: or libsql:// URLs) |
-| postgres + cf-workers | Neon Postgres via \`postgres.js\` |
+| postgres + cf-workers | ${cfPostgresDriver} |
 | postgres + non-cf | \`postgres.js\` |
 
 The active driver is selected at scaffold time. To switch, regenerate.
@@ -441,18 +451,10 @@ wrangler d1 migrations apply <database-name> --remote  # remote
 `
 		: ''
 }
-${
-	!isSqlite && isCf
-		? `For Cloudflare Postgres, use Neon. Production uses \`DATABASE_URL\`;
-PR previews can use Neon branches with their own temporary \`DATABASE_URL\`.
-
-`
-		: ''
-}
-${
-	hasAuth
-		? `
-## Schema regeneration (auth tables)
+	${cfPostgresNotes}${
+		hasAuth
+			? `
+	## Schema regeneration (auth tables)
 
 The auth tables follow better-auth's canonical schema. When you enable a
 plugin that adds fields (e.g. organisations, two-factor), regenerate
@@ -464,8 +466,8 @@ npx @better-auth/cli@latest generate --adapter drizzle --output packages/db/src/
 
 Then run \`pnpm db:generate\` and review the diff.
 `
-		: ''
-}
+			: ''
+	}
 ## Boundary
 
 \`@repo/db\` exports schema and a client factory. It does NOT contain auth

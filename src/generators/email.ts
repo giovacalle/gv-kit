@@ -4,36 +4,41 @@ import type { GvKitConfig } from '../schema/config.js'
 export function generateEmail(cfg: GvKitConfig): FileEntry[] {
 	const choice = cfg.choices.email
 	if (choice === 'skip') return []
-	if (choice === 'notifuse') return notifuseFiles()
+	const effectMode = cfg.choices.backendRuntime === 'effect'
+	if (choice === 'notifuse') return notifuseFiles(effectMode)
 
 	const usesParaglide = cfg.choices.i18n === 'paraglide'
 	const usesOtp = cfg.choices.auth.includes('emailOTP')
-	return resendFiles({ usesParaglide, usesOtp })
+	return resendFiles({ usesParaglide, usesOtp, effectMode })
 }
 
-function notifuseFiles(): FileEntry[] {
-	return [
-		{ path: 'packages/mailer/package.json', content: NOTIFUSE_PKG_JSON },
+function notifuseFiles(effectMode: boolean): FileEntry[] {
+	const entries: FileEntry[] = [
+		{ path: 'packages/mailer/package.json', content: notifusePkgJson(effectMode) },
 		{ path: 'packages/mailer/tsconfig.json', content: NOTIFUSE_TSCONFIG },
-		{ path: 'packages/mailer/tsup.config.ts', content: NOTIFUSE_TSUP },
+		{ path: 'packages/mailer/tsup.config.ts', content: notifuseTsupConfig(effectMode) },
 		{ path: 'packages/mailer/src/index.ts', content: NOTIFUSE_INDEX_TS },
 		{ path: 'packages/mailer/src/types.ts', content: NOTIFUSE_TYPES_TS },
 		{ path: 'packages/mailer/src/client.ts', content: NOTIFUSE_CLIENT_TS },
 		{ path: 'packages/mailer/README.md', content: NOTIFUSE_README }
 	]
+	if (effectMode) entries.push({ path: 'packages/mailer/src/effect.ts', content: NOTIFUSE_EFFECT_TS })
+	return entries
 }
 
 function resendFiles({
 	usesParaglide,
-	usesOtp
+	usesOtp,
+	effectMode
 }: {
 	usesParaglide: boolean
 	usesOtp: boolean
+	effectMode: boolean
 }): FileEntry[] {
 	const entries: FileEntry[] = [
-		{ path: 'packages/mailer/package.json', content: resendPkgJson(usesParaglide) },
+		{ path: 'packages/mailer/package.json', content: resendPkgJson({ usesParaglide, effectMode }) },
 		{ path: 'packages/mailer/tsconfig.json', content: RESEND_TSCONFIG },
-		{ path: 'packages/mailer/tsup.config.ts', content: resendTsupConfig(usesParaglide) },
+		{ path: 'packages/mailer/tsup.config.ts', content: resendTsupConfig({ usesParaglide, effectMode }) },
 		{ path: 'packages/mailer/src/index.ts', content: RESEND_INDEX_TS },
 		{ path: 'packages/mailer/src/types.ts', content: RESEND_TYPES_TS },
 		{ path: 'packages/mailer/src/render.ts', content: RESEND_RENDER_TS },
@@ -56,6 +61,7 @@ function resendFiles({
 		},
 		{ path: 'packages/mailer/README.md', content: resendReadme(usesParaglide, usesOtp) }
 	]
+	if (effectMode) entries.push({ path: 'packages/mailer/src/effect.ts', content: RESEND_EFFECT_TS })
 
 	if (usesOtp) {
 		entries.push({
@@ -72,36 +78,50 @@ function resendFiles({
 // Templates live in the Notifuse console (MJML + Liquid). No local rendering.
 // -----------------------------------------------------------------------------
 
-const NOTIFUSE_PKG_JSON =
-	JSON.stringify(
-		{
-			name: '@repo/mailer',
-			version: '0.0.0',
-			private: true,
-			type: 'module',
-			main: './dist/index.js',
+function notifusePkgJson(effectMode: boolean): string {
+	const exportsBlock: Record<string, { types: string; default: string }> = {
+		'.': {
 			types: './dist/index.d.ts',
-			exports: {
-				'.': {
-					types: './dist/index.d.ts',
-					default: './dist/index.js'
+			default: './dist/index.js'
+		}
+	}
+	if (effectMode) {
+		exportsBlock['./effect'] = {
+			types: './dist/effect.d.ts',
+			default: './dist/effect.js'
+		}
+	}
+	const dependencies: Record<string, string> = {}
+	if (effectMode) dependencies.effect = '^3.21.2'
+
+	return (
+		JSON.stringify(
+			{
+				name: '@repo/mailer',
+				version: '0.0.0',
+				private: true,
+				type: 'module',
+				main: './dist/index.js',
+				types: './dist/index.d.ts',
+				exports: exportsBlock,
+				files: ['dist'],
+				scripts: {
+					build: 'tsup',
+					dev: 'tsup --watch',
+					typecheck: 'tsc --noEmit',
+					lint: 'eslint .'
+				},
+				...(Object.keys(dependencies).length > 0 ? { dependencies } : {}),
+				devDependencies: {
+					'@repo/tooling-typescript': 'workspace:*',
+					tsup: '^8.5.0'
 				}
 			},
-			files: ['dist'],
-			scripts: {
-				build: 'tsup',
-				dev: 'tsup --watch',
-				typecheck: 'tsc --noEmit',
-				lint: 'eslint .'
-			},
-			devDependencies: {
-				'@repo/tooling-typescript': 'workspace:*',
-				tsup: '^8.5.0'
-			}
-		},
-		null,
-		2
-	) + '\n'
+			null,
+			2
+		) + '\n'
+	)
+}
 
 const NOTIFUSE_TSCONFIG = `{
 	"extends": "@repo/tooling-typescript/library.json",
@@ -114,7 +134,9 @@ const NOTIFUSE_TSCONFIG = `{
 }
 `
 
-const NOTIFUSE_TSUP = `import { defineConfig } from 'tsup'
+function notifuseTsupConfig(effectMode: boolean): string {
+	if (!effectMode) {
+		return `import { defineConfig } from 'tsup'
 
 export default defineConfig({
 	entry: ['src/index.ts'],
@@ -124,6 +146,19 @@ export default defineConfig({
 	sourcemap: true
 })
 `
+	}
+
+	return `import { defineConfig } from 'tsup'
+
+export default defineConfig({
+	entry: ${JSON.stringify(effectMode ? ['src/index.ts', 'src/effect.ts'] : ['src/index.ts'])},
+	format: ['esm'],
+	dts: true,
+	clean: true,
+	sourcemap: true
+})
+`
+}
 
 const NOTIFUSE_INDEX_TS = `export { createMailer, type Mailer, type MailerConfig } from './client.js'
 export {
@@ -221,6 +256,36 @@ export function createMailer({ apiKey, workspaceId, baseUrl }: MailerConfig) {
 }
 
 export type Mailer = ReturnType<typeof createMailer>
+`
+
+const NOTIFUSE_EFFECT_TS = `import { Context, Effect, Layer } from 'effect'
+
+import { createMailer, type Mailer, type MailerConfig } from './client.js'
+import { MailerError, type SendInput, type SendResult } from './types.js'
+
+export class MailerService extends Context.Tag('MailerService')<
+	MailerService,
+	MailerServiceShape
+>() {}
+
+export type MailerServiceShape = {
+	send: (input: SendInput) => Effect.Effect<SendResult, MailerError>
+}
+
+export function makeMailerEffect(mailer: Mailer): MailerServiceShape {
+	return {
+		send: (input) =>
+			Effect.tryPromise({
+				try: () => mailer.send(input),
+				catch: (cause) =>
+					cause instanceof MailerError ? cause : new MailerError('notifuse send failed', cause)
+			})
+	}
+}
+
+export function MailerLive(config: MailerConfig) {
+	return Layer.succeed(MailerService, makeMailerEffect(createMailer(config)))
+}
 `
 
 const NOTIFUSE_README = `# @repo/mailer
@@ -326,13 +391,32 @@ Notifuse's overall API style.
 // Resend — react-email templates rendered locally to HTML + plain text
 // -----------------------------------------------------------------------------
 
-function resendPkgJson(usesParaglide: boolean): string {
+function resendPkgJson({
+	usesParaglide,
+	effectMode
+}: {
+	usesParaglide: boolean
+	effectMode: boolean
+}): string {
 	const dependencies: Record<string, string> = {
 		react: '^19.0.0',
 		'react-email': '^6.0.0',
 		resend: '^4.0.0'
 	}
 	if (usesParaglide) dependencies['@repo/i18n'] = 'workspace:*'
+	if (effectMode) dependencies.effect = '^3.21.2'
+	const exportsBlock: Record<string, { types: string; default: string }> = {
+		'.': {
+			types: './dist/index.d.ts',
+			default: './dist/index.js'
+		}
+	}
+	if (effectMode) {
+		exportsBlock['./effect'] = {
+			types: './dist/effect.d.ts',
+			default: './dist/effect.js'
+		}
+	}
 
 	return (
 		JSON.stringify(
@@ -343,12 +427,7 @@ function resendPkgJson(usesParaglide: boolean): string {
 				type: 'module',
 				main: './dist/index.js',
 				types: './dist/index.d.ts',
-				exports: {
-					'.': {
-						types: './dist/index.d.ts',
-						default: './dist/index.js'
-					}
-				},
+				exports: exportsBlock,
 				files: ['dist'],
 				scripts: {
 					build: 'tsup',
@@ -370,14 +449,34 @@ function resendPkgJson(usesParaglide: boolean): string {
 	)
 }
 
-function resendTsupConfig(usesParaglide: boolean): string {
+function resendTsupConfig({
+	usesParaglide,
+	effectMode
+}: {
+	usesParaglide: boolean
+	effectMode: boolean
+}): string {
 	const externals = ['react', 'react-email', 'resend']
 	if (usesParaglide) externals.push('@repo/i18n')
+	if (!effectMode) {
+		return `import { defineConfig } from 'tsup'
+
+export default defineConfig({
+	entry: ['src/index.ts'],
+	format: ['esm'],
+	dts: true,
+	clean: true,
+	sourcemap: true,
+	external: ${JSON.stringify(externals)}
+})
+`
+	}
+	externals.push('effect')
 
 	return `import { defineConfig } from 'tsup'
 
 export default defineConfig({
-	entry: ['src/index.ts'],
+	entry: ${JSON.stringify(effectMode ? ['src/index.ts', 'src/effect.ts'] : ['src/index.ts'])},
 	format: ['esm'],
 	dts: true,
 	clean: true,
@@ -479,6 +578,59 @@ export function createMailer(apiKey: string) {
 }
 
 export type Mailer = ReturnType<typeof createMailer>
+`
+
+const RESEND_EFFECT_TS = `import { Context, Effect, Layer } from 'effect'
+
+import { createMailer, type Mailer, type SendTemplateInput } from './client.js'
+import { renderTemplate } from './render.js'
+import { MailerError, type SendInput, type SendResult } from './types.js'
+import type { TemplateName, TemplateProps } from './templates/index.js'
+
+export class MailerService extends Context.Tag('MailerService')<
+	MailerService,
+	MailerServiceShape
+>() {}
+
+export type MailerServiceShape = {
+	send: (input: SendInput) => Effect.Effect<SendResult, MailerError>
+	sendTemplate: <N extends TemplateName>(
+		input: SendTemplateInput<N>
+	) => Effect.Effect<SendResult, MailerError>
+	renderTemplate: <N extends TemplateName>(
+		name: N,
+		props: TemplateProps<N>
+	) => Effect.Effect<{ html: string; text: string; subject: string }, MailerError>
+}
+
+export function makeMailerEffect(mailer: Mailer): MailerServiceShape {
+	return {
+		send: (input) =>
+			Effect.tryPromise({
+				try: () => mailer.send(input),
+				catch: (cause) =>
+					cause instanceof MailerError ? cause : new MailerError('resend send failed', cause)
+			}),
+		sendTemplate: (input) =>
+			Effect.tryPromise({
+				try: () => mailer.sendTemplate(input),
+				catch: (cause) =>
+					cause instanceof MailerError
+						? cause
+						: new MailerError('resend template send failed', cause)
+			}),
+		renderTemplate: (name, props) =>
+			Effect.tryPromise({
+				try: () => renderTemplate(name, props),
+				catch: (cause) =>
+					cause instanceof MailerError ? cause : new MailerError('resend render failed', cause)
+			})
+	}
+}
+
+export function MailerLive(apiKey: string) {
+	return Layer.succeed(MailerService, makeMailerEffect(createMailer(apiKey)))
+}
 `
 
 function resendTemplatesIndexTs(usesOtp: boolean): string {

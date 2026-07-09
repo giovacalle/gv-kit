@@ -60,20 +60,21 @@ describe('users-worker bindings', () => {
 					// Forbidden: the better-auth handler factory subpath. The
 					// boundary contract is that users-worker NEVER imports the
 					// auth factory directly. The deploy-aware session middleware
-					// at `@repo/backend/middleware/auth` is allowed and required.
+					// at `@repo/backend/hono/auth/require` is allowed and required.
 					expect(src.content).not.toContain(`from '@repo/backend/auth'`)
 				}
 			})
 		}
 
-		test(`${file} users-worker uses @repo/backend/middleware/auth (deploy-aware) on protected routes`, () => {
+		test(`${file} users-worker uses @repo/backend/hono/auth/require (deploy-aware) on protected routes`, () => {
 			const entries = runGenerators(cfg)
 			const appTs = entries.find((e) => e.path === 'apps/api/users/src/app.ts')
 			expect(appTs).toBeDefined()
 			// Must import requireAuth from the deploy-aware middleware. Asserts
 			// W4 wired the middleware/auth subpath rather than a local
 			// auth-client + factory pair.
-			expect(appTs!.content).toContain(`from '@repo/backend/middleware/auth'`)
+			expect(appTs!.content).toContain(`from '@repo/backend/hono/auth/require'`)
+			expect(appTs!.content).not.toContain(`from '@repo/backend/hono/auth'\n`)
 			expect(appTs!.content).toContain('requireAuth')
 		})
 

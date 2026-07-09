@@ -26,6 +26,11 @@ describe('GvKitConfig schema', () => {
 		expect(result.success).toBe(true)
 	})
 
+	test('defaults missing backendRuntime to promise for existing configs', () => {
+		const result = GvKitConfig.parse(baseValid)
+		expect(result.choices.backendRuntime).toBe('promise')
+	})
+
 	test('accepts a minimal config with empty arrays', () => {
 		const minimal = {
 			...baseValid,
@@ -68,6 +73,21 @@ describe('GvKitConfig schema', () => {
 			const flat = JSON.stringify(result.error.issues)
 			expect(flat).toContain('apiClient')
 		}
+	})
+
+	test('rejects backendRuntime="effect" when backend is "inside-frontend"', () => {
+		const cfg = {
+			...baseValid,
+			choices: {
+				...baseValid.choices,
+				backend: 'inside-frontend' as const,
+				backendRuntime: 'effect' as const,
+				apiClient: 'skip' as const
+			}
+		}
+		const result = GvKitConfig.safeParse(cfg)
+		expect(result.success).toBe(false)
+		if (!result.success) expect(JSON.stringify(result.error.issues)).toContain('backendRuntime')
 	})
 
 	test('accepts emailOTP with email="resend"', () => {

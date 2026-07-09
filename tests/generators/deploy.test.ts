@@ -8,6 +8,7 @@ const baseChoices: Choices = {
 	name: 'demo',
 	frontend: 'sveltekit',
 	backend: 'hono',
+	backendRuntime: 'promise',
 	i18n: 'skip',
 	monitoring: [],
 	db: 'postgres',
@@ -550,10 +551,10 @@ describe('generated cf-workers deploy task contract', () => {
 			scripts: Record<string, string>
 		}
 		expect(sqlitePkg.scripts['db:migrate:production']).toBe(
-			'wrangler d1 migrations apply demo-db --remote'
+			'wrangler d1 migrations apply demo-db --remote --config ../../apps/api/auth/wrangler.jsonc'
 		)
 		expect(sqlitePkg.scripts['db:migrate:local']).toBe(
-			'wrangler d1 migrations apply demo-db --local'
+			'wrangler d1 migrations apply demo-db --local --config ../../apps/api/auth/wrangler.jsonc'
 		)
 		expect(sqlitePkg.devDependencies.wrangler).toBeDefined()
 

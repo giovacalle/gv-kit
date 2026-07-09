@@ -2,23 +2,37 @@ import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
 
 /**
- * Generator for `packages/backend/` — horizontal helpers, core types, and Hono middleware.
+ * Generator for `packages/backend/` — core types, Hono adapters, and runtime helpers.
  */
 export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 	const isHono = cfg.choices.backend === 'hono'
 	const isCf = cfg.choices.deploy === 'cf-workers'
 	const isSqlite = cfg.choices.db === 'sqlite'
 	const hasAuth = cfg.choices.auth.length > 0
+	const effectMode = cfg.choices.backendRuntime === 'effect'
 
 	const entries: FileEntry[] = [
 		{
 			path: 'packages/backend/package.json',
-			content: renderPackageJson({ isHono, isCf, isSqlite, hasAuth })
+			content: renderPackageJson({ isHono, isCf, isSqlite, hasAuth, effectMode })
 		},
-		{ path: 'packages/backend/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
-		{ path: 'packages/backend/src/helpers/index.ts', content: HELPERS_INDEX },
-		{ path: 'packages/backend/src/helpers/index.test.ts', content: HELPERS_TEST }
+		{ path: 'packages/backend/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) }
 	]
+
+	if (!effectMode) {
+		entries.push(
+			{ path: 'packages/backend/src/helpers/index.ts', content: HELPERS_INDEX },
+			{ path: 'packages/backend/src/helpers/index.test.ts', content: HELPERS_TEST }
+		)
+	}
+
+	if (effectMode) {
+		entries.push(
+			{ path: 'packages/backend/src/effect/errors.ts', content: EFFECT_ERRORS },
+			{ path: 'packages/backend/src/effect/hono.ts', content: EFFECT_HONO },
+			{ path: 'packages/backend/src/effect/auth-session.ts', content: EFFECT_AUTH_SESSION }
+		)
+	}
 
 	// users DAO + use-cases require the better-auth `user` table emitted by
 	// `@repo/db`, which is only present when at least one auth provider was
@@ -26,20 +40,29 @@ export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 	if (hasAuth) {
 		entries.push(
 			{ path: 'packages/backend/src/core/types.ts', content: CORE_TYPES },
-			{ path: 'packages/backend/src/core/data-access/users.ts', content: CORE_USERS },
-			{ path: 'packages/backend/src/core/use-cases/users.ts', content: USE_CASE_USERS }
+			{
+				path: 'packages/backend/src/core/data-access/users.ts',
+				content: effectMode ? CORE_USERS_EFFECT : CORE_USERS
+			},
+			{
+				path: 'packages/backend/src/core/use-cases/users.ts',
+				content: effectMode ? USE_CASE_USERS_EFFECT : USE_CASE_USERS
+			}
 		)
 	}
 
 	if (isHono) {
 		entries.push(
-			{ path: 'packages/backend/src/middleware/index.ts', content: MIDDLEWARE_INDEX },
-			{ path: 'packages/backend/src/middleware/logger.ts', content: MIDDLEWARE_LOGGER },
-			{ path: 'packages/backend/src/middleware/error-handler.ts', content: MIDDLEWARE_ERROR_HANDLER },
-			{ path: 'packages/backend/src/middleware/auth/index.ts', content: MIDDLEWARE_AUTH_INDEX },
-			{ path: 'packages/backend/src/middleware/auth/client.ts', content: MIDDLEWARE_AUTH_CLIENT },
-			{ path: 'packages/backend/src/middleware/auth/require.ts', content: MIDDLEWARE_AUTH_REQUIRE }
+			{ path: 'packages/backend/src/hono/logger.ts', content: HONO_LOGGER },
+			{ path: 'packages/backend/src/hono/auth/client.ts', content: HONO_AUTH_CLIENT },
+			{ path: 'packages/backend/src/hono/auth/require.ts', content: HONO_AUTH_REQUIRE }
 		)
+		if (!effectMode) {
+			entries.push({
+				path: 'packages/backend/src/hono/error-handler.ts',
+				content: HONO_ERROR_HANDLER
+			})
+		}
 	}
 
 	return entries
@@ -53,15 +76,21 @@ function renderPackageJson({
 	isHono,
 	isCf,
 	isSqlite: _isSqlite,
-	hasAuth
+	hasAuth,
+	effectMode
 }: {
 	isHono: boolean
 	isCf: boolean
 	isSqlite: boolean
 	hasAuth: boolean
+	effectMode: boolean
 }): string {
-	const exportsBlock: Record<string, string> = {
-		'./helpers': './src/helpers/index.ts'
+	const exportsBlock: Record<string, string> = {}
+	if (!effectMode) exportsBlock['./helpers'] = './src/helpers/index.ts'
+	if (effectMode) {
+		exportsBlock['./effect/errors'] = './src/effect/errors.ts'
+		exportsBlock['./effect/hono'] = './src/effect/hono.ts'
+		exportsBlock['./effect/auth-session'] = './src/effect/auth-session.ts'
 	}
 	if (hasAuth) {
 		exportsBlock['./core/types'] = './src/core/types.ts'
@@ -69,8 +98,10 @@ function renderPackageJson({
 		exportsBlock['./core/use-cases/users'] = './src/core/use-cases/users.ts'
 	}
 	if (isHono) {
-		exportsBlock['./middleware'] = './src/middleware/index.ts'
-		exportsBlock['./middleware/auth'] = './src/middleware/auth/index.ts'
+		exportsBlock['./hono/logger'] = './src/hono/logger.ts'
+		exportsBlock['./hono/auth/client'] = './src/hono/auth/client.ts'
+		exportsBlock['./hono/auth/require'] = './src/hono/auth/require.ts'
+		if (!effectMode) exportsBlock['./hono/error-handler'] = './src/hono/error-handler.ts'
 	}
 
 	const dependencies: Record<string, string> = {
@@ -80,6 +111,7 @@ function renderPackageJson({
 	// users DAO + use-cases import the better-auth `user` table from `@repo/db`.
 	if (hasAuth) dependencies['@repo/db'] = 'workspace:*'
 	if (isHono) dependencies.hono = '^4.12.0'
+	if (effectMode) dependencies.effect = '^3.21.2'
 
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
@@ -182,15 +214,137 @@ describe('errors', () => {
 })
 `
 
-/* ------------------------------------------------------------------ */
-/*  src/middleware/* (hono-only)                                       */
-/* ------------------------------------------------------------------ */
+const EFFECT_ERRORS = `import { Data, Effect } from 'effect'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
-const MIDDLEWARE_INDEX = `export { logger } from './logger.js'
-export { errorHandler } from './error-handler.js'
+export class Unauthorized extends Data.TaggedError('Unauthorized')<{
+	message: string
+	code?: string
+}> {}
+
+export class UserNotFound extends Data.TaggedError('UserNotFound')<{
+	message: string
+	code?: string
+}> {}
+
+export class UnexpectedServiceError extends Data.TaggedError('UnexpectedServiceError')<{
+	message: string
+	code?: string
+	cause?: unknown
+}> {}
+
+export type AppError = Unauthorized | UserNotFound | UnexpectedServiceError
+
+export function statusForAppError(error: AppError): ContentfulStatusCode {
+	switch (error._tag) {
+		case 'Unauthorized':
+			return 401
+		case 'UserNotFound':
+			return 404
+		case 'UnexpectedServiceError':
+			return 500
+	}
+}
+
+export function tryPromiseUnexpected<A>({
+\ttry: run,
+\tmessage,
+\tcode
+}: {
+\ttry: () => PromiseLike<A>
+\tmessage: string
+\tcode?: string
+}) {
+\treturn Effect.tryPromise({
+\t\ttry: run,
+\t\tcatch: (cause) => new UnexpectedServiceError({ message, code, cause })
+\t})
+}
 `
 
-const MIDDLEWARE_LOGGER = `import type { MiddlewareHandler } from 'hono'
+const EFFECT_HONO = `import { Effect } from 'effect'
+import type { Context } from 'hono'
+
+import { statusForAppError, type AppError } from './errors.js'
+
+export async function runEffectJson<A>(
+	c: Context,
+	program: Effect.Effect<A, AppError, never>
+): Promise<Response> {
+	const exit = await Effect.runPromiseExit(program)
+
+	if (exit._tag === 'Success') return c.json(exit.value)
+
+	const error = exit.cause._tag === 'Fail' ? exit.cause.error : undefined
+	if (!error) {
+		return c.json(
+			{ error: 'internal server error', message: 'internal server error', tag: 'Defect' },
+			500
+		)
+	}
+
+	return c.json(
+		{
+			error: error.message,
+			message: error.message,
+			tag: error._tag,
+			...(error.code ? { code: error.code } : {})
+		},
+		statusForAppError(error)
+	)
+}
+`
+
+const EFFECT_AUTH_SESSION = `import { Context, Effect } from 'effect'
+
+import { tryPromiseUnexpected, Unauthorized, type UnexpectedServiceError } from './errors.js'
+
+export type AuthSession = {
+\tuserId: string
+\tsessionId: string
+\texpiresAt: string
+}
+
+export type AuthSessionServiceShape = {
+\treadonly resolve: (headers: Headers) => Effect.Effect<AuthSession, Unauthorized | UnexpectedServiceError>
+}
+
+export class AuthSessionService extends Context.Tag('AuthSessionService')<
+\tAuthSessionService,
+\tAuthSessionServiceShape
+>() {}
+
+type BetterAuthSessionLike = {
+\tuser: { id: string }
+\tsession: { id: string; expiresAt: Date }
+}
+
+export function resolveBetterAuthSession(
+\tlookup: () => PromiseLike<BetterAuthSessionLike | null>
+) {
+\treturn tryPromiseUnexpected({
+\t\ttry: lookup,
+\t\tmessage: 'failed to resolve session',
+\t\tcode: 'SESSION_LOOKUP_FAILED'
+\t}).pipe(
+\t\tEffect.flatMap((session) =>
+\t\t\tsession
+\t\t\t\t? Effect.succeed({
+\t\t\t\t\t\tuserId: session.user.id,
+\t\t\t\t\t\tsessionId: session.session.id,
+\t\t\t\t\t\texpiresAt: session.session.expiresAt.toISOString()
+\t\t\t\t\t})
+\t\t\t\t: Effect.fail(new Unauthorized({ message: 'unauthorized', code: 'UNAUTHORIZED' }))
+\t\t)
+\t)
+}
+`
+
+/* ------------------------------------------------------------------ */
+/*  src/hono/* (hono-only)                                             */
+/* ------------------------------------------------------------------ */
+
+const HONO_LOGGER = `import type { MiddlewareHandler } from 'hono'
 
 export function logger(): MiddlewareHandler {
 	return async (c, next) => {
@@ -204,7 +358,7 @@ export function logger(): MiddlewareHandler {
 }
 `
 
-const MIDDLEWARE_ERROR_HANDLER = `import type { MiddlewareHandler } from 'hono'
+const HONO_ERROR_HANDLER = `import type { MiddlewareHandler } from 'hono'
 
 import { HttpError } from '../helpers/index.js'
 
@@ -248,6 +402,24 @@ export async function findUserById(db: Db, id: UserId) {
 }
 `
 
+const CORE_USERS_EFFECT = `import { eq } from 'drizzle-orm'
+import { authSchema, type Db } from '@repo/db'
+
+import { tryPromiseUnexpected } from '../../effect/errors.js'
+import type { UserId } from '../types.js'
+
+export function findUserById(db: Db, id: UserId) {
+	return tryPromiseUnexpected({
+		try: async () => {
+			const rows = await db.select().from(authSchema.user).where(eq(authSchema.user.id, id)).limit(1)
+			return rows[0] ?? null
+		},
+		message: 'failed to load user',
+		code: 'USER_LOOKUP_FAILED'
+	})
+}
+`
+
 const USE_CASE_USERS = `import type { Db } from '@repo/db'
 
 import { errors } from '../../helpers/index.js'
@@ -261,11 +433,29 @@ export async function getMeUseCase(db: Db, userId: UserId) {
 }
 `
 
+const USE_CASE_USERS_EFFECT = `import type { Db } from '@repo/db'
+import { Effect } from 'effect'
+
+import { UserNotFound } from '../../effect/errors.js'
+import { findUserById } from '../data-access/users.js'
+import type { UserId } from '../types.js'
+
+export function getMeUseCase(db: Db, userId: UserId) {
+	return findUserById(db, userId).pipe(
+		Effect.flatMap((row) =>
+			row
+				? Effect.succeed(row)
+				: Effect.fail(new UserNotFound({ message: 'user not found', code: 'USER_NOT_FOUND' }))
+		)
+	)
+}
+`
+
 /* ------------------------------------------------------------------ */
-/*  src/middleware/auth/* (hono-only)                                  */
+/*  src/hono/auth/* (hono-only)                                        */
 /* ------------------------------------------------------------------ */
 
-const MIDDLEWARE_AUTH_CLIENT = `export type SessionLike = {
+const HONO_AUTH_CLIENT = `export type SessionLike = {
 	userId: string
 	sessionId: string
 	expiresAt: string
@@ -304,7 +494,7 @@ export async function getSession<TBindings extends Record<string, any>>(
 }
 `
 
-const MIDDLEWARE_AUTH_REQUIRE = `import type { MiddlewareHandler } from 'hono'
+const HONO_AUTH_REQUIRE = `import type { MiddlewareHandler } from 'hono'
 
 import { getSession, type SessionLike } from './client.js'
 
@@ -313,12 +503,12 @@ export const requireAuth: MiddlewareHandler<{
 	Variables: { user: SessionLike }
 }> = async (c, next) => {
 	const session = await getSession(c.env, c.req.raw)
-	if (!session) return c.json({ error: 'unauthorized' }, 401)
+	if (!session)
+		return c.json(
+			{ error: 'unauthorized', message: 'unauthorized', tag: 'Unauthorized', code: 'UNAUTHORIZED' },
+			401
+		)
 	c.set('user', session)
 	await next()
 }
-`
-
-const MIDDLEWARE_AUTH_INDEX = `export { getSession, type SessionLike } from './client.js'
-export { requireAuth } from './require.js'
 `

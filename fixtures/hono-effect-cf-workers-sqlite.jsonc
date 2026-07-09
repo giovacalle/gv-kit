@@ -1,0 +1,17 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "effect-cf-sqlite",
+		"frontend": "sveltekit",
+		"backend": "hono",
+		"backendRuntime": "effect",
+		"i18n": "paraglide",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP"],
+		"email": "resend",
+		"aiTooling": ["codex"],
+		"deploy": "cf-workers"
+	}
+}

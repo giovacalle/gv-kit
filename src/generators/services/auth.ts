@@ -19,6 +19,7 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	const wantsGoogle = auth.includes('google')
 	const wantsEmailOTP = auth.includes('emailOTP')
 	const runtime = deriveRuntime(cfg.choices.deploy)
+	const effectMode = cfg.choices.backendRuntime === 'effect'
 
 	// `wrangler types` owns `worker-configuration.d.ts` and refuses to overwrite
 	// non-wrangler files with that name; our own declaration is at `env.d.ts`.
@@ -27,7 +28,7 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	const entries: FileEntry[] = [
 		{
 			path: 'apps/api/auth/package.json',
-			content: pkgJson({ project, runtime, auth })
+			content: pkgJson({ project, runtime, auth, effectMode })
 		},
 		{
 			path: 'apps/api/auth/tsconfig.json',
@@ -47,11 +48,19 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 		},
 		{
 			path: 'apps/api/auth/src/openapi.ts',
-			content: openapiTs(project)
+			content: effectMode ? openapiEffectTs(project) : openapiTs(project)
 		},
+		...(effectMode
+			? [
+					{
+						path: 'apps/api/auth/src/effect/auth-session.ts',
+						content: authSessionEffectTs(runtime)
+					}
+				]
+			: []),
 		{
 			path: 'apps/api/auth/src/app.ts',
-			content: appTs(runtime)
+			content: effectMode ? appEffectTs(runtime) : appTs(runtime)
 		},
 		{
 			path: 'apps/api/auth/src/index.ts',
@@ -83,20 +92,36 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 function pkgJson({
 	project,
 	runtime,
-	auth
+	auth,
+	effectMode
 }: {
 	project: string
 	runtime: Runtime
 	auth: AuthChoice[]
+	effectMode: boolean
 }): string {
-	const dependencies: Record<string, string> = {
-		'@hono/zod-openapi': '^1.0.0',
-		'@repo/backend': 'workspace:*',
-		'@repo/db': 'workspace:*',
-		'better-auth': '^1.6.0',
-		hono: '^4.6.0',
-		zod: '^4.3.0'
-	}
+	const dependencies: Record<string, string> = effectMode
+		? {
+				'@hono/standard-validator': '^0.2.2',
+				'@repo/backend': 'workspace:*',
+				'@repo/db': 'workspace:*',
+				'@standard-community/standard-json': '^0.3.5',
+				'@standard-community/standard-openapi': '^0.2.9',
+				'@types/json-schema': '^7.0.15',
+				'better-auth': '^1.6.0',
+				effect: '^3.21.2',
+				hono: '^4.12.0',
+				'hono-openapi': '^1.3.0',
+				'openapi-types': '^12.1.3'
+			}
+		: {
+				'@hono/zod-openapi': '^1.0.0',
+				'@repo/backend': 'workspace:*',
+				'@repo/db': 'workspace:*',
+				'better-auth': '^1.6.0',
+				hono: '^4.6.0',
+				zod: '^4.3.0'
+			}
 
 	if (auth.includes('emailOTP')) dependencies['@repo/mailer'] = 'workspace:*'
 
@@ -117,7 +142,7 @@ function pkgJson({
 		// `cf-typegen` must run before tsc/wrangler so `Env` matches wrangler.jsonc.
 		scripts['cf-typegen'] = 'wrangler types'
 		scripts.dev = 'pnpm cf-typegen && wrangler dev'
-		scripts.build = 'pnpm cf-typegen && wrangler deploy --dry-run --outdir=dist'
+		scripts.build = 'pnpm cf-typegen && wrangler deploy --dry-run --strict --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:staging'] =
@@ -206,7 +231,8 @@ function wranglerJsonc({
 		{
 			"binding": "DB",
 			"database_name": "${project}-db",
-			"database_id": "<run: wrangler d1 create ${project}-db>"
+			"database_id": "<run: wrangler d1 create ${project}-db>",
+			"migrations_dir": "../../../packages/db/migrations"
 		}
 	]`
 		: `,
@@ -586,6 +612,121 @@ export function mountOpenApi(app: OpenAPIHono<{ Bindings: Env }>): void {
 `
 }
 
+function openapiEffectTs(project: string): string {
+	return `import { Schema } from 'effect'
+import type { Env as HonoEnv, Hono } from 'hono'
+import { describeRoute, openAPIRouteHandler, resolver } from 'hono-openapi'
+
+const SessionResponseSchema = Schema.Struct({
+	userId: Schema.String,
+	sessionId: Schema.String,
+	expiresAt: Schema.String
+})
+
+const ErrorResponseSchema = Schema.Struct({
+	error: Schema.String,
+	message: Schema.String,
+	code: Schema.optional(Schema.String),
+	tag: Schema.optional(Schema.String)
+})
+
+const SessionResponseStandard = Schema.standardSchemaV1(SessionResponseSchema)
+const ErrorResponseStandard = Schema.standardSchemaV1(ErrorResponseSchema)
+
+// Documents ONLY /internal/session. The public /api/auth/* surface is intentionally
+// excluded — sibling services must use the binding/HTTP boundary, not a typed client.
+export const sessionRoute = describeRoute({
+	operationId: 'getInternalSession',
+	tags: ['internal'],
+	summary: 'Resolve the caller session',
+	responses: {
+		200: {
+			description: 'Resolved session for the caller',
+			content: { 'application/json': { schema: resolver(SessionResponseStandard) } }
+		},
+		401: {
+			description: 'No active session',
+			content: { 'application/json': { schema: resolver(ErrorResponseStandard) } }
+		}
+	}
+})
+
+export function mountOpenApi<E extends HonoEnv>(app: Hono<E>): void {
+	app.get(
+		'/openapi.json',
+		openAPIRouteHandler(app, {
+			documentation: {
+				servers: [{ url: 'https://auth.api.example.com' }],
+				security: [],
+				info: {
+					title: '${project}-auth (internal)',
+					version: '0.0.0',
+					description: 'Internal auth boundary generated from Hono routes using Effect Schema',
+					license: { name: 'MIT', identifier: 'MIT' }
+				}
+			}
+		})
+	)
+}
+`
+}
+
+function authSessionEffectTs(runtime: Runtime): string {
+	const imports =
+		runtime === 'cf-workers'
+			? `import { Context, Effect } from 'effect'
+import { getAuth } from '../auth.js'`
+			: `import { Effect } from 'effect'
+import { auth } from '../auth.js'`
+
+	const workerEnvService =
+		runtime === 'cf-workers'
+			? `
+export class WorkerEnvService extends Context.Tag('WorkerEnvService')<
+\tWorkerEnvService,
+\tEnv
+>() {}
+`
+			: ''
+
+	const makeAuth =
+		runtime === 'cf-workers'
+			? `const makeAuth = Effect.gen(function* () {
+\tconst env = yield* WorkerEnvService
+\treturn yield* Effect.try({
+\t\ttry: () => getAuth(env),
+\t\tcatch: (cause) =>
+\t\t\tnew UnexpectedServiceError({
+\t\t\t\tmessage: 'failed to initialize auth service',
+\t\t\t\tcode: 'AUTH_INIT_FAILED',
+\t\t\t\tcause
+\t\t\t})
+\t})
+})`
+			: `const makeAuth = Effect.succeed(auth)`
+
+	return `${imports}
+
+import { UnexpectedServiceError } from '@repo/backend/effect/errors'
+import {
+\tresolveBetterAuthSession,
+\ttype AuthSessionServiceShape
+} from '@repo/backend/effect/auth-session'
+export { AuthSessionService } from '@repo/backend/effect/auth-session'
+${workerEnvService}
+
+${makeAuth}
+
+export const makeAuthSessionService = Effect.gen(function* () {
+\tconst resolvedAuth = yield* makeAuth
+\treturn {
+\t\tresolve: (headers) =>
+\t\t\tresolveBetterAuthSession(() => resolvedAuth.api.getSession({ headers }))
+\t} satisfies AuthSessionServiceShape
+})
+`
+}
+
 function appTs(runtime: Runtime): string {
 	if (runtime === 'cf-workers') {
 		return `import { OpenAPIHono } from '@hono/zod-openapi'
@@ -605,7 +746,7 @@ app.use('/api/auth/*', async (c, next) => {
 	const mw = cors({
 		origin: parseTrustedOrigins(c.env.BETTER_AUTH_TRUSTED_ORIGINS),
 		credentials: true,
-		allowHeaders: ['content-type', 'x-locale'],
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
 		maxAge: 600
 	})
 	return mw(c, next)
@@ -654,7 +795,7 @@ app.use(
 	cors({
 		origin: parseTrustedOrigins(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
 		credentials: true,
-		allowHeaders: ['content-type', 'x-locale'],
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
 		maxAge: 600
 	})
 )
@@ -672,6 +813,104 @@ app.openapi(sessionRoute, async (c) => {
 		},
 		200
 	)
+})
+
+mountOpenApi(app)
+
+export default app
+`
+}
+
+function appEffectTs(runtime: Runtime): string {
+	if (runtime === 'cf-workers') {
+		return `import { runEffectJson } from '@repo/backend/effect/hono'
+import { Effect } from 'effect'
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
+
+import { getAuth } from './auth.js'
+import {
+\tAuthSessionService,
+\tWorkerEnvService,
+\tmakeAuthSessionService
+} from './effect/auth-session.js'
+import { parseTrustedOrigins } from './lib/utils.js'
+import { mountOpenApi, sessionRoute } from './openapi.js'
+
+const app = new Hono<{ Bindings: Env }>()
+
+app.get('/healthz', (c) => c.text('ok'))
+
+// CORS shares the BETTER_AUTH_TRUSTED_ORIGINS allow-list with better-auth's
+// own CSRF check — one env var, two consistent gates.
+app.use('/api/auth/*', async (c, next) => {
+	const mw = cors({
+		origin: parseTrustedOrigins(c.env.BETTER_AUTH_TRUSTED_ORIGINS),
+		credentials: true,
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
+		maxAge: 600
+	})
+	return mw(c, next)
+})
+
+app.all('/api/auth/*', async (c) => {
+	const auth = getAuth(c.env)
+	return auth.handler(c.req.raw)
+})
+
+app.get('/internal/session', sessionRoute, (c) => {
+	const program = Effect.gen(function* () {
+		const authSession = yield* AuthSessionService
+		return yield* authSession.resolve(c.req.raw.headers)
+	}).pipe(
+		Effect.provideServiceEffect(
+			AuthSessionService,
+			makeAuthSessionService.pipe(Effect.provideService(WorkerEnvService, c.env))
+		)
+	)
+	return runEffectJson(c, program)
+})
+
+mountOpenApi(app)
+
+export default app
+`
+	}
+
+	return `import { runEffectJson } from '@repo/backend/effect/hono'
+import { Effect } from 'effect'
+import { Hono } from 'hono'
+import { cors } from 'hono/cors'
+
+import { auth } from './auth.js'
+import { AuthSessionService, makeAuthSessionService } from './effect/auth-session.js'
+import { parseTrustedOrigins } from './lib/utils.js'
+import { mountOpenApi, sessionRoute } from './openapi.js'
+
+const app = new Hono<{ Bindings: Env }>()
+
+app.get('/healthz', (c) => c.text('ok'))
+
+// CORS shares the BETTER_AUTH_TRUSTED_ORIGINS allow-list with better-auth's
+// own CSRF check — one env var, two consistent gates.
+app.use(
+	'/api/auth/*',
+	cors({
+		origin: parseTrustedOrigins(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
+		credentials: true,
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
+		maxAge: 600
+	})
+)
+
+app.all('/api/auth/*', async (c) => auth.handler(c.req.raw))
+
+app.get('/internal/session', sessionRoute, (c) => {
+	const program = Effect.gen(function* () {
+		const authSession = yield* AuthSessionService
+		return yield* authSession.resolve(c.req.raw.headers)
+	}).pipe(Effect.provideServiceEffect(AuthSessionService, makeAuthSessionService))
+	return runEffectJson(c, program)
 })
 
 mountOpenApi(app)

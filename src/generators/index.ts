@@ -40,16 +40,30 @@ export function runGenerators(cfg: GvKitConfig): FileEntry[] {
 }
 
 function renderConfigJsonc(cfg: GvKitConfig): string {
-	const { name, frontend, backend, i18n, monitoring, db, apiClient, auth, email, aiTooling, deploy } =
-		cfg.choices
+	const {
+		name,
+		frontend,
+		backend,
+		backendRuntime,
+		i18n,
+		monitoring,
+		db,
+		apiClient,
+		auth,
+		email,
+		aiTooling,
+		deploy
+	} = cfg.choices
 	const arr = (xs: readonly string[]) => `[${xs.map((x) => JSON.stringify(x)).join(', ')}]`
+	const runtimeLine =
+		backendRuntime === 'effect' ? `\n\t\t"backendRuntime": ${JSON.stringify(backendRuntime)},` : ''
 	return `// Re-run: gv-kit new <out-dir> --config gv-kit.config.jsonc
 {
 \t"configVersion": ${cfg.configVersion},
 \t"choices": {
 \t\t"name": ${JSON.stringify(name)},
 \t\t"frontend": ${JSON.stringify(frontend)},
-\t\t"backend": ${JSON.stringify(backend)},
+\t\t"backend": ${JSON.stringify(backend)},${runtimeLine}
 \t\t"i18n": ${JSON.stringify(i18n)},
 \t\t"monitoring": ${arr(monitoring)},
 \t\t"db": ${JSON.stringify(db)},

@@ -63,11 +63,12 @@ function renderPackageJson({
 	}
 	if (isCf) {
 		scripts['db:migrate:production'] = isSqlite
-			? `wrangler d1 migrations apply ${project}-db --remote`
+			? `wrangler d1 migrations apply ${project}-db --remote --config ../../apps/api/auth/wrangler.jsonc`
 			: 'drizzle-kit migrate'
 	}
 	if (isCf && isSqlite) {
-		scripts['db:migrate:local'] = `wrangler d1 migrations apply ${project}-db --local`
+		scripts['db:migrate:local'] =
+			`wrangler d1 migrations apply ${project}-db --local --config ../../apps/api/auth/wrangler.jsonc`
 	}
 
 	const pkg = {

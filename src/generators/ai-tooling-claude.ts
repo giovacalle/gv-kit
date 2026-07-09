@@ -262,7 +262,7 @@ ${
 		: `   - Add \`AUTH_URL: string\` to \`Env\` in \`env.d.ts\` (default \`http://127.0.0.1:8787\` in dev).
    - Call \`fetch(\\\`\${env.AUTH_URL}/internal/session\\\`, { headers: { cookie } })\`.`
 }
-   - Or use the existing middleware: \`@repo/backend/middleware/auth\` (it does exactly this against the binding/URL).
+   - Or use the existing Hono auth adapter: \`@repo/backend/hono/auth/require\` (it does exactly this against the binding/URL).
 
 ## Hard constraints (REFUSE)
 

@@ -36,6 +36,19 @@ export async function collect(): Promise<{ choices: Choices }> {
 	})
 	exitIfCancelled(backend)
 
+	let backendRuntime: 'promise' | 'effect' = 'promise'
+	if (backend === 'hono') {
+		const choice = await select({
+			message: 'Backend runtime',
+			options: [
+				{ value: 'promise', label: 'Promise (current/default)' },
+				{ value: 'effect', label: 'Effect (experimental route/schema pipeline)' }
+			]
+		})
+		exitIfCancelled(choice)
+		backendRuntime = choice as 'promise' | 'effect'
+	}
+
 	const i18n = await select({
 		message: 'i18n',
 		options: [
@@ -125,6 +138,7 @@ export async function collect(): Promise<{ choices: Choices }> {
 			name: name as string,
 			frontend: 'sveltekit',
 			backend: backend as 'hono' | 'inside-frontend',
+			backendRuntime,
 			i18n: i18n as 'paraglide' | 'skip',
 			monitoring: monitoring as ('umami' | 'posthog')[],
 			db: db as 'postgres' | 'sqlite',

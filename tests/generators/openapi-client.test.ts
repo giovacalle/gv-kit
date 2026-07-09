@@ -8,6 +8,7 @@ const baseChoices: Choices = {
 	name: 'demo',
 	frontend: 'sveltekit',
 	backend: 'hono',
+	backendRuntime: 'promise',
 	i18n: 'skip',
 	monitoring: [],
 	db: 'sqlite',

@@ -4,9 +4,10 @@ import type { GvKitConfig } from '../schema/config.js'
 /** Generator for `packages/openapi-client/`. Gated on `apiClient === 'hey-api'`. */
 export function generateOpenapiClient(cfg: GvKitConfig): FileEntry[] {
 	if (cfg.choices.apiClient !== 'hey-api') return []
+	const effectMode = cfg.choices.backendRuntime === 'effect'
 
 	return [
-		{ path: 'packages/openapi-client/package.json', content: PACKAGE_JSON },
+		{ path: 'packages/openapi-client/package.json', content: packageJson(effectMode) },
 		{ path: 'packages/openapi-client/tsconfig.json', content: TSCONFIG },
 		{ path: 'packages/openapi-client/openapi-ts.config.ts', content: OPENAPI_TS_CONFIG },
 		{ path: 'packages/openapi-client/src/index.ts', content: SRC_INDEX },
@@ -15,34 +16,43 @@ export function generateOpenapiClient(cfg: GvKitConfig): FileEntry[] {
 	]
 }
 
-const PACKAGE_JSON =
-	JSON.stringify(
-		{
-			name: '@repo/openapi-client',
-			version: '0.0.0',
-			private: true,
-			type: 'module',
-			exports: {
-				'.': './src/index.ts',
-				'./users': './src/users/index.ts'
-			},
-			scripts: {
-				codegen: 'openapi-ts',
-				lint: 'eslint .'
-			},
-			dependencies: {
+function packageJson(effectMode: boolean): string {
+	const dependencies: Record<string, string> = effectMode
+		? {
+				'@tanstack/svelte-query': '^6.1.33'
+			}
+		: {
 				'@hey-api/client-fetch': '^0.13.1',
 				'@tanstack/svelte-query': '^6.1.33'
-			},
-			devDependencies: {
-				'@hey-api/openapi-ts': '^0.97.3',
-				'@repo/tooling-typescript': 'workspace:*',
-				typescript: '~5.9.0'
 			}
-		},
-		null,
-		2
-	) + '\n'
+
+	return (
+		JSON.stringify(
+			{
+				name: '@repo/openapi-client',
+				version: '0.0.0',
+				private: true,
+				type: 'module',
+				exports: {
+					'.': './src/index.ts',
+					'./users': './src/users/index.ts'
+				},
+				scripts: {
+					codegen: 'openapi-ts',
+					lint: 'eslint .'
+				},
+				dependencies,
+				devDependencies: {
+					'@hey-api/openapi-ts': effectMode ? '0.99.0' : '^0.97.3',
+					'@repo/tooling-typescript': 'workspace:*',
+					typescript: '~5.9.0'
+				}
+			},
+			null,
+			2
+		) + '\n'
+	)
+}
 
 const TSCONFIG = `{
 	"extends": "@repo/tooling-typescript/library.json",

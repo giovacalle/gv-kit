@@ -51,7 +51,7 @@ no service bindings, no inter-service \`fetch\`.
 
 - \`apps/web/\` — SvelteKit app, contains all HTTP entry points
 - \`packages/db/\` — Drizzle schema + client factory (\`createDb(env)\`)
-- \`packages/backend/\` — shared helpers (logger, error helpers, middleware)
+	- \`packages/backend/\` — shared helpers (logger, error helpers, Hono adapters)
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\n' : ''}
 
 ## Request lifecycle
@@ -83,7 +83,7 @@ subdirectory under \`apps/api/\` is its own Worker with its own
 - \`apps/web/\` — SvelteKit app
 - \`apps/api/<service>/\` — independently deployable Hono workers (e.g. \`auth\`, \`users\`)
 - \`packages/db/\` — Drizzle schema + client factory
-- \`packages/backend/\` — horizontal helpers (logger, error helpers, middleware) ONLY
+	- \`packages/backend/\` — horizontal helpers (logger, error helpers, Hono adapters) ONLY
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — generated TS clients per service\n' : ''}
 
 ## Request lifecycle
@@ -183,7 +183,7 @@ The domain layer is split into **data-access** and **use-cases**.
 **Use cases (\`core/use-cases/**\`)**
 - Coordinate one or more DAO calls; throw \`HttpError\` via \`errors.*\` from \`@repo/backend/helpers\`.
 - Never reach into HTTP. No \`Request\`, \`Response\`, \`c.json\`, no \`Context\`.
-- Don't import \`@repo/backend/auth\` or \`@repo/backend/middleware\` — that's a layering break.
+- Don't import Hono adapters from \`@repo/backend/hono\` inside core modules — that's a layering break.
 
 **Both layers**
 - 1–2 args → positional. 3+ → named bag.

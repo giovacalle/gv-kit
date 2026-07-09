@@ -12,6 +12,7 @@ function makeCfg(
 			name: 'demo-app',
 			frontend: 'sveltekit',
 			backend: 'hono',
+	backendRuntime: 'promise',
 			i18n: 'paraglide',
 			monitoring: [],
 			db: 'postgres',

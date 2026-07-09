@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 export const FrontendChoice = z.literal('sveltekit')
 export const BackendChoice = z.enum(['hono', 'inside-frontend'])
+export const BackendRuntimeChoice = z.enum(['promise', 'effect'])
 export const I18nChoice = z.enum(['paraglide', 'skip'])
 export const MonitoringChoice = z.enum(['umami', 'posthog'])
 export const DbChoice = z.enum(['postgres', 'sqlite'])
@@ -15,6 +16,7 @@ export const Choices = z.object({
 	name: z.string().regex(/^[a-z][a-z0-9-]*$/, 'kebab-case, lowercase, start with letter'),
 	frontend: FrontendChoice,
 	backend: BackendChoice,
+	backendRuntime: BackendRuntimeChoice.default('promise'),
 	i18n: I18nChoice,
 	monitoring: z.array(MonitoringChoice),
 	db: DbChoice,
@@ -36,6 +38,13 @@ export const GvKitConfig = z
 				code: 'custom',
 				message: 'apiClient must be "skip" when backend is "inside-frontend"',
 				path: ['choices', 'apiClient']
+			})
+		}
+		if (cfg.choices.backend === 'inside-frontend' && cfg.choices.backendRuntime === 'effect') {
+			ctx.addIssue({
+				code: 'custom',
+				message: 'backendRuntime="effect" requires backend="hono"',
+				path: ['choices', 'backendRuntime']
 			})
 		}
 		if (cfg.choices.auth.includes('emailOTP') && cfg.choices.email === 'skip') {

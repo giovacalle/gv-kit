@@ -28,6 +28,9 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 		format: 'prettier --write "**/*.{ts,tsx,svelte,json,md}"',
 		prepare: 'husky'
 	}
+	if (cfg.choices.i18n === 'paraglide') {
+		scripts.postinstall = 'pnpm --filter @repo/i18n build'
+	}
 	if (cfg.choices.deploy === 'cf-workers') {
 		scripts['deploy:production'] = 'turbo run deploy:production --affected'
 		scripts['deploy:staging'] = 'turbo run deploy:staging --affected'

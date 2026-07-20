@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .turbo/
+/.scratch/
 .DS_Store
 .env
 .env.local

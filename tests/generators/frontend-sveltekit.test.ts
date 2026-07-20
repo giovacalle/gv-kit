@@ -1,5 +1,4 @@
 import { describe, expect, test } from 'bun:test'
-
 import { generateFrontendSveltekit } from '../../src/generators/frontend-sveltekit.js'
 import type { FileEntry } from '../../src/lib/files.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
@@ -9,6 +8,7 @@ type Auth = Choices['auth']
 const baseChoices: Choices = {
 	name: 'demo',
 	frontend: 'sveltekit',
+	marketing: 'inside-web',
 	backend: 'hono',
 	i18n: 'skip',
 	monitoring: [],
@@ -22,7 +22,7 @@ const baseChoices: Choices = {
 
 function makeCfg(overrides: Partial<Choices>): GvKitConfig {
 	return {
-		configVersion: 1,
+		configVersion: 2,
 		choices: { ...baseChoices, ...overrides }
 	}
 }
@@ -95,6 +95,29 @@ describe('generateFrontendSveltekit — auth inclusion / exclusion', () => {
 		expect(loginNoGoogle.content).not.toContain('Continue with Google')
 	})
 
+	test('Astro Google-only login omits email OTP imports and state', () => {
+		const entries = generateFrontendSveltekit(
+			makeCfg({ marketing: 'astro', auth: ['google'], email: 'notifuse', deploy: 'docker' })
+		)
+		const login = findEntry(entries, 'apps/web/src/routes/login/+page.svelte')!.content
+
+		for (const emailOnlySymbol of [
+			'Loader2Icon',
+			'@repo/ui/primitives/form',
+			"@repo/ui/primitives/input'",
+			'toast',
+			'fieldProxy',
+			'setError',
+			"from '$app/navigation'",
+			'errors',
+			'submitting',
+			'turnstileTokenProxy'
+		]) {
+			expect(login).not.toContain(emailOnlySymbol)
+		}
+		expect(login).toContain('continueWithGoogle')
+	})
+
 	test('passwordless-only routes are NEVER emitted (no register / forgot-password / logout)', () => {
 		for (const auth of AUTH_VARIANTS) {
 			const email = auth.length > 0 ? 'resend' : 'skip'
@@ -120,6 +143,18 @@ describe('generateFrontendSveltekit — fence stripping', () => {
 		const onFile = findEntry(on, 'apps/web/src/routes/+layout.server.ts')!
 		expect(onFile.content).toContain('locals.user')
 		expect(offFile.content).not.toContain('locals.user')
+	})
+
+	test('no-auth output removes auth-only imports and unused load parameters', () => {
+		const entries = generateFrontendSveltekit(makeCfg({ auth: [], email: 'skip', i18n: 'skip' }))
+		const nav = findEntry(entries, 'apps/web/src/lib/components/layout/nav.svelte')!.content
+		const layout = findEntry(entries, 'apps/web/src/routes/+layout.server.ts')!.content
+		expect(nav).not.toContain('UserIcon')
+		expect(nav).not.toContain('LogOutIcon')
+		expect(nav).not.toContain('@repo/ui/primitives/button')
+		expect(nav).not.toContain('@repo/ui/primitives/dropdown-menu')
+		expect(layout).toContain('export const load: LayoutServerLoad = () =>')
+		expect(layout).not.toContain('locals')
 	})
 
 	test('hooks.server.ts attaches user only when auth is on', () => {
@@ -229,12 +264,12 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 	})
 
 	test('wrangler.jsonc has apex routes (no api. prefix) and JSONC schema reference', () => {
-		const entries = generateFrontendSveltekit(
-			makeCfg({ deploy: 'cf-workers', backend: 'hono' })
-		)
+		const entries = generateFrontendSveltekit(makeCfg({ deploy: 'cf-workers', backend: 'hono' }))
 		const wrangler = findEntry(entries, 'apps/web/wrangler.jsonc')!
 		expect(wrangler.content).toContain('"$schema"')
 		expect(wrangler.content).toContain('"routes"')
+		expect(wrangler.content).toContain('"compatibility_flags": ["nodejs_compat"]')
+		expect(wrangler.content).not.toContain('nodejs_als')
 		expect(wrangler.content).not.toContain('auth.api.')
 	})
 
@@ -274,6 +309,48 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 		expect(findEntry(honoAuth, 'apps/web/wrangler.jsonc')!.content).not.toContain(
 			'BETTER_AUTH_SECRET'
 		)
+	})
+})
+
+describe('generateFrontendSveltekit — project-shape ownership', () => {
+	test('inside-web retains public homepage and SEO endpoints', () => {
+		const entries = generateFrontendSveltekit(makeCfg({ marketing: 'inside-web' }))
+		expect(findEntry(entries, 'apps/web/src/routes/+page.svelte')).toBeDefined()
+		expect(findEntry(entries, 'apps/web/src/routes/robots.txt/+server.ts')).toBeDefined()
+		expect(findEntry(entries, 'apps/web/src/routes/sitemap.xml/+server.ts')).toBeDefined()
+		expect(findEntry(entries, 'apps/web/src/routes/+page.server.ts')).toBeUndefined()
+	})
+
+	test('Astro shape removes duplicate web SEO endpoints', () => {
+		const entries = generateFrontendSveltekit(makeCfg({ marketing: 'astro' }))
+		expect(findEntry(entries, 'apps/web/src/routes/robots.txt/+server.ts')).toBeUndefined()
+		expect(findEntry(entries, 'apps/web/src/routes/sitemap.xml/+server.ts')).toBeUndefined()
+	})
+
+	test('Astro + auth redirects the web root according to locals.user', () => {
+		const entries = generateFrontendSveltekit(
+			makeCfg({ marketing: 'astro', auth: ['emailOTP'], email: 'resend' })
+		)
+		const root = findEntry(entries, 'apps/web/src/routes/+page.server.ts')
+		expect(root).toBeDefined()
+		expect(root!.content).toContain('locals.user')
+		expect(root!.content).toContain("'/login'")
+		expect(root!.content).toContain("'/me'")
+	})
+
+	test('Astro without auth keeps a normal application entry and no auth redirect', () => {
+		const entries = generateFrontendSveltekit(
+			makeCfg({ marketing: 'astro', auth: [], email: 'skip' })
+		)
+		expect(findEntry(entries, 'apps/web/src/routes/+page.svelte')).toBeDefined()
+		expect(findEntry(entries, 'apps/web/src/routes/+page.server.ts')).toBeUndefined()
+	})
+
+	test('Astro Cloudflare shape assigns web to app.<domain>', () => {
+		const entries = generateFrontendSveltekit(makeCfg({ marketing: 'astro', deploy: 'cf-workers' }))
+		const wrangler = findEntry(entries, 'apps/web/wrangler.jsonc')!
+		expect(wrangler.content).toContain('"pattern": "app.<domain>"')
+		expect(wrangler.content).not.toContain('"pattern": "<domain>"')
 	})
 })
 
@@ -339,5 +416,23 @@ describe('generateFrontendSveltekit — hey-api / TanStack Query overlay', () =>
 		expect(on.dependencies['@repo/openapi-client']).toBeDefined()
 		expect(off.dependencies['@tanstack/svelte-query']).toBeUndefined()
 		expect(off.dependencies['@repo/openapi-client']).toBeUndefined()
+	})
+	test('Google-only login does not emit email OTP-only bindings', () => {
+		const entries = generateFrontendSveltekit(makeCfg({ auth: ['google'], email: 'skip' }))
+		const login = findEntry(entries, 'apps/web/src/routes/login/+page.svelte')!.content
+		for (const unused of [
+			'Loader2Icon',
+			'import * as Form',
+			'import * as Input',
+			'import { toast }',
+			'fieldProxy',
+			'setError',
+			'import { goto }',
+			'errors,',
+			'submitting',
+			'turnstileTokenProxy'
+		])
+			expect(login).not.toContain(unused)
+		expect(login).toContain('continueWithGoogle')
 	})
 })

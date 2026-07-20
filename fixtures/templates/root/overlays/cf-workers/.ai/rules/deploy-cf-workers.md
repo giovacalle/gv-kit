@@ -11,8 +11,8 @@ The single source of Worker config is `wrangler.jsonc` (JSONC: JSON with `//` co
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "__PROJECT__-web",
 	"main": ".svelte-kit/cloudflare/_worker.js",
-	"compatibility_date": "2026-04-01",
-	"compatibility_flags": ["nodejs_als"],
+	"compatibility_date": "__COMPAT_DATE__",
+	"compatibility_flags": ["nodejs_compat"],
 	"assets": {
 		"binding": "ASSETS",
 		"directory": ".svelte-kit/cloudflare"
@@ -22,9 +22,9 @@ The single source of Worker config is `wrangler.jsonc` (JSONC: JSON with `//` co
 
 `wrangler.toml` is FORBIDDEN. If you find a `.toml` Wrangler config, convert it.
 
-### `nodejs_als` flag
+### `nodejs_compat` flag
 
-The `nodejs_als` compatibility flag enables `AsyncLocalStorage`, which SvelteKit's adapter relies on for per-request context. Don't remove it.
+The `nodejs_compat` compatibility flag provides the Node.js compatibility APIs required by the generated SvelteKit application and its dependencies. Don't remove it.
 
 ## Bindings
 

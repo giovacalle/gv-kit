@@ -10,7 +10,7 @@ SvelteKit web app deployed to Cloudflare Workers.
 - **Forms**: `sveltekit-superforms` v2 + `formsnap` v2 + Zod adapter
 - **Errors**: `AppError` + `throwAppError` server-side; `neverthrow` `Result<T, AppError>` client-side
 - **Dates**: `@internationalized/date` only
-- **Tooling**: `pnpm` package manager, Node 20+, Prettier, ESLint, TypeScript strict
+- **Tooling**: `pnpm` package manager, Node 24, Prettier, ESLint, TypeScript strict
 
 ## Bindings
 

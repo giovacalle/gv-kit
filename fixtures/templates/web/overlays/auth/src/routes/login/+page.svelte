@@ -1,5 +1,7 @@
 <script lang="ts">
+	/*@gvkit:if authEmailOtp*/
 	import Loader2Icon from '@lucide/svelte/icons/loader-2'
+	/*@gvkit:endif*/
 	import MailIcon from '@lucide/svelte/icons/mail'
 	/*@gvkit:if authEmailOtp*/
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check'
@@ -7,20 +9,24 @@
 	/*@gvkit:endif*/
 	import * as Button from '@repo/ui/primitives/button'
 	import * as Card from '@repo/ui/primitives/card'
+	/*@gvkit:if authEmailOtp*/
 	import * as Form from '@repo/ui/primitives/form'
 	import * as Input from '@repo/ui/primitives/input'
-	/*@gvkit:if authEmailOtp*/
 	import * as InputOTP from '@repo/ui/primitives/input-otp'
 	import { REGEXP_ONLY_DIGITS } from 'bits-ui'
 	/*@gvkit:endif*/
 	/*@gvkit:if i18nParaglide*/
 	import * as m from '@repo/i18n/messages'
 	/*@gvkit:endif*/
+	/*@gvkit:if authEmailOtp*/
 	import { toast } from 'svelte-sonner'
-	import { fieldProxy, setError, superForm } from 'sveltekit-superforms'
+	/*@gvkit:endif*/
+	import { /*@gvkit:if authEmailOtp*/fieldProxy, setError, /*@gvkit:endif*/superForm } from 'sveltekit-superforms'
 	import { zodClient } from 'sveltekit-superforms/adapters'
 
+	/*@gvkit:if authEmailOtp*/
 	import { goto } from '$app/navigation'
+	/*@gvkit:endif*/
 	import { authClient } from '$lib/auth/client'
 	import Seo from '$lib/components/seo.svelte'
 	import { loginWizardSchema } from '$lib/schemas/auth'
@@ -78,12 +84,12 @@
 			/*@gvkit:endif*/
 		}
 	})
-	const { form: formData, errors, enhance, submitting } = sf
+	const { form: formData, /*@gvkit:if authEmailOtp*/errors, /*@gvkit:endif*/enhance/*@gvkit:if authEmailOtp*/, submitting/*@gvkit:endif*/ } = sf
 
 	/*@gvkit:if authEmailOtp*/
 	const codeProxy = fieldProxy(sf, 'code')
-	/*@gvkit:endif*/
 	const turnstileTokenProxy = fieldProxy(sf, 'turnstileToken')
+	/*@gvkit:endif*/
 
 	/*@gvkit:if authEmailOtp*/
 	function resetTurnstile() {

@@ -1,97 +1,119 @@
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
-
 import { Choices, GvKitConfig } from '../src/schema/config.js'
 
-const baseValid = {
+const baseChoicesV1 = {
+	name: 'my-app',
+	frontend: 'sveltekit' as const,
+	backend: 'hono' as const,
+	i18n: 'paraglide' as const,
+	monitoring: ['umami' as const, 'posthog' as const],
+	db: 'postgres' as const,
+	apiClient: 'hey-api' as const,
+	auth: ['emailOTP' as const, 'google' as const],
+	email: 'resend' as const,
+	aiTooling: ['claude' as const, 'codex' as const, 'opencode' as const],
+	deploy: 'cf-workers' as const
+}
+
+const baseV1 = {
 	configVersion: 1 as const,
+	choices: baseChoicesV1
+}
+
+const baseV2 = {
+	configVersion: 2 as const,
 	choices: {
-		name: 'my-app',
-		frontend: 'sveltekit' as const,
-		backend: 'hono' as const,
-		i18n: 'paraglide' as const,
-		monitoring: ['umami' as const, 'posthog' as const],
-		db: 'postgres' as const,
-		apiClient: 'hey-api' as const,
-		auth: ['emailOTP' as const, 'google' as const],
-		email: 'resend' as const,
-		aiTooling: ['claude' as const, 'codex' as const, 'opencode' as const],
-		deploy: 'cf-workers' as const
+		...baseChoicesV1,
+		marketing: 'astro' as const
 	}
 }
 
 describe('GvKitConfig schema', () => {
-	test('accepts a fully valid config', () => {
-		const result = GvKitConfig.safeParse(baseValid)
-		expect(result.success).toBe(true)
+	test('accepts strict v2 and preserves the explicit project shape', () => {
+		const result = GvKitConfig.parse(baseV2)
+		expect(result.configVersion).toBe(2)
+		expect(result.choices.marketing).toBe('astro')
 	})
 
-	test('accepts a minimal config with empty arrays', () => {
-		const minimal = {
-			...baseValid,
+	test('migrates strict v1 to v2 inside-web', () => {
+		const result = GvKitConfig.parse(baseV1)
+		expect(result).toEqual({
+			configVersion: 2,
 			choices: {
-				...baseValid.choices,
-				monitoring: [],
-				auth: [],
-				aiTooling: []
+				...baseChoicesV1,
+				marketing: 'inside-web'
 			}
-		}
-		const result = GvKitConfig.safeParse(minimal)
+		})
+	})
+
+	test('rejects marketing on v1 instead of silently stripping it', () => {
+		const result = GvKitConfig.safeParse({
+			...baseV1,
+			choices: { ...baseV1.choices, marketing: 'astro' }
+		})
+		expect(result.success).toBe(false)
+	})
+
+	test('requires marketing on v2', () => {
+		const { marketing: _marketing, ...choices } = baseV2.choices
+		void _marketing
+		expect(GvKitConfig.safeParse({ configVersion: 2, choices }).success).toBe(false)
+	})
+
+	test('rejects unknown top-level and choice keys in both versions', () => {
+		expect(GvKitConfig.safeParse({ ...baseV1, surprise: true }).success).toBe(false)
+		expect(
+			GvKitConfig.safeParse({
+				...baseV2,
+				choices: { ...baseV2.choices, surprise: true }
+			}).success
+		).toBe(false)
+	})
+
+	test('rejects unknown config versions', () => {
+		expect(GvKitConfig.safeParse({ ...baseV2, configVersion: 3 }).success).toBe(false)
+	})
+
+	test('accepts a minimal v2 config with empty arrays', () => {
+		const result = GvKitConfig.safeParse({
+			...baseV2,
+			choices: { ...baseV2.choices, monitoring: [], auth: [], aiTooling: [] }
+		})
 		expect(result.success).toBe(true)
 	})
 
 	test('accepts apiClient="skip" when backend is "inside-frontend"', () => {
-		const cfg = {
-			...baseValid,
-			choices: {
-				...baseValid.choices,
-				backend: 'inside-frontend' as const,
-				apiClient: 'skip' as const
-			}
-		}
-		const result = GvKitConfig.safeParse(cfg)
+		const result = GvKitConfig.safeParse({
+			...baseV2,
+			choices: { ...baseV2.choices, backend: 'inside-frontend', apiClient: 'skip' }
+		})
 		expect(result.success).toBe(true)
 	})
 
 	test('rejects apiClient="hey-api" when backend is "inside-frontend"', () => {
-		const cfg = {
-			...baseValid,
-			choices: {
-				...baseValid.choices,
-				backend: 'inside-frontend' as const,
-				apiClient: 'hey-api' as const
-			}
-		}
-		const result = GvKitConfig.safeParse(cfg)
+		const result = GvKitConfig.safeParse({
+			...baseV2,
+			choices: { ...baseV2.choices, backend: 'inside-frontend', apiClient: 'hey-api' }
+		})
 		expect(result.success).toBe(false)
-		if (!result.success) {
-			const flat = JSON.stringify(result.error.issues)
-			expect(flat).toContain('apiClient')
-		}
+		if (!result.success) expect(JSON.stringify(result.error.issues)).toContain('apiClient')
 	})
 
 	test('accepts emailOTP with email="resend"', () => {
-		const cfg = {
-			...baseValid,
-			choices: {
-				...baseValid.choices,
-				auth: ['emailOTP' as const],
-				email: 'resend' as const
-			}
-		}
-		expect(GvKitConfig.safeParse(cfg).success).toBe(true)
+		expect(
+			GvKitConfig.safeParse({
+				...baseV2,
+				choices: { ...baseV2.choices, auth: ['emailOTP'], email: 'resend' }
+			}).success
+		).toBe(true)
 	})
 
 	test('rejects emailOTP with email="skip"', () => {
-		const cfg = {
-			...baseValid,
-			choices: {
-				...baseValid.choices,
-				auth: ['emailOTP' as const],
-				email: 'skip' as const
-			}
-		}
-		const result = GvKitConfig.safeParse(cfg)
+		const result = GvKitConfig.safeParse({
+			...baseV2,
+			choices: { ...baseV2.choices, auth: ['emailOTP'], email: 'skip' }
+		})
 		expect(result.success).toBe(false)
 		if (!result.success) {
 			const flat = JSON.stringify(result.error.issues)
@@ -100,52 +122,36 @@ describe('GvKitConfig schema', () => {
 		}
 	})
 
-	test('rejects uppercase name', () => {
-		const cfg = {
-			...baseValid,
-			choices: { ...baseValid.choices, name: 'UPPERCASE' }
+	test.each(['UPPERCASE', '1leading-digit', 'with space'])(
+		'rejects invalid project name %s',
+		(name) => {
+			expect(
+				GvKitConfig.safeParse({
+					...baseV2,
+					choices: { ...baseV2.choices, name }
+				}).success
+			).toBe(false)
 		}
-		expect(GvKitConfig.safeParse(cfg).success).toBe(false)
-	})
+	)
 
-	test('rejects name starting with a digit', () => {
-		const cfg = {
-			...baseValid,
-			choices: { ...baseValid.choices, name: '1leading-digit' }
-		}
-		expect(GvKitConfig.safeParse(cfg).success).toBe(false)
-	})
-
-	test('rejects name with whitespace', () => {
-		const cfg = {
-			...baseValid,
-			choices: { ...baseValid.choices, name: 'with space' }
-		}
-		expect(GvKitConfig.safeParse(cfg).success).toBe(false)
-	})
-
-	test('rejects missing required field', () => {
-		const { configVersion: _omit, ...incomplete } = baseValid
+	test('rejects missing required top-level fields and unknown enum values', () => {
+		const { configVersion: _omit, ...incomplete } = baseV2
 		void _omit
-		const result = GvKitConfig.safeParse(incomplete)
-		expect(result.success).toBe(false)
+		expect(GvKitConfig.safeParse(incomplete).success).toBe(false)
+		expect(
+			GvKitConfig.safeParse({
+				...baseV2,
+				choices: { ...baseV2.choices, db: 'mysql' }
+			}).success
+		).toBe(false)
 	})
 
-	test('rejects unknown enum values', () => {
-		const cfg = {
-			...baseValid,
-			choices: { ...baseValid.choices, db: 'mysql' }
-		}
-		expect(GvKitConfig.safeParse(cfg).success).toBe(false)
-	})
-
-	test('Choices alone parses independently', () => {
-		const result = Choices.safeParse(baseValid.choices)
-		expect(result.success).toBe(true)
+	test('Choices parses the normalized v2 choice contract independently', () => {
+		expect(Choices.safeParse(baseV2.choices).success).toBe(true)
+		expect(Choices.safeParse(baseChoicesV1).success).toBe(false)
 	})
 
 	test('zod v4 is in use (sanity check)', () => {
-		// z.literal exists across v3/v4; ensure z.treeifyError exists in v4
 		expect(typeof (z as unknown as { treeifyError?: unknown }).treeifyError).toBe('function')
 	})
 })

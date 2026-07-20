@@ -1,7 +1,7 @@
 import type { FileEntry } from '../../lib/files.js'
 import type { GvKitConfig } from '../../schema/config.js'
 
-const COMPATIBILITY_DATE = '2026-04-01'
+const COMPATIBILITY_DATE = '2026-07-20'
 
 type Runtime = 'cf-workers' | 'node'
 
@@ -110,7 +110,7 @@ function pkgJson({
 	if (runtime === 'cf-workers') {
 		devDependencies.wrangler = '^4.0.0'
 		devDependencies['@cloudflare/workers-types'] = '^4.20251101.0'
-		devDependencies['@types/node'] = '^22.10.0'
+		devDependencies['@types/node'] = '^24.0.0'
 		scripts['cf-typegen'] = 'wrangler types'
 		scripts.dev = 'pnpm cf-typegen && wrangler dev'
 		scripts.build = 'pnpm cf-typegen && wrangler deploy --dry-run --outdir=dist'
@@ -123,9 +123,9 @@ function pkgJson({
 		dependencies['@hono/node-server'] = '^1.13.0'
 		devDependencies.tsup = '^8.3.0'
 		devDependencies.tsx = '^4.19.0'
-		devDependencies['@types/node'] = '^22.10.0'
+		devDependencies['@types/node'] = '^24.0.0'
 		scripts.dev = 'tsx watch src/index.ts'
-		scripts.build = 'tsup src/index.ts --format esm --target=node20 --outdir dist'
+		scripts.build = 'tsup src/index.ts --format esm --target=node24 --out-dir dist'
 		scripts.start = 'node dist/index.js'
 	}
 

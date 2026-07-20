@@ -24,19 +24,56 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 	const project = cfg.choices.name
 	const db = cfg.choices.db
 	return [
-		{ path: '.github/workflows/deploy-production.yml', content: deployProductionWorkflow(project) },
-		{ path: '.github/workflows/deploy-staging.yml', content: deployStagingWorkflow(project, db) },
+		{
+			path: '.github/workflows/deploy-production.yml',
+			content: deployProductionWorkflow(project, cfg)
+		},
+		{
+			path: '.github/workflows/deploy-staging.yml',
+			content: deployStagingWorkflow(project, db, cfg)
+		},
 		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) }
 	]
 }
 
-function deployProductionWorkflow(project: string): string {
+function marketingMonitoringEnvKeys(cfg: GvKitConfig): string[] {
+	if (cfg.choices.marketing !== 'astro') return []
+	const keys: string[] = []
+	if (cfg.choices.monitoring.includes('umami')) {
+		keys.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
+	}
+	if (cfg.choices.monitoring.includes('posthog')) {
+		keys.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
+	}
+	return keys
+}
+
+function marketingPublicEnvKeys(cfg: GvKitConfig): string[] {
+	if (cfg.choices.marketing !== 'astro') return []
+	return ['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL', ...marketingMonitoringEnvKeys(cfg)]
+}
+
+function workflowVariableRequirements(keys: string[]): string {
+	if (keys.length === 0) return ''
+	return `# Required GitHub Variables:\n${keys.map((key) => `#   - ${key}`).join('\n')}\n#\n`
+}
+
+function workflowVariableEnv(keys: string[]): string {
+	if (keys.length === 0) return ''
+	return `\n${keys.map((key) => `          ${key}: \${{ vars.${key} }}`).join('\n')}`
+}
+
+function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
+	const publicKeys = marketingPublicEnvKeys(cfg)
+	const publicOriginRequirements = workflowVariableRequirements(publicKeys)
+	const publicOriginEnv = workflowVariableEnv(publicKeys)
 	return `# Deploy ${project} to production on push to main.
 #
 # Required GitHub Secrets:
 #   - CLOUDFLARE_API_TOKEN
 #   - CLOUDFLARE_ACCOUNT_ID
 #
+${publicOriginRequirements}
 # Add per-Worker secrets ahead of time via \`wrangler secret put\` — this
 # workflow does not push secrets, only code.
 
@@ -63,7 +100,7 @@ jobs:
           version: 11.1.1
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
 
@@ -104,13 +141,28 @@ jobs:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           TURBO_SCM_BASE: \${{ steps.scm.outputs.base }}
-          TURBO_SCM_HEAD: \${{ steps.scm.outputs.head }}
+          TURBO_SCM_HEAD: \${{ steps.scm.outputs.head }}${publicOriginEnv}
 `
 }
 
-function deployStagingWorkflow(project: string, db: GvKitConfig['choices']['db']): string {
+function deployStagingWorkflow(
+	project: string,
+	db: GvKitConfig['choices']['db'],
+	cfg: GvKitConfig
+): string {
+	const hasMarketing = cfg.choices.marketing === 'astro'
 	const previewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
 	const stagingConfigStep = writeStagingWranglerConfigStep(db)
+	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
+	const publicOriginRequirement = hasMarketing
+		? workflowVariableRequirements(['CLOUDFLARE_WORKERS_SUBDOMAIN', ...monitoringKeys])
+		: ''
+	const monitoringEnv = workflowVariableEnv(monitoringKeys)
+	const publicOriginEnv = hasMarketing
+		? `
+          PUBLIC_MARKETING_URL: https://${project}-marketing-\${{ needs.preview-db.outputs.alias }}.\${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}.workers.dev
+          PUBLIC_APP_URL: https://${project}-web-\${{ needs.preview-db.outputs.alias }}.\${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}.workers.dev${monitoringEnv}`
+		: ''
 	return `# Per-PR staging deploy for ${project}.
 # Staging uses PR-scoped preview database resources and temporary Wrangler configs.
 # Tear-down lives in cleanup-staging.yml.
@@ -118,7 +170,7 @@ function deployStagingWorkflow(project: string, db: GvKitConfig['choices']['db']
 # Required GitHub Secrets:
 #   - CLOUDFLARE_API_TOKEN
 #   - CLOUDFLARE_ACCOUNT_ID
-${db === 'postgres' ? '#   - NEON_API_KEY\n# Required GitHub Variables:\n#   - NEON_PROJECT_ID\n' : ''}
+${db === 'postgres' ? '#   - NEON_API_KEY\n# Required GitHub Variables:\n#   - NEON_PROJECT_ID\n' : ''}${publicOriginRequirement}
 
 name: deploy-staging
 
@@ -159,7 +211,7 @@ ${previewDbJob}
           version: 11.1.1
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
 
@@ -178,7 +230,7 @@ ${previewMigrationEnv(db)}
           STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
           STAGING_WRANGLER_CONFIG: wrangler.staging.jsonc
           TURBO_SCM_BASE: \${{ github.event.pull_request.base.sha }}
-          TURBO_SCM_HEAD: \${{ github.event.pull_request.head.sha }}
+          TURBO_SCM_HEAD: \${{ github.event.pull_request.head.sha }}${publicOriginEnv}
 
       - uses: marocchino/sticky-pull-request-comment@v2
         with:
@@ -338,7 +390,7 @@ function d1PreviewDbJob(project: string): string {
           ${PREVIEW_ALIAS_SCRIPT}
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - id: d1
         name: Create or reuse D1 preview database
         run: |
@@ -423,7 +475,7 @@ jobs:
           ref: \${{ github.event.pull_request.base.sha }}
       - uses: actions/setup-node@v4
         with:
-          node-version: '20'
+          node-version: '24'
       - id: branch
         run: |
           ${PREVIEW_ALIAS_SCRIPT}
@@ -530,9 +582,12 @@ interface DockerOpts {
 	project: string
 	isHono: boolean
 	isPostgres: boolean
+	hasMarketing: boolean
 	hasAuth: boolean
 	wantsGoogle: boolean
 	wantsEmailOTP: boolean
+	wantsUmami: boolean
+	wantsPosthog: boolean
 	emailProvider: 'resend' | 'notifuse' | null
 }
 
@@ -541,15 +596,18 @@ function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
 		project: cfg.choices.name,
 		isHono: cfg.choices.backend === 'hono',
 		isPostgres: cfg.choices.db === 'postgres',
+		hasMarketing: cfg.choices.marketing === 'astro',
 		hasAuth: cfg.choices.auth.length > 0,
 		wantsGoogle: cfg.choices.auth.includes('google'),
 		wantsEmailOTP: cfg.choices.auth.includes('emailOTP'),
+		wantsUmami: cfg.choices.monitoring.includes('umami'),
+		wantsPosthog: cfg.choices.monitoring.includes('posthog'),
 		emailProvider: cfg.choices.email === 'skip' ? null : cfg.choices.email
 	}
 
 	return [
 		{ path: '.dockerignore', content: dockerignore() },
-		{ path: 'Dockerfile', content: dockerfile() },
+		{ path: 'Dockerfile', content: dockerfile(opts) },
 		{ path: 'docker-compose.yml', content: dockerCompose(opts) }
 	]
 }
@@ -587,7 +645,32 @@ function dockerignore(): string {
 `
 }
 
-function dockerfile(): string {
+function dockerfile(opts: DockerOpts): string {
+	const marketingRuntime = opts.hasMarketing
+		? `
+FROM nginxinc/nginx-unprivileged:1.28.0-alpine@sha256:c97ff0bf7cbae369953c6da1232ec14ad9f971d66360c5698db0856a4cd657a0 AS marketing-runtime
+COPY --chown=101:101 apps/marketing/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=builder --chown=101:101 /repo/apps/marketing/dist/ /usr/share/nginx/html/
+EXPOSE 8080
+HEALTHCHECK --interval=5s --timeout=2s --start-period=2s --retries=5 \\
+    CMD wget --quiet --spider http://127.0.0.1:8080/healthz || exit 1
+ENTRYPOINT ["nginx", "-g", "daemon off;"]
+`
+		: ''
+	const publicBuildKeys = opts.hasMarketing
+		? [
+				'PUBLIC_MARKETING_URL',
+				'PUBLIC_APP_URL',
+				...(opts.wantsUmami ? ['PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID'] : []),
+				...(opts.wantsPosthog ? ['PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST'] : [])
+			]
+		: []
+	const publicBuildArgs = publicBuildKeys.map((key) => `ARG ${key}`).join('\n')
+	const publicBuildEnv =
+		publicBuildKeys.length > 0
+			? `ENV ${publicBuildKeys.map((key) => `${key}=\${${key}}`).join(' \\\n    ')}`
+			: ''
+
 	return `# syntax=docker/dockerfile:1.7
 #
 # Build any service from the repo root:
@@ -596,7 +679,7 @@ function dockerfile(): string {
 #
 # Compose orchestrates these via \`target:\` and \`args:\`.
 
-ARG NODE_VERSION=20
+ARG NODE_VERSION=24
 ARG PNPM_VERSION=11.1.1
 
 FROM node:\${NODE_VERSION}-alpine AS base
@@ -626,6 +709,8 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \\
 
 FROM deps AS builder
 ARG TURBO_FILTER
+${publicBuildArgs}
+${publicBuildEnv}
 COPY . .
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \\
     --mount=type=cache,id=turbo,target=/repo/.turbo \\
@@ -671,6 +756,7 @@ WORKDIR /repo/packages/db
 USER nobody
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["pnpm", "exec", "drizzle-kit", "migrate"]
+${marketingRuntime}
 `
 }
 
@@ -687,6 +773,7 @@ function dockerCompose(opts: DockerOpts): string {
 		services.push(usersService(opts))
 	}
 	services.push(webService(opts))
+	if (opts.hasMarketing) services.push(marketingService(opts))
 
 	return (
 		[
@@ -817,6 +904,10 @@ function usersService(opts: DockerOpts): string {
 
 function webService(opts: DockerOpts): string {
 	const env: string[] = ['      ORIGIN: ${ORIGIN:-http://localhost:3000}']
+	const buildArgs = [`        TURBO_FILTER: "${opts.project}-web"`]
+	if (opts.hasMarketing) {
+		buildArgs.push('        PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}')
+	}
 
 	if (opts.isHono) {
 		env.push(
@@ -871,7 +962,7 @@ function webService(opts: DockerOpts): string {
 		'      context: .',
 		'      target: web-runtime',
 		'      args:',
-		`        TURBO_FILTER: "${opts.project}-web"`,
+		...buildArgs,
 		`    image: ${opts.project}-web:latest`,
 		'    restart: unless-stopped',
 		'    ports:',
@@ -883,6 +974,45 @@ function webService(opts: DockerOpts): string {
 		...healthcheckLines(3000)
 	]
 	return lines.join('\n')
+}
+
+function marketingService(opts: DockerOpts): string {
+	const monitoringArgs: string[] = []
+	if (opts.wantsUmami) {
+		monitoringArgs.push(
+			'        PUBLIC_UMAMI_HOST: ${PUBLIC_UMAMI_HOST:-}',
+			'        PUBLIC_UMAMI_WEBSITE_ID: ${PUBLIC_UMAMI_WEBSITE_ID:-}'
+		)
+	}
+	if (opts.wantsPosthog) {
+		monitoringArgs.push(
+			'        PUBLIC_POSTHOG_KEY: ${PUBLIC_POSTHOG_KEY:-}',
+			'        PUBLIC_POSTHOG_HOST: ${PUBLIC_POSTHOG_HOST:-}'
+		)
+	}
+	return `  marketing:
+    build:
+      context: .
+      target: marketing-runtime
+      args:
+        TURBO_FILTER: "${opts.project}-marketing"
+        PUBLIC_MARKETING_URL: \${PUBLIC_MARKETING_URL:-http://localhost:4321}
+        PUBLIC_APP_URL: \${PUBLIC_APP_URL:-http://localhost:3000}${monitoringArgs.length > 0 ? `\n${monitoringArgs.join('\n')}` : ''}
+    image: ${opts.project}-marketing:latest
+    restart: unless-stopped
+    ports:
+      - "4321:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 2s`
 }
 
 function dbEnvLines(opts: DockerOpts, indent: string): string[] {

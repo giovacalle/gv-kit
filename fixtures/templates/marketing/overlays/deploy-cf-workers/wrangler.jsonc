@@ -1,0 +1,12 @@
+{
+	"$schema": "./node_modules/wrangler/config-schema.json",
+	"name": "__PROJECT__-marketing",
+	"compatibility_date": "__COMPAT_DATE__",
+	// Replace <domain> with the project's apex domain.
+	"routes": [{ "pattern": "<domain>", "custom_domain": true }],
+	"assets": {
+		"directory": "./dist/",
+		"not_found_handling": "404-page",
+		"html_handling": "auto-trailing-slash"
+	}
+}

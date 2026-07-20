@@ -1,0 +1,59 @@
+---
+import { buildContentSecurityPolicy } from '../lib/content-security-policy'
+import '../styles/app.css'
+
+interface Props {
+	title: string
+	description: string
+	locale: string
+}
+
+const { title, description, locale } = Astro.props
+const canonical = Astro.site && new URL(Astro.url.pathname, Astro.site)
+/*@gvkit:if monitoringUmami*/
+const umamiHost = import.meta.env.PUBLIC_UMAMI_HOST?.replace(/\/$/, '')
+const umamiWebsiteId = import.meta.env.PUBLIC_UMAMI_WEBSITE_ID
+const umamiScript = umamiHost && umamiWebsiteId ? `${umamiHost}/script.js` : undefined
+/*@gvkit:endif*/
+/*@gvkit:if monitoringPosthog*/
+const posthogHost = import.meta.env.PUBLIC_POSTHOG_HOST
+const posthogKey = import.meta.env.PUBLIC_POSTHOG_KEY
+/*@gvkit:endif*/
+const contentSecurityPolicy = buildContentSecurityPolicy({
+	/*@gvkit:if monitoringUmami*/
+	umamiScript,
+	/*@gvkit:endif*/
+	/*@gvkit:if monitoringPosthog*/
+	posthogHost,
+	posthogKey
+	/*@gvkit:endif*/
+})
+---
+
+<!doctype html>
+<html lang={locale}>
+	<head>
+		<meta charset="utf-8" />
+		<meta http-equiv="Content-Security-Policy" content={contentSecurityPolicy} />
+		<meta name="viewport" content="width=device-width" />
+		<meta name="generator" content={Astro.generator} />
+		<meta name="description" content={description} />
+		<meta name="theme-color" content="oklch(0.55 0.22 285)" />
+		<link rel="icon" href="/favicon.svg" />
+		{canonical && <link rel="canonical" href={canonical} />}
+		<title>{title}</title>
+		<!--@gvkit:if monitoringUmami-->
+		{umamiScript && (
+			<script is:inline defer src={umamiScript} data-website-id={umamiWebsiteId}></script>
+		)}
+		<!--@gvkit:endif-->
+	</head>
+	<body>
+		<slot />
+		<!--@gvkit:if monitoringPosthog-->
+		<script>
+			import '../scripts/posthog'
+		</script>
+		<!--@gvkit:endif-->
+	</body>
+</html>

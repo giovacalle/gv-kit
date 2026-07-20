@@ -1,6 +1,6 @@
 # gv-kit
 
-Scaffolding CLI for full-stack Turborepo monorepos. Pick your stack, answer prompts, get a project that compiles, tests, and deploys.
+Scaffolding CLI for full-stack product monorepos. Pick your project shape and stack, answer prompts, and get a project that compiles, tests, and deploys.
 
 ## Quickstart
 
@@ -15,6 +15,7 @@ pnpm dev
 
 A Turborepo monorepo with:
 
+- **`apps/marketing`** — static-first Astro marketing site at the apex (recommended project shape)
 - **`apps/web`** — SvelteKit (Svelte 5 runes, Tailwind 4) on your chosen runtime
 - **`apps/api/auth`** + **`apps/api/users`** — independent Hono Workers (services container) when `backend=hono`
 - **`packages/backend`** — primitives only: `core`, `auth` factory, `helpers`, plus `middleware` for hono mode
@@ -30,6 +31,7 @@ A Turborepo monorepo with:
 |---|---|---|
 | `name` | kebab-case | (required) |
 | `frontend` | `sveltekit` | sveltekit |
+| `marketing` | `astro` (separate marketing + app) / `inside-web` (integrated) | astro |
 | `backend` | `hono` (services container) / `inside-frontend` (one Worker) | hono |
 | `i18n` | `paraglide` / `skip` | skip |
 | `monitoring` | multi: `umami`, `posthog` | [] |
@@ -44,9 +46,12 @@ A Turborepo monorepo with:
 
 | Layer | Pin |
 |---|---|
-| Node | `>=20` |
+| Node | `>=24.0.0 <25.0.0` |
 | pnpm | `@11.1.1` (pinned via `packageManager`) |
 | TypeScript | `~5.9.0` |
+| Astro | `^7.1.1` |
+| `@astrojs/svelte` | `^9.0.1` |
+| `@astrojs/sitemap` | `^3.7.3` |
 | Zod | `^4.3.0` (workspace `overrides`) |
 | Hono | `^4.12.0` |
 | `@hono/zod-openapi` | `^1.3.0` |
@@ -57,12 +62,12 @@ A Turborepo monorepo with:
 | `@hey-api/client-fetch` | `^0.13.1` |
 | `@tanstack/svelte-query` | `^6.1.33` |
 | SvelteKit | `^2.58.0` |
-| Svelte | `^5.55.0` |
+| Svelte | `^5.56.6` |
 | Vite | `^8.0.0` |
 | `@sveltejs/vite-plugin-svelte` | `^7.0.0` |
-| Tailwind | `^4.2.0` (`@theme` only, no JS config) |
+| Tailwind | `^4.3.3` (`@theme` only, no JS config) |
 | `@inlang/paraglide-js` | `^2.17.0` (no `paraglide-sveltekit`) |
-| Wrangler | `^4.85.0` (always `wrangler.jsonc`) |
+| Wrangler | `^4.112.0` (always `wrangler.jsonc`) |
 | Turbo | `^2.9.0` |
 | Changesets | `^2.31.0` |
 
@@ -71,6 +76,21 @@ A Turborepo monorepo with:
 User answers prompts → choices validated by Zod → pure generators emit `FileEntry[]` → user confirms → files written + `pnpm install` + `git init`.
 
 Pipeline stages: `collect` → `validate` → `plan` → `confirm` → `execute`. Generators are pure functions `(config) => FileEntry[]`. No I/O inside generators.
+
+### Project shapes
+
+The recommended `marketing=astro` shape keeps the public site and application separate:
+
+```text
+apps/marketing  Astro static site  https://<domain>
+apps/web        SvelteKit app      https://app.<domain>
+```
+
+Astro owns the homepage, canonical metadata, robots, localized sitemap, and 404. Its CTA reads the complete build-time `PUBLIC_APP_URL`; it does not inspect auth or derive a hostname. When app auth is selected, anonymous visits to the SvelteKit root go to `/login` and authenticated visits go to `/me`.
+
+The `marketing=inside-web` shape retains the previous single-SvelteKit topology, with its public page and application together at the apex. Existing v1 configs migrate to this shape. New configs are strict v2, so older CLIs cannot silently ignore the topology choice.
+
+Astro remains static-first on both supported deploy targets: Workers Static Assets serves `dist/` directly, while Docker serves the same output from an unprivileged nginx runtime. Local defaults are marketing on `http://localhost:4321` and the app on `http://localhost:5173` (or `:3000` under Compose).
 
 ### Service boundary (when `backend=hono`)
 

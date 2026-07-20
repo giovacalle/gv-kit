@@ -46,12 +46,12 @@ function renderPackageJson({
 
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
-		'@types/node': '^22.10.0',
+		'@types/node': '^24.0.0',
 		'drizzle-kit': '^0.31.0',
 		typescript: '~5.9.0'
 	}
 	if (isCf) devDependencies['@cloudflare/workers-types'] = '^4.20251101.0'
-	if (isCf && isSqlite) devDependencies.wrangler = '^4.85.0'
+	if (isCf && isSqlite) devDependencies.wrangler = '^4.112.0'
 
 	const scripts: Record<string, string> = {
 		'db:generate': 'drizzle-kit generate',

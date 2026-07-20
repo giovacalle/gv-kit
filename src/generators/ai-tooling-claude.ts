@@ -34,6 +34,11 @@ export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 			path: '.claude/agents/service-architect.md',
 			content: renderServiceArchitectAgent(cfg)
 		})
+	if (cfg.choices.marketing === 'astro')
+		entries.push({
+			path: '.claude/agents/astro-marketer.md',
+			content: renderAstroMarketerAgent()
+		})
 
 	return entries
 }
@@ -45,6 +50,8 @@ export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 function renderStackSummary(cfg: GvKitConfig): string {
 	const lines: string[] = []
 	lines.push('- Frontend: SvelteKit (Svelte 5, runes)')
+	if (cfg.choices.marketing === 'astro')
+		lines.push('- Marketing: Astro static site (`apps/marketing`)')
 	if (cfg.choices.backend === 'hono')
 		lines.push('- Backend: Hono workers under `apps/api/<service>/`')
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
@@ -66,6 +73,8 @@ function renderStackSummary(cfg: GvKitConfig): string {
 
 function renderLayoutTree(cfg: GvKitConfig): string {
 	const lines: string[] = []
+	if (cfg.choices.marketing === 'astro')
+		lines.push('- `apps/marketing/` — static Astro public site')
 	lines.push('- `apps/web/` — SvelteKit app')
 	if (cfg.choices.backend === 'hono')
 		lines.push('- `apps/api/<service>/` — independently deployable Hono workers')
@@ -88,6 +97,8 @@ function renderClaudeMd(cfg: GvKitConfig): string {
 	const specialists: string[] = []
 	if (cfg.choices.backend === 'hono')
 		specialists.push('- `service-architect` — scaffolds a new `apps/api/<svc>/` Hono Worker')
+	if (cfg.choices.marketing === 'astro')
+		specialists.push('- `astro-marketer` — edits the static public site within its app boundary')
 
 	const specialistsBlock =
 		specialists.length > 0
@@ -114,6 +125,7 @@ function renderClaudeMd(cfg: GvKitConfig): string {
 	if (cfg.choices.deploy === 'cf-workers') ruleImports.push('@.ai/rules/deploy-cf-workers.md')
 	if (cfg.choices.email !== 'skip') ruleImports.push('@.ai/rules/email-templates.md')
 	if (cfg.choices.apiClient === 'hey-api') ruleImports.push('@.ai/rules/web-query.md')
+	if (cfg.choices.marketing === 'astro') ruleImports.push('@.ai/rules/marketing-astro.md')
 
 	const importsBlock = ruleImports.join('\n')
 
@@ -179,6 +191,8 @@ function renderStackManifest(cfg: GvKitConfig): string {
 		version: 1,
 		name: cfg.choices.name,
 		frontend: cfg.choices.frontend,
+		marketing: cfg.choices.marketing,
+		...(cfg.choices.marketing === 'astro' ? { marketingApp: 'apps/marketing' } : {}),
 		backend: cfg.choices.backend,
 		db: cfg.choices.db,
 		auth: cfg.choices.auth,
@@ -213,11 +227,33 @@ function renderClaudeSettings(): string {
 				'Read(./.env)',
 				'Read(./.env.*)',
 				'Read(./apps/web/.dev.vars)',
+				'Read(./apps/marketing/.env)',
+				'Read(./apps/marketing/.env.*)',
 				'Read(./apps/api/**/.dev.vars)'
 			]
 		}
 	}
 	return JSON.stringify(settings, null, 2) + '\n'
+}
+
+function renderAstroMarketerAgent(): string {
+	return `---
+name: astro-marketer
+description: Builds and reviews the static Astro marketing surface without crossing into application, auth, API, or database behavior.
+tools: Read, Glob, Grep, Bash, Edit, Write
+---
+
+# astro-marketer
+
+Work only on the public surface under \`apps/marketing\` and shared presentation
+assets it legitimately consumes. Before editing, read
+\`.ai/rules/marketing-astro.md\` and follow it as the canonical contract.
+
+Keep the surface static-first, use \`@repo/ui/*\`, hydrate only intentional
+interactions, and finish with the marketing typecheck and production build.
+Refuse requests that move auth, backend, database, or application behavior into
+marketing; route those changes to \`apps/web\` or the owning service instead.
+`
 }
 
 /* ------------------------------------------------------------------ */
@@ -280,7 +316,7 @@ ${
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "${project}-<svc>",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-04-01",
+	"compatibility_date": "2026-07-20",
 	"compatibility_flags": ["nodejs_compat"],
 	"dev": { "ip": "127.0.0.1", "port": 8789, "host": "localhost", "inspector_port": 9231 },
 	"services": [

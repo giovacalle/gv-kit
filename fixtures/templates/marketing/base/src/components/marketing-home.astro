@@ -1,0 +1,67 @@
+---
+import * as Button from '@repo/ui/primitives/button'
+import * as Card from '@repo/ui/primitives/card'
+import { Badge } from '@repo/ui/primitives/badge'
+import { ModeToggle } from '@repo/ui/components/mode-toggle'
+/*@gvkit:if i18nParaglide*/
+import * as m from '@repo/i18n/messages'
+import { baseLocale, locales, type Locale } from '@repo/i18n/runtime'
+/*@gvkit:endif*/
+import BaseLayout from '../layouts/base.astro'
+
+interface Props {
+	/*@gvkit:if i18nParaglide*/
+	locale: Locale
+	/*@gvkit:else*/
+	locale: string
+	/*@gvkit:endif*/
+}
+
+const { locale } = Astro.props
+const appUrl = import.meta.env.PUBLIC_APP_URL
+if (!appUrl) throw new Error('PUBLIC_APP_URL is required for the application CTA')
+
+/*@gvkit:if i18nParaglide*/
+const title = m.marketing_title({}, { locale })
+const description = m.marketing_lede({}, { locale })
+const cta = m.marketing_cta({}, { locale })
+const localeHref = (target: Locale) => (target === baseLocale ? '/' : `/${target}/`)
+/*@gvkit:else*/
+const title = 'Build the product, not the setup.'
+const description = 'A focused starting point for your public site and application.'
+const cta = 'Open the application'
+/*@gvkit:endif*/
+---
+
+<BaseLayout title={`${title} · __PROJECT__`} {description} {locale}>
+	<main class="grid min-h-dvh place-items-center bg-background px-6 py-16 text-foreground">
+		<Card.Root class="w-full max-w-3xl shadow-glow">
+			<Card.Header class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-6">
+				<div class="space-y-4">
+					<Badge variant="outline">__PROJECT__</Badge>
+					<Card.Title class="text-4xl tracking-[-0.04em] md:text-6xl">{title}</Card.Title>
+					<Card.Description class="max-w-2xl text-base md:text-lg">
+						{description}
+					</Card.Description>
+				</div>
+				<ModeToggle client:load />
+			</Card.Header>
+			<Card.Footer class="flex-wrap justify-between gap-4">
+				<!--@gvkit:if i18nParaglide-->
+				<nav aria-label="Language" class="flex gap-2">
+					{locales.map((target) => (
+						<Button.Root
+							href={localeHref(target)}
+							variant={target === locale ? 'secondary' : 'ghost'}
+							size="sm"
+						>
+							{target.toUpperCase()}
+						</Button.Root>
+					))}
+				</nav>
+				<!--@gvkit:endif-->
+				<Button.Root href={appUrl} size="lg">{cta}</Button.Root>
+			</Card.Footer>
+		</Card.Root>
+	</main>
+</BaseLayout>

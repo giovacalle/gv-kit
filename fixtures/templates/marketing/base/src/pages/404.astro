@@ -1,0 +1,30 @@
+---
+import * as Button from '@repo/ui/primitives/button'
+/*@gvkit:if i18nParaglide*/
+import * as m from '@repo/i18n/messages'
+import { baseLocale } from '@repo/i18n/runtime'
+/*@gvkit:endif*/
+import BaseLayout from '../layouts/base.astro'
+
+/*@gvkit:if i18nParaglide*/
+const locale = baseLocale
+const title = m.error_title({ status: 404 }, { locale })
+const heading = m.error_404_heading({}, { locale })
+const backHome = m.error_back_home({}, { locale })
+/*@gvkit:else*/
+const locale = 'en'
+const title = 'Page not found'
+const heading = "This page hasn't been built yet."
+const backHome = 'Back to home'
+/*@gvkit:endif*/
+---
+
+<BaseLayout {title} description={heading} {locale}>
+	<main class="grid min-h-dvh place-items-center bg-background px-6 py-16 text-foreground">
+		<div class="max-w-lg space-y-6 text-center">
+			<p class="text-muted-foreground text-xs uppercase tracking-[0.18em]">Error 404</p>
+			<h1 class="text-4xl font-semibold tracking-tight">{heading}</h1>
+			<Button.Root href="/">{backHome}</Button.Root>
+		</div>
+	</main>
+</BaseLayout>

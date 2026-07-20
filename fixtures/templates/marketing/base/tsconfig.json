@@ -1,0 +1,12 @@
+{
+	"extends": "astro/tsconfigs/strict",
+	"compilerOptions": {
+		"baseUrl": ".",
+		"paths": {
+			"@lib": ["../../packages/ui/src/lib"],
+			"@lib/*": ["../../packages/ui/src/lib/*"]
+		}
+	},
+	"include": [".astro/types.d.ts", "**/*"],
+	"exclude": ["dist", "prettier.config.js"]
+}

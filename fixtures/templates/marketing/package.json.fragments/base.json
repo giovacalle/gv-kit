@@ -1,0 +1,32 @@
+{
+	"name": "__PROJECT__-marketing",
+	"version": "0.0.1",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"dev": "astro dev",
+		"build": "astro build",
+		"preview": "astro preview",
+		"typecheck": "astro check",
+		"lint": "astro check",
+		"format": "prettier --write ."
+	},
+	"dependencies": {
+		"@fontsource-variable/geist": "^5.3.0",
+		"@fontsource-variable/geist-mono": "^5.2.8",
+		"@repo/ui": "workspace:*"
+	},
+	"devDependencies": {
+		"@astrojs/check": "^0.9.9",
+		"@astrojs/sitemap": "^3.7.3",
+		"@astrojs/svelte": "^9.0.1",
+		"@repo/tooling-prettier": "workspace:*",
+		"@repo/tooling-typescript": "workspace:*",
+		"@tailwindcss/vite": "^4.3.3",
+		"astro": "^7.1.1",
+		"prettier": "^3.8.0",
+		"svelte": "^5.56.6",
+		"tailwindcss": "^4.3.3",
+		"typescript": "~5.9.0"
+	}
+}

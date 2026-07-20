@@ -1,0 +1,17 @@
+{
+	"configVersion": 2,
+	"choices": {
+		"name": "astro-skip-minimal",
+		"frontend": "sveltekit",
+		"marketing": "astro",
+		"backend": "inside-frontend",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "skip",
+		"auth": [],
+		"email": "skip",
+		"aiTooling": [],
+		"deploy": "skip"
+	}
+}

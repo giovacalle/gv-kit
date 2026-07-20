@@ -1,0 +1,7 @@
+@import 'tailwindcss';
+@import '@repo/ui/styles';
+@import '@fontsource-variable/geist';
+@import '@fontsource-variable/geist-mono';
+
+@source '../**/*.{astro,svelte,ts}';
+@source '../../../../packages/ui/src/**/*.{svelte,ts}';

@@ -1,8 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
-
 import { intro, outro } from '@clack/prompts'
-
 import { parseJsonc } from './lib/jsonc.js'
 import { collect } from './pipeline/collect.js'
 import { confirm } from './pipeline/confirm.js'
@@ -21,7 +19,7 @@ type ParsedArgs = {
 }
 
 const HELP = `
-gv-kit — scaffold Turborepo monorepos (SvelteKit + Hono on Cloudflare Workers)
+gv-kit — scaffold product monorepos (Astro marketing + SvelteKit application)
 
 Usage:
   gv-kit new <out-dir> [options]
@@ -103,7 +101,7 @@ async function runNew(args: ParsedArgs): Promise<number> {
 	} else {
 		const collected = await collect()
 		cfg = validate({
-			configVersion: 1,
+			configVersion: 2,
 			choices: collected.choices
 		})
 	}
@@ -125,7 +123,9 @@ async function runNew(args: ParsedArgs): Promise<number> {
 	try {
 		await execute(resolve(args.outDir), entries)
 	} catch (err) {
-		process.stderr.write(`\nExecution failed: ${err instanceof Error ? err.message : String(err)}\n`)
+		process.stderr.write(
+			`\nExecution failed: ${err instanceof Error ? err.message : String(err)}\n`
+		)
 		return 3
 	}
 

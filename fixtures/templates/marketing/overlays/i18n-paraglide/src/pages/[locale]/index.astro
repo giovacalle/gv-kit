@@ -1,0 +1,18 @@
+---
+import { baseLocale, locales, type Locale } from '@repo/i18n/runtime'
+import type { GetStaticPaths } from 'astro'
+import MarketingHome from '../../components/marketing-home.astro'
+
+export const getStaticPaths = (() =>
+	locales
+		.filter((locale) => locale !== baseLocale)
+		.map((locale) => ({ params: { locale }, props: { locale } }))) satisfies GetStaticPaths
+
+interface Props {
+	locale: Locale
+}
+
+const { locale } = Astro.props
+---
+
+<MarketingHome {locale} />

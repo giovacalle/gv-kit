@@ -1,0 +1,17 @@
+{
+	"configVersion": 2,
+	"choices": {
+		"name": "minimal",
+		"frontend": "sveltekit",
+		"marketing": "inside-web",
+		"backend": "inside-frontend",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "skip",
+		"auth": [],
+		"email": "skip",
+		"aiTooling": [],
+		"deploy": "skip"
+	}
+}

@@ -1,11 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-
 import { generateDeploy } from '../../src/generators/deploy.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
 const baseChoices: Choices = {
 	name: 'demo',
 	frontend: 'sveltekit',
+	marketing: 'inside-web',
 	backend: 'hono',
 	i18n: 'skip',
 	monitoring: [],
@@ -18,7 +18,7 @@ const baseChoices: Choices = {
 }
 
 function makeCfg(overrides: Partial<Choices>): GvKitConfig {
-	return { configVersion: 1, choices: { ...baseChoices, ...overrides } }
+	return { configVersion: 2, choices: { ...baseChoices, ...overrides } }
 }
 
 function parseCompose(cfg: GvKitConfig): Record<string, unknown> {
@@ -29,6 +29,7 @@ function parseCompose(cfg: GvKitConfig): Record<string, unknown> {
 
 const COMBINATIONS: Array<[string, Partial<Choices>]> = [
 	['hono + postgres + emailOTP+google + resend', {}],
+	['Astro + hono + postgres + auth', { marketing: 'astro' }],
 	['hono + sqlite + emailOTP', { db: 'sqlite', auth: ['emailOTP'], email: 'resend' }],
 	['hono + postgres + no auth', { auth: [], email: 'skip' }],
 	['hono + postgres + google only', { auth: ['google'], email: 'skip' }],
@@ -99,6 +100,21 @@ describe('deploy compose — service topology contract', () => {
 		const doc = parseCompose(makeCfg({ db: 'sqlite' }))
 		const services = doc.services as Record<string, unknown>
 		expect(services.postgres).toBeUndefined()
+	})
+
+	test('Astro shape adds marketing without changing application dependencies', () => {
+		const doc = parseCompose(makeCfg({ marketing: 'astro', backend: 'hono', db: 'postgres' }))
+		const services = doc.services as Record<string, Record<string, unknown>>
+		expect(Object.keys(services).sort()).toEqual([
+			'auth',
+			'marketing',
+			'migrate',
+			'postgres',
+			'users',
+			'web'
+		])
+		expect(services.marketing?.depends_on).toBeUndefined()
+		expect(services.web?.depends_on).toBeDefined()
 	})
 })
 

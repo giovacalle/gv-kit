@@ -27,6 +27,23 @@ export async function collect(): Promise<{ choices: Choices }> {
 	})
 	exitIfCancelled(name)
 
+	const marketing = await select({
+		message: 'Project shape',
+		options: [
+			{
+				value: 'astro',
+				label: 'Full product — Astro marketing + SvelteKit app',
+				hint: 'Recommended'
+			},
+			{
+				value: 'inside-web',
+				label: 'Single SvelteKit app — public page and app together'
+			}
+		],
+		initialValue: 'astro'
+	})
+	exitIfCancelled(marketing)
+
 	const backend = await select({
 		message: 'Backend',
 		options: [
@@ -124,6 +141,7 @@ export async function collect(): Promise<{ choices: Choices }> {
 		choices: {
 			name: name as string,
 			frontend: 'sveltekit',
+			marketing: marketing as 'astro' | 'inside-web',
 			backend: backend as 'hono' | 'inside-frontend',
 			i18n: i18n as 'paraglide' | 'skip',
 			monitoring: monitoring as ('umami' | 'posthog')[],

@@ -1,7 +1,6 @@
-import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
+import { describe, expect, test } from 'bun:test'
 import { runGenerators } from '../../src/generators/index.js'
 import { GvKitConfig } from '../../src/schema/config.js'
 import { parseJsonc } from '../util/jsonc.js'
@@ -47,7 +46,7 @@ describe('topology routes (hono + cf-workers)', () => {
 			}
 		})
 
-		test(`${file} web route is the apex (does not include api.)`, () => {
+		test(`${file} web route matches the selected project shape`, () => {
 			const entries = runGenerators(cfg)
 			const web = entries.find((e) => e.path === 'apps/web/wrangler.jsonc')
 			expect(web).toBeDefined()
@@ -55,7 +54,20 @@ describe('topology routes (hono + cf-workers)', () => {
 			expect(ps.length).toBeGreaterThan(0)
 			for (const p of ps) {
 				expect(p).not.toContain('api.')
+				if (cfg.choices.marketing === 'astro') expect(p).toBe('app.<domain>')
+				else expect(p).toBe('<domain>')
 			}
+		})
+
+		test(`${file} marketing owns the apex only in the Astro shape`, () => {
+			const entries = runGenerators(cfg)
+			const marketing = entries.find((e) => e.path === 'apps/marketing/wrangler.jsonc')
+			if (cfg.choices.marketing === 'inside-web') {
+				expect(marketing).toBeUndefined()
+				return
+			}
+			expect(marketing).toBeDefined()
+			expect(patterns(marketing!.content)).toEqual(['<domain>'])
 		})
 	}
 })

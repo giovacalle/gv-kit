@@ -9,6 +9,7 @@ import { generateEmail } from './email.js'
 import { generateFrontendSveltekit } from './frontend-sveltekit.js'
 import { generateHooks } from './hooks.js'
 import { generateI18n } from './i18n.js'
+import { generateMarketingAstro } from './marketing-astro.js'
 import { generateMonitoring } from './monitoring.js'
 import { generateOpenapiClient } from './openapi-client.js'
 import { generateRoot } from './root.js'
@@ -23,6 +24,7 @@ export function runGenerators(cfg: GvKitConfig): FileEntry[] {
 		...generateBackend(cfg),
 		...generateApi(cfg),
 		...generateFrontendSveltekit(cfg),
+		...generateMarketingAstro(cfg),
 		...generateUi(cfg),
 		...generateDb(cfg),
 		...generateI18n(cfg),
@@ -40,8 +42,20 @@ export function runGenerators(cfg: GvKitConfig): FileEntry[] {
 }
 
 function renderConfigJsonc(cfg: GvKitConfig): string {
-	const { name, frontend, backend, i18n, monitoring, db, apiClient, auth, email, aiTooling, deploy } =
-		cfg.choices
+	const {
+		name,
+		frontend,
+		marketing,
+		backend,
+		i18n,
+		monitoring,
+		db,
+		apiClient,
+		auth,
+		email,
+		aiTooling,
+		deploy
+	} = cfg.choices
 	const arr = (xs: readonly string[]) => `[${xs.map((x) => JSON.stringify(x)).join(', ')}]`
 	return `// Re-run: gv-kit new <out-dir> --config gv-kit.config.jsonc
 {
@@ -49,6 +63,7 @@ function renderConfigJsonc(cfg: GvKitConfig): string {
 \t"choices": {
 \t\t"name": ${JSON.stringify(name)},
 \t\t"frontend": ${JSON.stringify(frontend)},
+\t\t"marketing": ${JSON.stringify(marketing)},
 \t\t"backend": ${JSON.stringify(backend)},
 \t\t"i18n": ${JSON.stringify(i18n)},
 \t\t"monitoring": ${arr(monitoring)},

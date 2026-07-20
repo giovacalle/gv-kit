@@ -1,0 +1,17 @@
+{
+	"configVersion": 2,
+	"choices": {
+		"name": "astro-cf-workers-full",
+		"frontend": "sveltekit",
+		"marketing": "astro",
+		"backend": "hono",
+		"i18n": "paraglide",
+		"monitoring": ["umami", "posthog"],
+		"db": "postgres",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP", "google"],
+		"email": "resend",
+		"aiTooling": ["claude", "codex", "opencode"],
+		"deploy": "cf-workers"
+	}
+}

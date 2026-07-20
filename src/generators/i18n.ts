@@ -8,6 +8,7 @@ export function generateI18n(cfg: GvKitConfig): FileEntry[] {
 	const includeOtp = cfg.choices.auth.includes('emailOTP')
 	const includeAuth = cfg.choices.auth.length > 0
 	const includeApiClient = cfg.choices.apiClient === 'hey-api'
+	const includeMarketing = cfg.choices.marketing === 'astro'
 
 	return [
 		{ path: 'packages/i18n/package.json', content: PACKAGE_JSON },
@@ -16,11 +17,11 @@ export function generateI18n(cfg: GvKitConfig): FileEntry[] {
 		{ path: 'packages/i18n/project.inlang/settings.json', content: INLANG_SETTINGS },
 		{
 			path: 'packages/i18n/messages/en.json',
-			content: messagesEn({ includeOtp, includeAuth, includeApiClient })
+			content: messagesEn({ includeOtp, includeAuth, includeApiClient, includeMarketing })
 		},
 		{
 			path: 'packages/i18n/messages/it.json',
-			content: messagesIt({ includeOtp, includeAuth, includeApiClient })
+			content: messagesIt({ includeOtp, includeAuth, includeApiClient, includeMarketing })
 		},
 		{ path: 'packages/i18n/README.md', content: README }
 	]
@@ -29,11 +30,13 @@ export function generateI18n(cfg: GvKitConfig): FileEntry[] {
 function messagesEn({
 	includeOtp,
 	includeAuth,
-	includeApiClient
+	includeApiClient,
+	includeMarketing
 }: {
 	includeOtp: boolean
 	includeAuth: boolean
 	includeApiClient: boolean
+	includeMarketing: boolean
 }): string {
 	const base: Record<string, string> = {
 		$schema: 'https://inlang.com/schema/inlang-message-format',
@@ -137,17 +140,27 @@ function messagesEn({
 		base.users_email_label = 'Email'
 	}
 
+	if (includeMarketing) {
+		base.marketing_title = 'Build the product, not the setup.'
+		base.marketing_lede = 'A focused starting point for your public site and application.'
+		base.marketing_cta = 'Open the application'
+		base.app_home_title = 'Application'
+		base.app_home_lede = 'Your application is ready for its first feature.'
+	}
+
 	return JSON.stringify(base, null, 2) + '\n'
 }
 
 function messagesIt({
 	includeOtp,
 	includeAuth,
-	includeApiClient
+	includeApiClient,
+	includeMarketing
 }: {
 	includeOtp: boolean
 	includeAuth: boolean
 	includeApiClient: boolean
+	includeMarketing: boolean
 }): string {
 	const base: Record<string, string> = {
 		$schema: 'https://inlang.com/schema/inlang-message-format',
@@ -206,7 +219,7 @@ function messagesIt({
 		base.auth_validation_name_required = 'Il nome è obbligatorio'
 		base.auth_validation_name_too_long = 'Il nome è troppo lungo'
 
-		base.auth_otp_send_failed = "Impossibile inviare il codice. Riprova."
+		base.auth_otp_send_failed = 'Impossibile inviare il codice. Riprova.'
 		base.auth_otp_send_success = 'Codice inviato. Controlla la tua casella.'
 		base.auth_otp_too_many_requests = 'Troppe richieste. Riprova fra un minuto.'
 		base.auth_otp_invalid_code = 'Codice non valido o scaduto'
@@ -235,7 +248,7 @@ function messagesIt({
 		base.account_delete_desc =
 			"Rimuovi definitivamente il tuo account e tutti i dati associati. L'azione non può essere annullata."
 		base.account_delete_button = 'Elimina account'
-		base.account_delete_confirm_title = 'Eliminare l\'account?'
+		base.account_delete_confirm_title = "Eliminare l'account?"
 		base.account_delete_confirm_desc =
 			'Questo eliminerà definitivamente il tuo account e tutti i dati associati. Non potrai recuperarlo.'
 		base.account_cancel = 'Annulla'
@@ -246,10 +259,19 @@ function messagesIt({
 
 	if (includeApiClient) {
 		base.users_title = 'Utente corrente'
-		base.users_lede = 'Recuperato lato client tramite il client generato, in cache con TanStack Query.'
+		base.users_lede =
+			'Recuperato lato client tramite il client generato, in cache con TanStack Query.'
 		base.users_loading = 'Caricamento…'
 		base.users_name_label = 'Nome'
 		base.users_email_label = 'Email'
+	}
+
+	if (includeMarketing) {
+		base.marketing_title = 'Costruisci il prodotto, non la configurazione.'
+		base.marketing_lede = "Un punto di partenza essenziale per il sito pubblico e l'applicazione."
+		base.marketing_cta = "Apri l'applicazione"
+		base.app_home_title = 'Applicazione'
+		base.app_home_lede = "L'applicazione è pronta per la sua prima funzionalità."
 	}
 
 	return JSON.stringify(base, null, 2) + '\n'
@@ -301,9 +323,7 @@ const INLANG_SETTINGS =
 			$schema: 'https://inlang.com/schema/project-settings',
 			baseLocale: 'en',
 			locales: ['en', 'it'],
-			modules: [
-				'https://cdn.jsdelivr.net/npm/@inlang/plugin-message-format@4/dist/index.js'
-			],
+			modules: ['https://cdn.jsdelivr.net/npm/@inlang/plugin-message-format@4/dist/index.js'],
 			'plugin.inlang.messageFormat': {
 				pathPattern: './messages/{locale}.json'
 			}

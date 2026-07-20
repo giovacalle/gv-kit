@@ -7,6 +7,7 @@ import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 const baseChoices: Choices = {
 	name: 'demo',
 	frontend: 'sveltekit',
+	marketing: 'inside-web',
 	backend: 'hono',
 	i18n: 'skip',
 	monitoring: [],
@@ -20,7 +21,7 @@ const baseChoices: Choices = {
 
 function makeCfg(overrides: Partial<Choices>): GvKitConfig {
 	return {
-		configVersion: 1,
+		configVersion: 2,
 		choices: { ...baseChoices, ...overrides }
 	}
 }
@@ -254,6 +255,19 @@ describe('generateDeploy — orchestration', () => {
 })
 
 describe('generateDeploy — Dockerfile correctness', () => {
+	test('Node service builds use the supported tsup output-directory flag', () => {
+		const entries = runGenerators(
+			makeCfg({ marketing: 'astro', db: 'sqlite', auth: [], email: 'skip' })
+		)
+		for (const path of ['apps/api/auth/package.json', 'apps/api/users/package.json']) {
+			const pkg = JSON.parse(findEntry(entries, path)!.content) as {
+				scripts: { build: string }
+			}
+			expect(pkg.scripts.build).toContain('--target=node24 --out-dir dist')
+			expect(pkg.scripts.build).not.toContain('--outdir')
+		}
+	})
+
 	test('uses BuildKit cache mount for pnpm store', () => {
 		const entries = generateDeploy(makeCfg({}))
 		const dockerfile = findEntry(entries, 'Dockerfile')!.content
@@ -289,7 +303,89 @@ describe('generateDeploy — .dockerignore', () => {
 	})
 })
 
+describe('generateDeploy — Astro marketing runtime', () => {
+	test('inside-web preserves the previous Docker runtime and service set', () => {
+		const entries = generateDeploy(makeCfg({ marketing: 'inside-web' }))
+		const dockerfile = findEntry(entries, 'Dockerfile')!.content
+		const yaml = findEntry(entries, 'docker-compose.yml')!.content
+		expect(dockerfile).not.toContain('AS marketing-runtime')
+		expect(yaml).not.toMatch(/^ {2}marketing:/m)
+	})
+
+	test('Astro shape adds the pinned unprivileged static runtime', () => {
+		const entries = generateDeploy(makeCfg({ marketing: 'astro' }))
+		const dockerfile = findEntry(entries, 'Dockerfile')!.content
+		expect(dockerfile).toContain('AS marketing-runtime')
+		expect(dockerfile).toContain('nginxinc/nginx-unprivileged:1.28.0-alpine@sha256:')
+		expect(dockerfile).toContain('/repo/apps/marketing/dist')
+		expect(dockerfile).toContain('EXPOSE 8080')
+		expect(dockerfile).toContain('127.0.0.1:8080/healthz')
+	})
+
+	test('Astro Compose service is isolated, hardened, and maps local port 4321', () => {
+		const yaml = compose(makeCfg({ marketing: 'astro' }))
+		const marketing = yaml.split(/^ {2}marketing:/m)[1]!.split(/^ {2}[a-z][a-z0-9_-]*:$/m)[0]!
+		expect(marketing).toContain('target: marketing-runtime')
+		expect(marketing).toContain('"4321:8080"')
+		expect(marketing).toContain('read_only: true')
+		expect(marketing).toContain('no-new-privileges:true')
+		expect(marketing).toContain('/tmp')
+		expect(marketing).toContain('/healthz')
+	})
+
+	test('Astro Docker builds receive the app origin and selected monitoring values', () => {
+		const entries = generateDeploy(
+			makeCfg({ marketing: 'astro', monitoring: ['umami', 'posthog'] })
+		)
+		const dockerfile = findEntry(entries, 'Dockerfile')!.content
+		const yaml = findEntry(entries, 'docker-compose.yml')!.content
+		for (const key of [
+			'PUBLIC_MARKETING_URL',
+			'PUBLIC_APP_URL',
+			'PUBLIC_UMAMI_HOST',
+			'PUBLIC_UMAMI_WEBSITE_ID',
+			'PUBLIC_POSTHOG_KEY',
+			'PUBLIC_POSTHOG_HOST'
+		]) {
+			expect(dockerfile).toContain(`ARG ${key}`)
+			expect(yaml).toContain(`${key}:`)
+		}
+		const web = yaml.split(/^ {2}web:/m)[1]!.split(/^ {2}[a-z][a-z0-9_-]*:$/m)[0]!
+		expect(web).toContain('PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}')
+	})
+
+	test('generated Docker build uses the Node 24 baseline', () => {
+		const dockerfile = findEntry(
+			generateDeploy(makeCfg({ marketing: 'astro' })),
+			'Dockerfile'
+		)!.content
+		expect(dockerfile).toContain('ARG NODE_VERSION=24')
+		expect(dockerfile).not.toContain('ARG NODE_VERSION=20')
+	})
+})
+
 describe('generateDeploy — cf-workers workflows', () => {
+	test('Astro production and staging forward selected public monitoring variables', () => {
+		const entries = generateDeploy(
+			makeCfg({ deploy: 'cf-workers', marketing: 'astro', monitoring: ['umami', 'posthog'] })
+		)
+		for (const path of [
+			'.github/workflows/deploy-production.yml',
+			'.github/workflows/deploy-staging.yml'
+		]) {
+			const yml = findEntry(entries, path)!.content
+			for (const key of [
+				'PUBLIC_UMAMI_HOST',
+				'PUBLIC_UMAMI_WEBSITE_ID',
+				'PUBLIC_POSTHOG_KEY',
+				'PUBLIC_POSTHOG_HOST'
+			]) {
+				expect(yml).toContain(`#   - ${key}`)
+				expect(yml).toContain(`${key}: \${{ vars.${key} }}`)
+			}
+		}
+	})
+
 	test('generated workflows do not contain YAML tab indentation', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		for (const entry of entries.filter((entry) => entry.path.endsWith('.yml'))) {

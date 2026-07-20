@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
 export const FrontendChoice = z.literal('sveltekit')
+export const MarketingChoice = z.enum(['astro', 'inside-web'])
 export const BackendChoice = z.enum(['hono', 'inside-frontend'])
 export const I18nChoice = z.enum(['paraglide', 'skip'])
 export const MonitoringChoice = z.enum(['umami', 'posthog'])
@@ -11,25 +12,58 @@ export const EmailChoice = z.enum(['resend', 'notifuse', 'skip'])
 export const AiToolingChoice = z.enum(['claude', 'codex', 'opencode'])
 export const DeployChoice = z.enum(['cf-workers', 'docker', 'skip'])
 
-export const Choices = z.object({
-	name: z.string().regex(/^[a-z][a-z0-9-]*$/, 'kebab-case, lowercase, start with letter'),
-	frontend: FrontendChoice,
-	backend: BackendChoice,
-	i18n: I18nChoice,
-	monitoring: z.array(MonitoringChoice),
-	db: DbChoice,
-	apiClient: ApiClientChoice,
-	auth: z.array(AuthChoice),
-	email: EmailChoice,
-	aiTooling: z.array(AiToolingChoice),
-	deploy: DeployChoice
-})
+export const Choices = z
+	.object({
+		name: z.string().regex(/^[a-z][a-z0-9-]*$/, 'kebab-case, lowercase, start with letter'),
+		frontend: FrontendChoice,
+		marketing: MarketingChoice,
+		backend: BackendChoice,
+		i18n: I18nChoice,
+		monitoring: z.array(MonitoringChoice),
+		db: DbChoice,
+		apiClient: ApiClientChoice,
+		auth: z.array(AuthChoice),
+		email: EmailChoice,
+		aiTooling: z.array(AiToolingChoice),
+		deploy: DeployChoice
+	})
+	.strict()
 
-export const GvKitConfig = z
+const LegacyChoices = Choices.omit({ marketing: true })
+
+const GvKitConfigV1 = z
 	.object({
 		configVersion: z.literal(1),
+		choices: LegacyChoices
+	})
+	.strict()
+
+const GvKitConfigV2Input = z
+	.object({
+		configVersion: z.literal(2),
 		choices: Choices
 	})
+	.strict()
+
+/**
+ * Accept strict v1/v2 serialized configs and always return the normalized v2
+ * contract used by generators. A v1 file predates the project-shape choice,
+ * so its existing SvelteKit public surface maps to `marketing="inside-web"`.
+ *
+ * Keeping the branches strict is important: an old version number paired
+ * with a new field must fail instead of silently stripping that field and
+ * generating a different topology.
+ */
+export const GvKitConfig = z
+	.discriminatedUnion('configVersion', [GvKitConfigV1, GvKitConfigV2Input])
+	.transform((cfg) =>
+		cfg.configVersion === 1
+			? {
+					configVersion: 2 as const,
+					choices: { ...cfg.choices, marketing: 'inside-web' as const }
+				}
+			: cfg
+	)
 	.superRefine((cfg, ctx) => {
 		if (cfg.choices.backend === 'inside-frontend' && cfg.choices.apiClient !== 'skip') {
 			ctx.addIssue({

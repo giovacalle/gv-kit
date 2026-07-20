@@ -9,6 +9,7 @@ type Auth = Choices['auth']
 const baseChoices: Choices = {
 	name: 'demo',
 	frontend: 'sveltekit',
+	marketing: 'inside-web',
 	backend: 'hono',
 	i18n: 'skip',
 	monitoring: [],
@@ -22,7 +23,7 @@ const baseChoices: Choices = {
 
 function makeCfg(overrides: Partial<Choices>): GvKitConfig {
 	return {
-		configVersion: 1,
+		configVersion: 2,
 		choices: { ...baseChoices, ...overrides }
 	}
 }

@@ -7,10 +7,11 @@ function makeCfg(
 	overrides: Partial<GvKitConfig['choices']> = {}
 ): GvKitConfig {
 	return {
-		configVersion: 1,
+		configVersion: 2,
 		choices: {
 			name: 'demo-app',
 			frontend: 'sveltekit',
+			marketing: 'inside-web',
 			backend: 'hono',
 			i18n: 'paraglide',
 			monitoring: [],
@@ -108,6 +109,72 @@ describe('generateAiTooling — decision matrix', () => {
 	})
 })
 
+describe('generateAiTooling — Astro marketing guidance', () => {
+	const subsets = [
+		['claude'],
+		['codex'],
+		['opencode'],
+		['claude', 'codex'],
+		['claude', 'opencode'],
+		['codex', 'opencode'],
+		['claude', 'codex', 'opencode']
+	] as const
+
+	test('empty AI selection still emits nothing in Astro mode', () => {
+		expect(generateAiTooling(makeCfg([], { marketing: 'astro' }))).toEqual([])
+	})
+
+	for (const selected of subsets) {
+		test(`Astro + ${selected.join('+')} emits one canonical rule and only native specialists`, () => {
+			const entries = generateAiTooling(makeCfg([...selected], { marketing: 'astro' }))
+			const p = paths(entries)
+			expect(p.filter((path) => path === '.ai/rules/marketing-astro.md')).toHaveLength(1)
+
+			const specialistByTool = {
+				claude: '.claude/agents/astro-marketer.md',
+				codex: '.codex/agents/astro-marketer.toml',
+				opencode: '.opencode/agents/astro-marketer.md'
+			} as const
+			for (const [tool, specialist] of Object.entries(specialistByTool)) {
+				expect(p.includes(specialist)).toBe((selected as readonly string[]).includes(tool))
+			}
+		})
+	}
+
+	test('inside-web emits neither canonical Astro rule nor specialist', () => {
+		const p = paths(
+			generateAiTooling(makeCfg(['claude', 'codex', 'opencode'], { marketing: 'inside-web' }))
+		)
+		expect(p).not.toContain('.ai/rules/marketing-astro.md')
+		expect(p).not.toContain('.claude/agents/astro-marketer.md')
+		expect(p).not.toContain('.codex/agents/astro-marketer.toml')
+		expect(p).not.toContain('.opencode/agents/astro-marketer.md')
+	})
+
+	test('thin specialists route to the canonical rule without duplicating its body', () => {
+		const entries = generateAiTooling(
+			makeCfg(['claude', 'codex', 'opencode'], { marketing: 'astro' })
+		)
+		const rule = content(entries, '.ai/rules/marketing-astro.md')
+		for (const specialist of [
+			'.claude/agents/astro-marketer.md',
+			'.codex/agents/astro-marketer.toml',
+			'.opencode/agents/astro-marketer.md'
+		]) {
+			const descriptor = content(entries, specialist)
+			expect(descriptor).toContain('marketing-astro.md')
+			expect(descriptor).not.toContain(rule)
+		}
+	})
+
+	test('Claude stack manifest records the marketing application conditionally', () => {
+		const astroEntries = generateAiTooling(makeCfg(['claude'], { marketing: 'astro' }))
+		const integratedEntries = generateAiTooling(makeCfg(['claude'], { marketing: 'inside-web' }))
+		expect(content(astroEntries, '.claude/stack.json')).toContain('apps/marketing')
+		expect(content(integratedEntries, '.claude/stack.json')).not.toContain('apps/marketing')
+	})
+})
+
 describe('generateAiTooling — content gating', () => {
 	test('AGENTS.md does NOT mention .claude/agents when claude is not selected', () => {
 		const entries = generateAiTooling(makeCfg(['codex']))
@@ -180,5 +247,13 @@ describe('generateAiTooling — content gating', () => {
 		const sqliteAgents = content(sqliteEntries, 'AGENTS.md')
 		expect(sqliteDbRule).toContain('SQLite via Cloudflare D1')
 		expect(sqliteAgents).toContain('SQLite (Cloudflare D1)')
+	})
+
+	test('cf-workers guidance stays aligned with the generated Worker baseline', () => {
+		const entries = generateAiTooling(makeCfg(['codex']))
+		const deployRule = content(entries, '.ai/rules/deploy-cf-workers.md')
+		expect(deployRule).toContain('"compatibility_date": "2026-07-20"')
+		expect(deployRule).toContain('"compatibility_flags": ["nodejs_compat"]')
+		expect(deployRule).not.toContain('nodejs_als')
 	})
 })

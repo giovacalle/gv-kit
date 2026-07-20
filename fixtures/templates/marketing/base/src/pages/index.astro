@@ -1,0 +1,14 @@
+---
+import MarketingHome from '../components/marketing-home.astro'
+/*@gvkit:if i18nParaglide*/
+import { baseLocale } from '@repo/i18n/runtime'
+/*@gvkit:endif*/
+
+/*@gvkit:if i18nParaglide*/
+const locale = baseLocale
+/*@gvkit:else*/
+const locale = 'en'
+/*@gvkit:endif*/
+---
+
+<MarketingHome {locale} />

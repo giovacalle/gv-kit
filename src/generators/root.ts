@@ -25,9 +25,21 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 		test: 'turbo run test',
 		typecheck: 'turbo run typecheck',
 		lint: 'turbo run lint',
-		format: 'prettier --write "**/*.{ts,tsx,svelte,json,md}"',
+		format: 'prettier --write "**/*.{ts,tsx,svelte,astro,json,md}"',
 		prepare: 'husky'
 	}
+	const postinstall: string[] = []
+	if (cfg.choices.i18n === 'paraglide') {
+		postinstall.push(
+			'test ! -f packages/i18n/project.inlang/settings.json || pnpm --filter @repo/i18n build'
+		)
+	}
+	if (cfg.choices.apiClient === 'hey-api') {
+		postinstall.push(
+			'test ! -f packages/openapi-client/openapi-ts.config.ts || pnpm --filter @repo/openapi-client codegen'
+		)
+	}
+	if (postinstall.length > 0) scripts.postinstall = postinstall.join(' && ')
 	if (cfg.choices.deploy === 'cf-workers') {
 		scripts['deploy:production'] = 'turbo run deploy:production --affected'
 		scripts['deploy:staging'] = 'turbo run deploy:staging --affected'
@@ -55,13 +67,13 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 		},
 		'lint-staged': {
 			'**/*.{ts,tsx,svelte,svelte.ts,svelte.js}': ['prettier --write', 'eslint --fix'],
-			'**/*.{json,css,html,md}': ['prettier --write']
+			'**/*.{json,css,html,md,astro}': ['prettier --write']
 		},
 		overrides: {
 			zod: '^4.3.0'
 		},
 		engines: {
-			node: '>=20',
+			node: '>=24.0.0 <25.0.0',
 			pnpm: '>=11'
 		}
 	}
@@ -87,10 +99,18 @@ allowBuilds:
 `
 
 function renderTurboJson(cfg: GvKitConfig): string {
+	const marketingBuildEnv = ['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL']
+	if (cfg.choices.monitoring.includes('umami')) {
+		marketingBuildEnv.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
+	}
+	if (cfg.choices.monitoring.includes('posthog')) {
+		marketingBuildEnv.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
+	}
 	const tasks: Record<string, unknown> = {
 		build: {
 			dependsOn: ['^build'],
-			outputs: ['dist/**', '.svelte-kit/**', '.wrangler/**', 'src/paraglide/**']
+			outputs: ['dist/**', '.svelte-kit/**', '.wrangler/**', 'src/paraglide/**'],
+			...(cfg.choices.marketing === 'astro' ? { env: marketingBuildEnv } : {})
 		},
 		typecheck: {
 			dependsOn: ['^build']
@@ -186,7 +206,8 @@ const ESLINT_CONFIG_SHIM = `export { default } from '@repo/tooling-eslint'
 function renderReadme(cfg: GvKitConfig): string {
 	const { name } = cfg.choices
 	const stackLines: string[] = []
-	stackLines.push(`- Frontend: SvelteKit`)
+	if (cfg.choices.marketing === 'astro') stackLines.push('- Marketing: Astro')
+	stackLines.push(`- Application: SvelteKit`)
 	if (cfg.choices.backend === 'hono') {
 		stackLines.push('- Backend: Hono workers (containerised under `apps/api/`)')
 	} else {
@@ -230,6 +251,7 @@ pnpm dev
 
 Copy \`.env.example\` to \`.env\` and fill in any secrets your services need.
 For workers, secrets go through \`wrangler secret put <NAME>\` rather than \`.env\`.
+${renderPublicOrigins(cfg)}
 ${renderCloudflareDatabaseSetup(cfg)}
 
 ## Stack
@@ -238,8 +260,8 @@ ${stackLines.join('\n')}
 
 ## Layout
 
-- \`apps/web/\` — SvelteKit app
-${cfg.choices.backend === 'hono' ? '- `apps/api/<service>/` — independently deployable Hono workers\n' : ''}- \`packages/db/\` — Drizzle schema + client factory
+- \`apps/web/\` — SvelteKit application
+${cfg.choices.marketing === 'astro' ? '- `apps/marketing/` — static Astro marketing site and public SEO endpoints\n' : ''}${cfg.choices.backend === 'hono' ? '- `apps/api/<service>/` — independently deployable Hono workers\n' : ''}- \`packages/db/\` — Drizzle schema + client factory
 - \`packages/backend/\` — shared backend helpers (logger, error helpers, middleware)
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages and runtime\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — generated TypeScript clients per service\n' : ''}${
 		cfg.choices.aiTooling.length > 0
@@ -254,6 +276,18 @@ Every runtime and type-only import must be declared explicitly in the importing 
 `
 }
 
+function renderPublicOrigins(cfg: GvKitConfig): string {
+	if (cfg.choices.marketing !== 'astro') return ''
+	const localAppPort = cfg.choices.deploy === 'docker' ? '3000' : '5173'
+	return `
+
+The split frontend uses complete build-time origins. Local development defaults to
+\`PUBLIC_MARKETING_URL=http://localhost:4321\` and
+\`PUBLIC_APP_URL=http://localhost:${localAppPort}\`. For production, replace them with real
+origins such as \`https://example.com\` and \`https://app.example.com\`.
+The marketing site only uses the application origin for navigation; it is not an
+authentication trusted origin.`
+}
 function databaseLabel(cfg: GvKitConfig): string {
 	if (cfg.choices.db === 'postgres') {
 		return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
@@ -287,11 +321,21 @@ function renderEnvExample(cfg: GvKitConfig): string {
 	const isHono = cfg.choices.backend === 'hono'
 	const isCf = cfg.choices.deploy === 'cf-workers'
 
+	if (cfg.choices.marketing === 'astro') {
+		lines.push('')
+		lines.push('# Public build-time origins (complete URLs)')
+		lines.push('PUBLIC_MARKETING_URL=http://localhost:4321')
+		lines.push(
+			`PUBLIC_APP_URL=http://localhost:${cfg.choices.deploy === 'docker' ? '3000' : '5173'}`
+		)
+	}
+
 	if (cfg.choices.auth.length > 0) {
 		lines.push('')
 		lines.push('# Auth (better-auth)')
 		lines.push('BETTER_AUTH_SECRET=')
-		lines.push('BETTER_AUTH_URL=http://localhost:5173')
+		lines.push(`BETTER_AUTH_URL=${isHono ? 'http://localhost:8787' : 'http://localhost:5173'}`)
+		lines.push('BETTER_AUTH_TRUSTED_ORIGINS=http://localhost:5173')
 	}
 
 	if (cfg.choices.auth.includes('google')) {
@@ -339,7 +383,7 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push('')
 		lines.push('# PostHog')
 		lines.push('PUBLIC_POSTHOG_KEY=')
-		lines.push('PUBLIC_POSTHOG_HOST=https://eu.posthog.com')
+		lines.push('PUBLIC_POSTHOG_HOST=https://eu.i.posthog.com')
 	}
 
 	if (isHono) {

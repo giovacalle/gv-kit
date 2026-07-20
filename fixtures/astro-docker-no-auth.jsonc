@@ -1,0 +1,17 @@
+{
+	"configVersion": 2,
+	"choices": {
+		"name": "astro-docker-no-auth",
+		"frontend": "sveltekit",
+		"marketing": "astro",
+		"backend": "hono",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "hey-api",
+		"auth": [],
+		"email": "skip",
+		"aiTooling": [],
+		"deploy": "docker"
+	}
+}

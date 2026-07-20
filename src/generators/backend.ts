@@ -83,7 +83,7 @@ function renderPackageJson({
 
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
-		'@types/node': '^22.10.0',
+		'@types/node': '^24.0.0',
 		typescript: '~5.9.0',
 		vitest: '^4.1.7'
 	}

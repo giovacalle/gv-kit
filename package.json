@@ -41,6 +41,7 @@
 		"pretest": "bun run bundle:templates",
 		"test": "bun test",
 		"test:watch": "bun test --watch",
+		"verify:astro-matrix": "bun run scripts/verify-astro-scaffold-matrix.ts",
 		"snap": "bun run bundle:templates && UPDATE_SNAPSHOTS=1 bun test tests/pipeline.test.ts",
 		"typecheck": "tsc --noEmit",
 		"lint": "eslint src tests",

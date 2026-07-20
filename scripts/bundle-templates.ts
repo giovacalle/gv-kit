@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 /**
- * Walks fixtures/templates/{root,web,ui}/{base,overlays/*,package.json.fragments/*}
- * and emits src/generated/{root,web,ui}-templates.ts with a frozen Record<string, string>.
+ * Walks fixtures/templates/{root,web,ui,marketing}/{base,overlays/*,package.json.fragments/*}
+ * and emits src/generated/<tree>-templates.ts with a frozen Record<string, string>.
  *
  * Run: bun run bundle:templates
  * CI:  bun run bundle:templates -- --check
@@ -13,7 +13,7 @@ const REPO_ROOT = resolve(import.meta.dir, '..')
 const TEMPLATES_ROOT = join(REPO_ROOT, 'fixtures', 'templates')
 const OUTPUT_DIR = join(REPO_ROOT, 'src', 'generated')
 
-const TREES = ['root', 'web', 'ui'] as const
+const TREES = ['root', 'web', 'ui', 'marketing'] as const
 type Tree = (typeof TREES)[number]
 
 const SKIP_FILES = new Set(['.DS_Store'])

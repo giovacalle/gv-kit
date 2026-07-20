@@ -1,10 +1,11 @@
+import { marketingTemplates } from '../generated/marketing-templates.js'
 import { rootTemplates } from '../generated/root-templates.js'
 import { uiTemplates } from '../generated/ui-templates.js'
 import { webTemplates } from '../generated/web-templates.js'
 import type { FileEntry } from './files.js'
 
 export interface RenderInput {
-	tree: 'root' | 'web' | 'ui'
+	tree: 'root' | 'web' | 'ui' | 'marketing'
 	flags: Record<string, boolean>
 	vars: Record<string, string>
 }
@@ -19,13 +20,15 @@ export interface RenderFromRecordInput {
 const TREE_PREFIX: Record<RenderInput['tree'], string> = {
 	root: '',
 	web: 'apps/web/',
-	ui: 'packages/ui/'
+	ui: 'packages/ui/',
+	marketing: 'apps/marketing/'
 }
 
 const TREE_RECORD: Record<RenderInput['tree'], Record<string, string>> = {
 	root: rootTemplates,
 	web: webTemplates,
-	ui: uiTemplates
+	ui: uiTemplates,
+	marketing: marketingTemplates
 }
 
 const BASE_PREFIX = 'base/'

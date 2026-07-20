@@ -8,7 +8,13 @@ import type { GvKitConfig } from '../schema/config.js'
  * Codex's 32 KiB cap) and removes drift between Claude/Codex/opencode views.
  */
 export function generateAiToolingCodex(cfg: GvKitConfig): FileEntry[] {
-	return [{ path: 'AGENTS.md', content: renderAgentsMd(cfg) }]
+	const entries: FileEntry[] = [{ path: 'AGENTS.md', content: renderAgentsMd(cfg) }]
+	if (cfg.choices.marketing === 'astro')
+		entries.push({
+			path: '.codex/agents/astro-marketer.toml',
+			content: renderAstroMarketerAgent()
+		})
+	return entries
 }
 
 export function renderAgentsMd(cfg: GvKitConfig): string {
@@ -62,6 +68,10 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 		lines.push(
 			'- `.ai/rules/email-templates.md` — Notifuse RPC client, templates managed in Notifuse console'
 		)
+	if (cfg.choices.marketing === 'astro')
+		lines.push(
+			'- `.ai/rules/marketing-astro.md` — static Astro, shared UI, content, SEO, and delivery boundaries'
+		)
 	lines.push('')
 
 	lines.push('## Commands')
@@ -102,6 +112,8 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 function renderStackBullets(cfg: GvKitConfig): string {
 	const lines: string[] = []
 	lines.push('- Frontend: SvelteKit (Svelte 5, runes only)')
+	if (cfg.choices.marketing === 'astro')
+		lines.push('- Marketing: Astro static site (`apps/marketing`)')
 	if (cfg.choices.backend === 'hono')
 		lines.push('- Backend: Hono Workers under `apps/api/<service>/`')
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
@@ -131,6 +143,8 @@ function databaseLabel(cfg: GvKitConfig): string {
 
 function renderLayoutBullets(cfg: GvKitConfig): string {
 	const lines: string[] = []
+	if (cfg.choices.marketing === 'astro')
+		lines.push('- `apps/marketing/` — static Astro public site')
 	lines.push('- `apps/web/` — SvelteKit app')
 	if (cfg.choices.backend === 'hono')
 		lines.push('- `apps/api/<service>/` — independently deployable Hono Workers')
@@ -146,4 +160,18 @@ function renderLayoutBullets(cfg: GvKitConfig): string {
 	if (cfg.choices.apiClient === 'hey-api')
 		lines.push('- `packages/openapi-client/` — generated TypeScript clients')
 	return lines.join('\n')
+}
+
+function renderAstroMarketerAgent(): string {
+	return `name = "astro-marketer"
+description = "Builds and reviews the static Astro marketing surface without crossing application boundaries."
+developer_instructions = """
+Work only on the public surface under apps/marketing and shared presentation
+assets it legitimately consumes. Read .ai/rules/marketing-astro.md before
+editing and follow it as the canonical contract. Keep the surface static-first,
+use @repo/ui/*, hydrate only intentional interactions, and run the marketing
+typecheck and production build. Refuse to move auth, backend, database, or
+application behavior into marketing.
+"""
+`
 }

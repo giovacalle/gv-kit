@@ -390,6 +390,7 @@ export default defineConfig({
 const RESEND_TSCONFIG = `{
 	"extends": "@repo/tooling-typescript/library.json",
 	"compilerOptions": {
+		"allowJs": true,
 		"jsx": "react-jsx",
 		"lib": ["ES2022", "DOM"],
 		"outDir": "dist"

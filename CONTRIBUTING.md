@@ -28,6 +28,10 @@ When you change a generator, snapshots will fail. Run `bun run snap`, **inspect 
 
 The fixtures in `fixtures/` cover the matrix corners:
 
+- `astro-cf-workers-full` — separate Astro/SvelteKit shape with every shared option
+- `astro-docker-no-auth` — static marketing delivery through nginx
+- `astro-skip-minimal` — separate shape without deployment output
+- `v2-inside-web-minimal` — explicit v2 twin of the legacy `minimal` fixture
 - `minimal` / `inside-frontend-typical` — single SvelteKit Worker
 - `hono-cf-workers-full` — full Hono stack on Cloudflare
 - `hono-docker-full` — Hono in Docker containers
@@ -40,6 +44,26 @@ bun run build
 node dist/cli.js new /tmp/sandbox --yes --config fixtures/<your-fixture>.jsonc
 cd /tmp/sandbox && pnpm install && pnpm typecheck
 ```
+
+### Astro pairwise matrix
+
+The Astro matrix reduces 11,520 prompt-reachable, schema-valid combinations to 35
+deterministic pairwise rows. It covers the Hono and inside-frontend topologies. The
+normal test suite validates every row through `GvKitConfig` and `buildScaffoldPlan`; the generated-project runner
+additionally installs, tests, typechecks, lints, builds, and applies deploy-specific
+gates.
+
+```bash
+bun run verify:astro-matrix -- --list
+bun run verify:astro-matrix -- --entry m01
+bun run verify:astro-matrix
+```
+
+The runner writes reports and per-gate logs to `.scratch/astro-scaffold-matrix/`.
+Use `--output <dir>` to keep artifacts elsewhere and `--entry <id>` to shard the
+same stable matrix in CI or local parallel runs. Cloudflare rows add marketing
+and web Wrangler dry-runs; Docker rows validate `docker compose config` without
+building images or starting containers.
 
 ## Boundary policy
 
@@ -56,6 +80,8 @@ Session validation goes through `/internal/session` only — CF service binding 
 Generators live in `src/generators/` and are pure: `(cfg: GvKitConfig) => FileEntry[]`. No `fs`, no `child_process`, no `Bun.*`, no `Math.random()`. Side effects only in `src/pipeline/execute.ts`.
 
 Wrangler config is always `wrangler.jsonc` (never `.toml`). Tailwind 4 is `@theme` only (no `tailwind.config.js`). Paraglide v2 uses `paraglideVitePlugin` (the `@inlang/paraglide-sveltekit` adapter is deprecated).
+
+Marketing templates are a separate first-class tree under `fixtures/templates/marketing/`. Run `bun run bundle:templates` after editing any template tree and commit the matching `src/generated/*-templates.ts` output. Astro config must export a plain object, and browser-only monitoring belongs in an Astro client script rather than frontmatter.
 
 ## Release
 

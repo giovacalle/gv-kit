@@ -62,7 +62,7 @@ const TS_CONFIG_PACKAGE_JSON =
 			},
 			dependencies: {
 				'@cloudflare/workers-types': '^4.20240000.0',
-				'@types/node': '^20.0.0'
+				'@types/node': '^24.0.0'
 			}
 		},
 		null,
@@ -201,6 +201,7 @@ export default tseslint.config(
 	{
 		ignores: [
 			'**/node_modules/**',
+			'**/build/**',
 			'**/dist/**',
 			'**/.turbo/**',
 			'**/.svelte-kit/**',
@@ -227,6 +228,7 @@ const PRETTIER_PACKAGE_JSON =
 			},
 			dependencies: {
 				'@ianvs/prettier-plugin-sort-imports': '^4.4.0',
+				'prettier-plugin-astro': '^0.14.1',
 				'prettier-plugin-svelte': '^3.5.0',
 				'prettier-plugin-tailwindcss': '^0.8.0'
 			}
@@ -258,10 +260,14 @@ const config = {
 	endOfLine: 'lf',
 	plugins: [
 		require.resolve('@ianvs/prettier-plugin-sort-imports'),
+		require.resolve('prettier-plugin-astro'),
 		require.resolve('prettier-plugin-svelte'),
 		require.resolve('prettier-plugin-tailwindcss')
 	],
-	overrides: [{ files: '*.svelte', options: { parser: 'svelte' } }],
+	overrides: [
+		{ files: '*.astro', options: { parser: 'astro' } },
+		{ files: '*.svelte', options: { parser: 'svelte' } }
+	],
 	importOrder: [
 		'<BUILTIN_MODULES>',
 		'',

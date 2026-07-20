@@ -1,5 +1,6 @@
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
+import { WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
 
 /**
@@ -19,6 +20,8 @@ export function generateAiToolingRules(cfg: GvKitConfig): FileEntry[] {
 
 	if (cfg.choices.email !== 'skip')
 		entries.push({ path: '.ai/rules/email-templates.md', content: renderEmailRule(cfg) })
+	if (cfg.choices.marketing === 'astro')
+		entries.push({ path: '.ai/rules/marketing-astro.md', content: renderMarketingAstroRule() })
 
 	const fixtureRules = renderTemplate({
 		tree: 'root',
@@ -29,11 +32,58 @@ export function generateAiToolingRules(cfg: GvKitConfig): FileEntry[] {
 			i18nParaglide: cfg.choices.i18n === 'paraglide',
 			apiClientHeyApi: cfg.choices.apiClient === 'hey-api'
 		},
-		vars: { __PROJECT__: cfg.choices.name }
+		vars: {
+			__PROJECT__: cfg.choices.name,
+			__COMPAT_DATE__: WORKERS_COMPAT_DATE
+		}
 	})
 	entries.push(...fixtureRules.filter((e) => e.path.startsWith('.ai/rules/')))
 
 	return entries
+}
+
+function renderMarketingAstroRule(): string {
+	return `# Astro marketing
+
+\`apps/marketing\` is the public, static-first surface. It owns the homepage,
+canonical metadata, robots, sitemap, and static 404. \`apps/web\` owns the
+application; marketing only navigates to the explicit \`PUBLIC_APP_URL\`.
+
+## Engineering boundary
+
+- Keep Astro at \`output: 'static'\`. Do not add actions, API routes, runtime
+  secrets, auth/session logic, database access, or application data fetching.
+- Compose pages in \`.astro\`. Shared Svelte primitives render statically by
+  default; add a \`client:*\` directive only around a coherent interaction.
+- Import shared UI only through \`@repo/ui/*\`. The \`@lib\` alias exists solely
+  so raw \`@repo/ui\` source resolves its package-internal imports.
+- Import \`@repo/ui/styles\` once. Keep Tailwind classes literal and preserve
+  source scanning for both marketing \`.astro\` files and package Svelte files.
+- Keep optimized images under \`src/\`; use meaningful alt text, or \`alt=""\`
+  for decorative images.
+
+## Public content and URLs
+
+- Use one descriptive H1, semantic headings, concrete copy, and destination-clear
+  CTA text. Never invent metrics, customers, testimonials, compliance, or proof.
+- Read canonical/site URLs from \`PUBLIC_MARKETING_URL\` and the application CTA
+  from \`PUBLIC_APP_URL\`. Never derive one hostname from the other.
+- With Paraglide, catalogs remain in \`packages/i18n\`. Render the base locale at
+  \`/\`, non-base locales at \`/<locale>/\`, and pass locale explicitly to every
+  message function during prerender.
+
+## Monitoring and delivery
+
+- Expose only selected \`PUBLIC_*\` analytics values. Umami is a deferred external
+  script. PostHog initializes from an Astro client script, never frontmatter.
+- Cloudflare and Docker serve the same \`dist/\`. Missing routes return the
+  generated 404; do not add an SPA fallback. Only fingerprinted assets receive
+  long immutable caching.
+
+Run the marketing typecheck and production build before reporting completion.
+Inspect the generated HTML/JS to confirm only intended islands hydrate and no
+auth, database, or backend secrets reached the bundle.
+`
 }
 
 /* ------------------------------------------------------------------ */

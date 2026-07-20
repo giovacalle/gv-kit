@@ -37,6 +37,9 @@ jobs:
           - hono-cf-workers-full
           - hono-docker-full
           - hono-skip-deploy
+          - astro-cf-workers-full
+          - astro-docker-no-auth
+          - astro-skip-minimal
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v2
@@ -57,6 +60,9 @@ jobs:
         run: pnpm -r --if-present codegen
       - name: Typecheck scaffolded
         working-directory: /tmp/scaffold
+        env:
+          PUBLIC_MARKETING_URL: https://marketing.example.test
+          PUBLIC_APP_URL: https://app.example.test
         run: pnpm run typecheck
       - name: Test scaffolded
         working-directory: /tmp/scaffold

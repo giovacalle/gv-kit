@@ -16,9 +16,19 @@ const fixtures = readdirSync(fixturesDir)
 describe('plan snapshots', () => {
 	for (const file of fixtures) {
 		test(file, () => {
-			const raw = parseJsonc(readFileSync(join(fixturesDir, file), 'utf8'))
+			const raw = parseJsonc<{
+				configVersion: 1
+				choices: Record<string, unknown>
+			}>(readFileSync(join(fixturesDir, file), 'utf8'))
 			const cfg = GvKitConfig.parse(raw)
 			const entries = buildScaffoldPlan(cfg)
+			if (raw.choices.backendRuntime === undefined) {
+				const explicitPromise = GvKitConfig.parse({
+					...raw,
+					choices: { ...raw.choices, backendRuntime: 'promise' }
+				})
+				expect(buildScaffoldPlan(explicitPromise)).toEqual(entries)
+			}
 
 			const manifest = entries
 				.map((e) => `${e.path}  ${hash(e.content)}`)

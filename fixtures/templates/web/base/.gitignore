@@ -5,5 +5,8 @@ dist
 .wrangler
 .env
 .env.*
+/*@gvkit:if templateSourceOnly*/
+!.env
+/*@gvkit:endif*/
 !.env.example
 .DS_Store

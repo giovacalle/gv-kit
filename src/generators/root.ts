@@ -28,9 +28,13 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 		format: 'prettier --write "**/*.{ts,tsx,svelte,json,md}"',
 		prepare: 'husky'
 	}
-	if (cfg.choices.i18n === 'paraglide') {
-		scripts.postinstall = 'pnpm --filter @repo/i18n build'
+	const postinstall: string[] = []
+	const buildsI18n = cfg.choices.backendRuntime === 'effect' && cfg.choices.i18n === 'paraglide'
+	if (buildsI18n) postinstall.push('pnpm --filter @repo/i18n build')
+	if (cfg.choices.backendRuntime === 'effect' && cfg.choices.apiClient === 'hey-api') {
+		scripts['client:generate'] = 'pnpm --filter @repo/openapi-client codegen'
 	}
+	if (postinstall.length > 0) scripts.postinstall = postinstall.join(' && ')
 	if (cfg.choices.deploy === 'cf-workers') {
 		scripts['deploy:production'] = 'turbo run deploy:production --affected'
 		scripts['deploy:staging'] = 'turbo run deploy:staging --affected'
@@ -237,13 +241,13 @@ ${renderCloudflareDatabaseSetup(cfg)}
 
 ## Stack
 
-${stackLines.join('\n')}
+${stackLines.join('\n')}${renderEffectArchitecture(cfg)}
 
 ## Layout
 
 - \`apps/web/\` — SvelteKit app
 ${cfg.choices.backend === 'hono' ? '- `apps/api/<service>/` — independently deployable Hono workers\n' : ''}- \`packages/db/\` — Drizzle schema + client factory
-- \`packages/backend/\` — shared backend helpers (logger, error helpers, middleware)
+- \`packages/backend/\` — ${cfg.choices.backendRuntime === 'effect' ? 'horizontal Effect/Hono runners and logging; workflows and clients stay service-local' : 'shared backend helpers (logger, error helpers, middleware)'}
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages and runtime\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — generated TypeScript clients per service\n' : ''}${
 		cfg.choices.aiTooling.length > 0
 			? `\nSee \`.ai/rules/\` for architecture rules, in particular the service\nboundary policy.\n`
@@ -255,6 +259,48 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages 
 
 Every runtime and type-only import must be declared explicitly in the importing package's \`package.json\` (including ambient types from \`@repo/tooling-typescript\` such as \`@types/node\` or \`@cloudflare/workers-types\`). ESLint's \`import/no-extraneous-dependencies\` rule catches anything that slips through (\`pnpm lint\`).
 `
+}
+
+function renderEffectArchitecture(cfg: GvKitConfig): string {
+	if (cfg.choices.backendRuntime !== 'effect') return ''
+
+	const cloudflareEvidence =
+		cfg.choices.deploy === 'cf-workers'
+			? `
+
+The generated Cloudflare shape has been exercised as a real facsimile: strict
+Wrangler dry-runs, D1 migrations, the auth service binding, runtime contract
+generation, and explicit resource teardown all passed. Keep those boundaries
+visible when extending the scaffold.`
+			: ''
+
+	return `
+
+## Hybrid Hono + Effect architecture
+
+Effect mode is scoped to \`backend=hono\`. It does not apply to
+\`backend=inside-frontend\`, and the Svelte UI remains outside the Effect
+backend architecture unless you make a separate, explicit frontend decision.
+
+Hono remains the HTTP adapter and router. Route code owns request validation,
+request-scoped layer construction, response serialization, and status codes;
+Effect programs own application workflows, typed failures, and service
+composition. Do not replace Hono with Effect HttpApi.
+
+Backend boundary schemas come from Effect Schema, cross the Standard Schema
+bridge, and are registered with \`hono-openapi\`. Every response schema is
+explicit. The runtime \`/openapi.json\` document must continue to pass the
+Hey API generation and generated-client consumer typecheck. Run
+\`pnpm client:generate\` against a reachable users API after contract changes.
+Before introducing schema shapes that alter or break OpenAPI \`$ref\` or
+\`components\`, extend the contract validation tests.
+
+The Hono boundary owns the request lifetime. Build only the service layers a
+workflow consumes, such as \`AuthClient\` and \`Database\`, from the Cloudflare
+\`env\`, service bindings, D1, and request headers. The raw \`Request\` and
+execution context remain ordinary adapter values unless cancellation or
+background-work semantics justify promoting a capability into a service. None
+of these Cloudflare inputs belong in Effect \`Config\`.${cloudflareEvidence}`
 }
 
 function databaseLabel(cfg: GvKitConfig): string {

@@ -1,4 +1,4 @@
-/*@gvkit:if i18nParaglide*/
+/*@gvkit:if webCompilesI18n*/
 import { paraglideVitePlugin } from '@inlang/paraglide-js'
 /*@gvkit:endif*/
 import { sveltekit } from '@sveltejs/kit/vite'
@@ -8,7 +8,7 @@ import { defineConfig } from 'vite'
 export default defineConfig({
 	plugins: [
 		tailwindcss(),
-		/*@gvkit:if i18nParaglide*/
+		/*@gvkit:if webCompilesI18n*/
 		paraglideVitePlugin({
 			project: '../../packages/i18n/project.inlang',
 			outdir: '../../packages/i18n/src/paraglide',

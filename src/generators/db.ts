@@ -7,18 +7,39 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 	const isCf = cfg.choices.deploy === 'cf-workers'
 	const hasAuth = cfg.choices.auth.length > 0
 	const project = cfg.choices.name
+	const effectMode = cfg.choices.backendRuntime === 'effect'
 
 	const entries: FileEntry[] = [
-		{ path: 'packages/db/package.json', content: renderPackageJson({ project, isSqlite, isCf }) },
+		{
+			path: 'packages/db/package.json',
+			content: renderPackageJson({ project, isSqlite, isCf, effectMode })
+		},
 		{ path: 'packages/db/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
 		{ path: 'packages/db/drizzle.config.ts', content: renderDrizzleConfig({ isSqlite, isCf }) },
 		{ path: 'packages/db/src/client.ts', content: renderClient({ isSqlite, isCf }) },
 		{ path: 'packages/db/src/index.ts', content: renderIndex(hasAuth) },
-		{ path: 'packages/db/src/schema/index.ts', content: renderSchemaIndex(hasAuth) },
-		{ path: 'packages/db/src/schema/sample.ts', content: renderSampleSchema(isSqlite) },
+		{
+			path: 'packages/db/src/schema/index.ts',
+			content: renderSchemaIndex({ hasAuth, includeSample: !effectMode })
+		},
 		{ path: 'packages/db/migrations/.gitkeep', content: '' },
-		{ path: 'packages/db/README.md', content: renderReadme({ isSqlite, isCf, hasAuth }) }
+		{
+			path: 'packages/db/README.md',
+			content: renderReadme({
+				isSqlite,
+				isCf,
+				hasAuth,
+				includeSample: !effectMode,
+				effectMode
+			})
+		}
 	]
+
+	if (!effectMode)
+		entries.push({
+			path: 'packages/db/src/schema/sample.ts',
+			content: renderSampleSchema(isSqlite)
+		})
 
 	if (hasAuth)
 		entries.push({ path: 'packages/db/src/schema/auth.ts', content: renderAuthSchema(isSqlite) })
@@ -29,11 +50,13 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 function renderPackageJson({
 	project,
 	isSqlite,
-	isCf
+	isCf,
+	effectMode
 }: {
 	project: string
 	isSqlite: boolean
 	isCf: boolean
+	effectMode: boolean
 }): string {
 	const dependencies: Record<string, string> = {
 		'drizzle-orm': '^0.45.0',
@@ -63,12 +86,12 @@ function renderPackageJson({
 	}
 	if (isCf) {
 		scripts['db:migrate:production'] = isSqlite
-			? `wrangler d1 migrations apply ${project}-db --remote --config ../../apps/api/auth/wrangler.jsonc`
+			? `wrangler d1 migrations apply ${project}-db --remote${effectMode ? ' --config ../../apps/api/auth/wrangler.jsonc' : ''}`
 			: 'drizzle-kit migrate'
 	}
 	if (isCf && isSqlite) {
 		scripts['db:migrate:local'] =
-			`wrangler d1 migrations apply ${project}-db --local --config ../../apps/api/auth/wrangler.jsonc`
+			`wrangler d1 migrations apply ${project}-db --local${effectMode ? ' --config ../../apps/api/auth/wrangler.jsonc' : ''}`
 	}
 
 	const pkg = {
@@ -237,10 +260,17 @@ function renderIndex(hasAuth: boolean): string {
 	return lines.join('\n') + '\n'
 }
 
-function renderSchemaIndex(hasAuth: boolean): string {
+function renderSchemaIndex({
+	hasAuth,
+	includeSample
+}: {
+	hasAuth: boolean
+	includeSample: boolean
+}): string {
 	const lines: string[] = []
 	if (hasAuth) lines.push(`export * from './auth.js'`)
-	lines.push(`export * from './sample.js'`)
+	if (includeSample) lines.push(`export * from './sample.js'`)
+	if (lines.length === 0) lines.push('export {}')
 	return lines.join('\n') + '\n'
 }
 
@@ -383,11 +413,15 @@ export const verification = pgTable('verification', {
 function renderReadme({
 	isSqlite,
 	isCf,
-	hasAuth
+	hasAuth,
+	includeSample,
+	effectMode
 }: {
 	isSqlite: boolean
 	isCf: boolean
 	hasAuth: boolean
+	includeSample: boolean
+	effectMode: boolean
 }): string {
 	const driverLabel =
 		isSqlite && isCf
@@ -427,7 +461,7 @@ The active driver is selected at scaffold time. To switch, regenerate.
 
 ## Schemas
 
-- \`src/schema/sample.ts\` — small \`posts\` table (replace once you add real tables)
+${includeSample ? '- `src/schema/sample.ts` — small `posts` table (replace once you add real tables)' : ''}
 ${hasAuth ? '- `src/schema/auth.ts` — better-auth tables (`user`, `session`, `account`, `verification`)\n' : ''}
 
 ## Migration workflow
@@ -473,6 +507,19 @@ Then run \`pnpm db:generate\` and review the diff.
 
 \`@repo/db\` exports schema and a client factory. It does NOT contain auth
 business logic — that lives in the auth service. Other services consume the
-schema they own; the auth tables here are queried only by the auth service.
+schema they own; the auth tables here are queried only by the auth service.${
+	effectMode
+		? `
+
+## Effect boundary
+
+This package intentionally stays thin: schema, migrations, and \`createDb\`
+are stable Drizzle primitives and do not depend on Effect. A consuming Hono
+service wraps its request-specific D1 or database client in a local Effect
+\`Database\` layer. This avoids a second database API and keeps Cloudflare
+binding lifetime and ownership visible at the request boundary.
+`
+		: ''
+}
 `
 }

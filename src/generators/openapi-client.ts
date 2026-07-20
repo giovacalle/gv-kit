@@ -6,25 +6,39 @@ export function generateOpenapiClient(cfg: GvKitConfig): FileEntry[] {
 	if (cfg.choices.apiClient !== 'hey-api') return []
 	const effectMode = cfg.choices.backendRuntime === 'effect'
 
-	return [
+	const entries: FileEntry[] = [
 		{ path: 'packages/openapi-client/package.json', content: packageJson(effectMode) },
-		{ path: 'packages/openapi-client/tsconfig.json', content: TSCONFIG },
-		{ path: 'packages/openapi-client/openapi-ts.config.ts', content: OPENAPI_TS_CONFIG },
+		{ path: 'packages/openapi-client/tsconfig.json', content: tsconfig(effectMode) },
+		{
+			path: 'packages/openapi-client/openapi-ts.config.ts',
+			content: openapiTsConfig(effectMode)
+		},
 		{ path: 'packages/openapi-client/src/index.ts', content: SRC_INDEX },
 		{ path: 'packages/openapi-client/src/users/index.ts', content: USERS_PLACEHOLDER },
-		{ path: 'packages/openapi-client/README.md', content: README }
+		{ path: 'packages/openapi-client/README.md', content: readme(effectMode) }
 	]
+	if (effectMode) entries.push({
+			path: 'packages/openapi-client/src/contract-consumer.ts',
+			content: EFFECT_CONTRACT_CONSUMER
+	})
+	return entries
 }
 
 function packageJson(effectMode: boolean): string {
 	const dependencies: Record<string, string> = effectMode
 		? {
-				'@tanstack/svelte-query': '^6.1.33'
+				'@tanstack/svelte-query': '^5.74.2'
 			}
 		: {
 				'@hey-api/client-fetch': '^0.13.1',
 				'@tanstack/svelte-query': '^6.1.33'
 			}
+
+	const scripts: Record<string, string> = {
+		codegen: 'openapi-ts',
+		lint: 'eslint .'
+	}
+	if (effectMode) scripts.typecheck = 'tsc --noEmit'
 
 	return (
 		JSON.stringify(
@@ -37,12 +51,14 @@ function packageJson(effectMode: boolean): string {
 					'.': './src/index.ts',
 					'./users': './src/users/index.ts'
 				},
-				scripts: {
-					codegen: 'openapi-ts',
-					lint: 'eslint .'
-				},
+				scripts,
 				dependencies,
 				devDependencies: {
+					...(effectMode
+						? {
+							'@types/node': '^22.10.0'
+						}
+						: {}),
 					'@hey-api/openapi-ts': effectMode ? '0.99.0' : '^0.97.3',
 					'@repo/tooling-typescript': 'workspace:*',
 					typescript: '~5.9.0'
@@ -54,14 +70,58 @@ function packageJson(effectMode: boolean): string {
 	)
 }
 
-const TSCONFIG = `{
+function tsconfig(effectMode: boolean): string {
+	return effectMode ? EFFECT_TSCONFIG : PROMISE_TSCONFIG
+}
+
+const EFFECT_TSCONFIG = `{
+	"extends": "@repo/tooling-typescript/library.json",
+	"compilerOptions": {
+		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"types": ["node"]
+	},
+	"include": ["src/**/*", "openapi-ts.config.ts"],
+	"exclude": ["node_modules", "dist"]
+}
+`
+
+const PROMISE_TSCONFIG = `{
 	"extends": "@repo/tooling-typescript/library.json",
 	"include": ["src/**/*", "openapi-ts.config.ts"],
 	"exclude": ["node_modules", "dist"]
 }
 `
 
-const OPENAPI_TS_CONFIG = `import { defineConfig } from '@hey-api/openapi-ts'
+function openapiTsConfig(effectMode: boolean): string {
+	return effectMode ? EFFECT_OPENAPI_TS_CONFIG : PROMISE_OPENAPI_TS_CONFIG
+}
+
+const EFFECT_OPENAPI_TS_CONFIG = `import { defineConfig } from '@hey-api/openapi-ts'
+
+const openApiUrl = process.env.OPENAPI_URL ?? 'http://localhost:8788/openapi.json'
+
+export default defineConfig([
+	{
+		input: openApiUrl,
+		// Pin tsConfigPath to this package — otherwise the generator walks up to the workspace-root tsconfig.
+		output: { path: 'src/users', tsConfigPath: './tsconfig.json' },
+		plugins: [
+			{ name: '@hey-api/client-fetch', exportFromIndex: true },
+			'@hey-api/typescript',
+			'@hey-api/sdk',
+			{
+				name: '@tanstack/svelte-query',
+				exportFromIndex: true,
+				queryOptions: true,
+				infiniteQueryOptions: true,
+				mutationOptions: true
+			}
+		]
+	}
+])
+`
+
+const PROMISE_OPENAPI_TS_CONFIG = `import { defineConfig } from '@hey-api/openapi-ts'
 
 export default defineConfig([
 	{
@@ -88,11 +148,53 @@ export default defineConfig([
 const SRC_INDEX = `export * as users from './users/index.js'
 `
 
-// Overwritten by \`pnpm codegen\` (openapi-ts) once apps/api/users/openapi.json exists.
+// Overwritten by \`pnpm codegen\` (openapi-ts).
 const USERS_PLACEHOLDER = `export {}
 `
 
-const README = `# @repo/openapi-client
+const EFFECT_CONTRACT_CONSUMER = `import { getUsersMeOptions } from './users/index.js'
+
+export const usersMeQueryOptions = getUsersMeOptions()
+`
+
+function readme(effectMode: boolean): string {
+	return effectMode ? EFFECT_README : PROMISE_README
+}
+
+const EFFECT_README = `# @repo/openapi-client
+
+The Effect users client is generated exclusively from the OpenAPI document
+served by the runtime Hono application. No OpenAPI file is materialized.
+
+Start the users API, then generate the client from its runtime URL:
+
+\`\`\`bash
+pnpm --filter './apps/api/users' dev
+# In another shell:
+pnpm client:generate
+\`\`\`
+
+The default source is \`http://localhost:8788/openapi.json\`. Point codegen at
+any reachable environment without changing committed files:
+
+\`\`\`bash
+OPENAPI_URL=https://api.staging.example.com/openapi.json pnpm client:generate
+\`\`\`
+
+The normal root \`pnpm typecheck\` checks the generated consumer. Codegen is
+explicit and never runs during \`postinstall\`.
+
+Consumers import per namespace:
+
+\`\`\`ts
+import { getUsersMe, getUsersMeOptions } from '@repo/openapi-client/users'
+\`\`\`
+
+The auth service is deliberately omitted because better-auth ships its own
+typed client.
+`
+
+const PROMISE_README = `# @repo/openapi-client
 
 Per-service TypeScript clients generated from each Hono service's OpenAPI spec
 via [Hey API](https://heyapi.dev/). Each non-auth service also gets typed

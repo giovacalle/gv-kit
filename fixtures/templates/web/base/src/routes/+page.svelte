@@ -1,6 +1,8 @@
 <script lang="ts">
+	/*@gvkit:if authUiImports*/
 	import * as Button from '@repo/ui/primitives/button'
 	import { Badge } from '@repo/ui/primitives/badge'
+	/*@gvkit:endif*/
 	import Seo from '$lib/components/seo.svelte'
 	/*@gvkit:if i18nParaglide*/
 	import * as m from '@repo/i18n/messages'

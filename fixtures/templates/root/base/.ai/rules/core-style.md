@@ -6,9 +6,15 @@ Micro-conventions that shape how code reads in this repo. They are deliberately 
 
 When the body of a control-flow statement is a single statement, omit the braces and put it on the same line.
 
+<!--@gvkit:if effectBackend-->
+- ✓ `if (!row) return yield* Effect.fail(new UserNotFound({ message: 'user not found', code: 'USER_NOT_FOUND' }))`
+- ✓ `if (!session) return null`
+- ✗ `if (!row) { return yield* Effect.fail(new UserNotFound({ message: 'user not found', code: 'USER_NOT_FOUND' })) }`
+<!--@gvkit:else-->
 - ✓ `if (!row) throw errors.notFound('user not found')`
 - ✓ `if (!session) return null`
 - ✗ `if (!row) { throw errors.notFound('user not found') }`
+<!--@gvkit:endif-->
 
 Multi-line bodies always use braces. Applies to `if`, `else`, `for`, `while`.
 

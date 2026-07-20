@@ -39,7 +39,9 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 		`- \`.ai/rules/core-stack.md\` — layout, request lifecycle, service-boundary policy${cfg.choices.backend === 'hono' ? ' (CRITICAL — auth-as-service)' : ''}`
 	)
 	lines.push(
-		`- \`.ai/rules/api-backend.md\` — error pattern, runtime constraints${cfg.choices.backend === 'hono' ? ', domain layering (`packages/backend/src/core/**`)' : ''}`
+		cfg.choices.backendRuntime === 'effect'
+			? '- `.ai/rules/api-backend.md` — Hono adapter, Effect workflows, request layers, typed HTTP mapping, runtime OpenAPI contract'
+			: `- \`.ai/rules/api-backend.md\` — error pattern, runtime constraints${cfg.choices.backend === 'hono' ? ', domain layering (`packages/backend/src/core/**`)' : ''}`
 	)
 	lines.push('- `.ai/rules/db-drizzle.md` — schema, factory, migrations')
 	lines.push(
@@ -103,7 +105,11 @@ function renderStackBullets(cfg: GvKitConfig): string {
 	const lines: string[] = []
 	lines.push('- Frontend: SvelteKit (Svelte 5, runes only)')
 	if (cfg.choices.backend === 'hono')
-		lines.push('- Backend: Hono Workers under `apps/api/<service>/`')
+		lines.push(
+			cfg.choices.backendRuntime === 'effect'
+				? '- Backend: Hono HTTP adapters + Effect application workflows under `apps/api/<service>/`'
+				: '- Backend: Hono Workers under `apps/api/<service>/`'
+		)
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
 	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
 	if (cfg.choices.auth.length > 0)
@@ -135,7 +141,11 @@ function renderLayoutBullets(cfg: GvKitConfig): string {
 	if (cfg.choices.backend === 'hono')
 		lines.push('- `apps/api/<service>/` — independently deployable Hono Workers')
 	lines.push('- `packages/db/` — Drizzle schema + client factory')
-	lines.push('- `packages/backend/` — horizontal helpers (logger, error helpers, middleware)')
+	lines.push(
+		cfg.choices.backendRuntime === 'effect'
+			? '- `packages/backend/` — horizontal Effect/Hono runners and logger; workflows and service clients stay in their owning `apps/api/<service>/`'
+			: '- `packages/backend/` — horizontal helpers (logger, error helpers, middleware)'
+	)
 	lines.push(
 		'- `packages/ui/` — shared primitives (`$lib/components/primitives/`), `cn()` helper, Tailwind theme'
 	)

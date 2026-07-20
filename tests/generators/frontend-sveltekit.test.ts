@@ -342,4 +342,137 @@ describe('generateFrontendSveltekit — hey-api / TanStack Query overlay', () =>
 		expect(off.dependencies['@tanstack/svelte-query']).toBeUndefined()
 		expect(off.dependencies['@repo/openapi-client']).toBeUndefined()
 	})
+
+	test('Effect Hey API renders the selected response DTO without changing Promise output', () => {
+		const effectNoAuth = findEntry(
+			generateFrontendSveltekit(
+				makeCfg({ backendRuntime: 'effect', apiClient: 'hey-api', auth: [], email: 'skip' })
+			),
+			'apps/web/src/routes/users/+page.svelte'
+		)!.content
+		const effectAuth = findEntry(
+			generateFrontendSveltekit(
+				makeCfg({
+					backendRuntime: 'effect',
+					apiClient: 'hey-api',
+					auth: ['google'],
+					email: 'skip'
+				})
+			),
+			'apps/web/src/routes/users/+page.svelte'
+		)!.content
+		const promiseNoAuth = findEntry(
+			generateFrontendSveltekit(
+				makeCfg({ backendRuntime: 'promise', apiClient: 'hey-api', auth: [], email: 'skip' })
+			),
+			'apps/web/src/routes/users/+page.svelte'
+		)!.content
+
+		for (const field of ['data.id', 'data.sessionId', 'data.expiresAt']) expect(effectNoAuth).toContain(field)
+		expect(effectNoAuth).not.toContain('data.name')
+		expect(effectNoAuth).not.toContain('data.email')
+		expect(effectAuth).toContain('$profile.data.name')
+		expect(effectAuth).toContain('$profile.data.email')
+		expect(promiseNoAuth).toContain('profile.data.name')
+		expect(promiseNoAuth).toContain('profile.data.email')
+	})
+})
+
+describe('generateFrontendSveltekit — Effect auth variants', () => {
+	test('Effect delegates Paraglide compilation to the i18n package only', () => {
+		const effect = findEntry(
+			generateFrontendSveltekit(
+				makeCfg({ backendRuntime: 'effect', i18n: 'paraglide' })
+			),
+			'apps/web/vite.config.ts'
+		)!.content
+		const promise = findEntry(
+			generateFrontendSveltekit(
+				makeCfg({ backendRuntime: 'promise', i18n: 'paraglide' })
+			),
+			'apps/web/vite.config.ts'
+		)!.content
+		const noI18n = findEntry(
+			generateFrontendSveltekit(makeCfg({ backendRuntime: 'effect', i18n: 'skip' })),
+			'apps/web/vite.config.ts'
+		)!.content
+
+		expect(effect).not.toContain('paraglideVitePlugin')
+		expect(promise).toContain("import { paraglideVitePlugin } from '@inlang/paraglide-js'")
+		expect(promise).toContain('paraglideVitePlugin({')
+		expect(noI18n).not.toContain('paraglideVitePlugin')
+	})
+
+	test('uses layout locals exactly when an Effect shell consumes them', () => {
+		for (const auth of [[], ['google']] as Auth[]) for (const i18n of ['skip', 'paraglide'] as const) {
+				const effect = findEntry(
+					generateFrontendSveltekit(
+						makeCfg({ backendRuntime: 'effect', auth, email: 'skip', i18n })
+					),
+					'apps/web/src/routes/+layout.server.ts'
+				)!.content
+				const promise = findEntry(
+					generateFrontendSveltekit(
+						makeCfg({ backendRuntime: 'promise', auth, email: 'skip', i18n })
+					),
+					'apps/web/src/routes/+layout.server.ts'
+				)!.content
+				const effectUsesLocals = auth.length > 0 || i18n === 'paraglide'
+				expect(effect).toContain(
+					effectUsesLocals ? 'LayoutServerLoad = ({ locals }) =>' : 'LayoutServerLoad = () =>'
+				)
+				expect(promise).toContain('LayoutServerLoad = ({ locals }) =>')
+			}
+	})
+
+	test('gates only auth-owned shell imports for Effect no-auth with i18n', () => {
+		const noAuth = generateFrontendSveltekit(
+			makeCfg({ backendRuntime: 'effect', auth: [], email: 'skip', i18n: 'paraglide' })
+		)
+		const withAuth = generateFrontendSveltekit(
+			makeCfg({
+				backendRuntime: 'effect',
+				auth: ['google'],
+				email: 'skip',
+				i18n: 'paraglide'
+			})
+		)
+		const noAuthNav = findEntry(noAuth, 'apps/web/src/lib/components/layout/nav.svelte')!.content
+		const noAuthHome = findEntry(noAuth, 'apps/web/src/routes/+page.svelte')!.content
+		const authNav = findEntry(withAuth, 'apps/web/src/lib/components/layout/nav.svelte')!.content
+		const authHome = findEntry(withAuth, 'apps/web/src/routes/+page.svelte')!.content
+
+		for (const authImport of ['UserIcon', 'LogOutIcon', 'primitives/button', 'DropdownMenu']) {
+			expect(noAuthNav).not.toContain(authImport)
+			expect(authNav).toContain(authImport)
+		}
+		expect(noAuthNav).not.toContain("import * as m from '@repo/i18n/messages'")
+		expect(noAuthNav).toContain('getLocale')
+		expect(authNav).toContain("import * as m from '@repo/i18n/messages'")
+		expect(noAuthHome).not.toContain("import * as Button")
+		expect(noAuthHome).not.toContain("import { Badge }")
+		expect(noAuthHome).toContain("import * as m from '@repo/i18n/messages'")
+		expect(authHome).toContain("import * as Button")
+		expect(authHome).toContain("import { Badge }")
+	})
+
+	test('Google-only login does not emit email OTP-only bindings', () => {
+		const entries = generateFrontendSveltekit(
+			makeCfg({ backendRuntime: 'effect', auth: ['google'], email: 'skip' })
+		)
+		const login = findEntry(entries, 'apps/web/src/routes/login/+page.svelte')!.content
+		for (const unused of [
+			'Loader2Icon',
+			'import * as Form',
+			'import * as Input',
+			'import { toast }',
+			'fieldProxy',
+			'setError',
+			'import { goto }',
+			'errors,',
+			'submitting',
+			'turnstileTokenProxy'
+		]) expect(login).not.toContain(unused)
+		expect(login).toContain('continueWithGoogle')
+	})
 })

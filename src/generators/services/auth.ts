@@ -12,6 +12,12 @@ function deriveRuntime(deploy: GvKitConfig['choices']['deploy']): Runtime {
 }
 
 export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
+	return cfg.choices.backendRuntime === 'effect'
+		? generateEffectAuthService(cfg)
+		: generatePromiseAuthService(cfg)
+}
+
+function generatePromiseAuthService(cfg: GvKitConfig): FileEntry[] {
 	const project = cfg.choices.name
 	const usesSqlite = cfg.choices.db === 'sqlite'
 	const auth = cfg.choices.auth
@@ -19,23 +25,18 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	const wantsGoogle = auth.includes('google')
 	const wantsEmailOTP = auth.includes('emailOTP')
 	const runtime = deriveRuntime(cfg.choices.deploy)
-	const effectMode = cfg.choices.backendRuntime === 'effect'
-
-	// `wrangler types` owns `worker-configuration.d.ts` and refuses to overwrite
-	// non-wrangler files with that name; our own declaration is at `env.d.ts`.
-	const envDeclPath = 'apps/api/auth/env.d.ts'
 
 	const entries: FileEntry[] = [
 		{
 			path: 'apps/api/auth/package.json',
-			content: pkgJson({ project, runtime, auth, effectMode })
+			content: promisePkgJson({ project, runtime, auth })
 		},
 		{
 			path: 'apps/api/auth/tsconfig.json',
 			content: tsconfig({ runtime, usesSqlite })
 		},
 		{
-			path: envDeclPath,
+			path: 'apps/api/auth/env.d.ts',
 			content: envDts({ runtime, usesSqlite, wantsGoogle, auth, email })
 		},
 		{
@@ -48,19 +49,11 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 		},
 		{
 			path: 'apps/api/auth/src/openapi.ts',
-			content: effectMode ? openapiEffectTs(project) : openapiTs(project)
+			content: openapiTs(project)
 		},
-		...(effectMode
-			? [
-					{
-						path: 'apps/api/auth/src/effect/auth-session.ts',
-						content: authSessionEffectTs(runtime)
-					}
-				]
-			: []),
 		{
 			path: 'apps/api/auth/src/app.ts',
-			content: effectMode ? appEffectTs(runtime) : appTs(runtime)
+			content: appTs(runtime)
 		},
 		{
 			path: 'apps/api/auth/src/index.ts',
@@ -75,7 +68,7 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	if (runtime === 'cf-workers') {
 		entries.push({
 			path: 'apps/api/auth/wrangler.jsonc',
-			content: wranglerJsonc({ project, usesSqlite, wantsEmailOTP, email })
+			content: promiseWranglerJsonc({ project, usesSqlite, wantsEmailOTP, email })
 		})
 	}
 
@@ -89,42 +82,148 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	return entries
 }
 
-function pkgJson({
+function generateEffectAuthService(cfg: GvKitConfig): FileEntry[] {
+	const project = cfg.choices.name
+	const usesSqlite = cfg.choices.db === 'sqlite'
+	const auth = cfg.choices.auth
+	const email = cfg.choices.email
+	const wantsGoogle = auth.includes('google')
+	const wantsEmailOTP = auth.includes('emailOTP')
+	const hasMailerWorkflow = wantsEmailOTP && email !== 'skip'
+	const runtime = deriveRuntime(cfg.choices.deploy)
+
+	const entries: FileEntry[] = [
+		{
+			path: 'apps/api/auth/package.json',
+			content: effectPkgJson({ project, runtime, auth, hasMailerWorkflow })
+		},
+		{
+			path: 'apps/api/auth/tsconfig.json',
+			content: tsconfig({ runtime, usesSqlite })
+		},
+		{
+			path: 'apps/api/auth/env.d.ts',
+			content: envDts({ runtime, usesSqlite, wantsGoogle, auth, email })
+		},
+		{ path: 'apps/api/auth/src/lib/utils.ts', content: utilsTs({ wantsEmailOTP }) },
+		{
+			path: 'apps/api/auth/src/auth.ts',
+			content: hasMailerWorkflow
+				? effectAuthTs({ runtime, usesSqlite, wantsGoogle, auth, email })
+				: authTs({ runtime, usesSqlite, wantsGoogle, auth, email })
+		},
+		{ path: 'apps/api/auth/src/openapi.ts', content: openapiEffectTs(project) },
+		{
+			path: 'apps/api/auth/src/effect/auth-session.ts',
+			content: authSessionEffectTs(runtime)
+		},
+		...(hasMailerWorkflow
+			? [
+					{
+						path: 'apps/api/auth/src/effect/otp-mailer.ts',
+						content: otpMailerEffectTs(email)
+					},
+					{
+						path: 'apps/api/auth/src/effect/otp-mailer.test.ts',
+						content: otpMailerEffectTestTs(email)
+					}
+				]
+			: []),
+		{ path: 'apps/api/auth/src/app.ts', content: appEffectTs(runtime) },
+		{ path: 'apps/api/auth/src/index.ts', content: indexTs(runtime) },
+		{
+			path: 'apps/api/auth/README.md',
+			content: readme({ project, runtime, wantsGoogle, wantsEmailOTP, email })
+		}
+	]
+
+	if (runtime === 'cf-workers')
+		entries.push({
+			path: 'apps/api/auth/wrangler.jsonc',
+			content: effectWranglerJsonc({ project, usesSqlite, wantsEmailOTP, email })
+		})
+
+	if (wantsEmailOTP) entries.push({ path: 'apps/api/auth/.dev.vars', content: devVars() })
+
+	return entries
+}
+
+function promisePkgJson({
 	project,
 	runtime,
-	auth,
-	effectMode
+	auth
 }: {
 	project: string
 	runtime: Runtime
 	auth: AuthChoice[]
-	effectMode: boolean
 }): string {
-	const dependencies: Record<string, string> = effectMode
-		? {
-				'@hono/standard-validator': '^0.2.2',
-				'@repo/backend': 'workspace:*',
-				'@repo/db': 'workspace:*',
-				'@standard-community/standard-json': '^0.3.5',
-				'@standard-community/standard-openapi': '^0.2.9',
-				'@types/json-schema': '^7.0.15',
-				'better-auth': '^1.6.0',
-				effect: '^3.21.2',
-				hono: '^4.12.0',
-				'hono-openapi': '^1.3.0',
-				'openapi-types': '^12.1.3'
-			}
-		: {
-				'@hono/zod-openapi': '^1.0.0',
-				'@repo/backend': 'workspace:*',
-				'@repo/db': 'workspace:*',
-				'better-auth': '^1.6.0',
-				hono: '^4.6.0',
-				zod: '^4.3.0'
-			}
-
+	const dependencies: Record<string, string> = {
+		'@hono/zod-openapi': '^1.0.0',
+		'@repo/backend': 'workspace:*',
+		'@repo/db': 'workspace:*',
+		'better-auth': '^1.6.0',
+		hono: '^4.6.0',
+		zod: '^4.3.0'
+	}
 	if (auth.includes('emailOTP')) dependencies['@repo/mailer'] = 'workspace:*'
+	return renderPkgJson({
+		project,
+		runtime,
+		dependencies,
+		cfBuild: 'pnpm cf-typegen && wrangler deploy --dry-run --outdir=dist'
+	})
+}
 
+function effectPkgJson({
+	project,
+	runtime,
+	auth,
+	hasMailerWorkflow
+}: {
+	project: string
+	runtime: Runtime
+	auth: AuthChoice[]
+	hasMailerWorkflow: boolean
+}): string {
+	const dependencies: Record<string, string> = {
+		'@hono/standard-validator': '^0.2.2',
+		'@repo/backend': 'workspace:*',
+		'@repo/db': 'workspace:*',
+		'@standard-community/standard-json': '^0.3.5',
+		'@standard-community/standard-openapi': '^0.2.9',
+		'@types/json-schema': '^7.0.15',
+		'better-auth': '^1.6.0',
+		effect: '^3.21.2',
+		hono: '^4.12.0',
+		'hono-openapi': '^1.3.0',
+		'openapi-types': '^12.1.3'
+	}
+	if (auth.includes('emailOTP')) dependencies['@repo/mailer'] = 'workspace:*'
+	return renderPkgJson({
+		project,
+		runtime,
+		dependencies,
+		cfBuild: 'pnpm cf-typegen && wrangler deploy --dry-run --strict --outdir=dist',
+		nodeBuild: 'tsup src/index.ts --format esm --target=node20 --out-dir dist',
+		hasMailerWorkflow
+	})
+}
+
+function renderPkgJson({
+	project,
+	runtime,
+	dependencies,
+	cfBuild,
+	nodeBuild = 'tsup src/index.ts --format esm --target=node20 --outdir dist',
+	hasMailerWorkflow = false
+}: {
+	project: string
+	runtime: Runtime
+	dependencies: Record<string, string>
+	cfBuild: string
+	nodeBuild?: string
+	hasMailerWorkflow?: boolean
+}): string {
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
 		typescript: '~5.9.0'
@@ -134,6 +233,10 @@ function pkgJson({
 		typecheck: 'tsc --noEmit',
 		lint: 'eslint .'
 	}
+	if (hasMailerWorkflow) {
+		scripts.test = 'vitest run src/effect/otp-mailer.test.ts'
+		devDependencies.vitest = '^4.1.7'
+	}
 
 	if (runtime === 'cf-workers') {
 		devDependencies.wrangler = '^4.0.0'
@@ -142,7 +245,7 @@ function pkgJson({
 		// `cf-typegen` must run before tsc/wrangler so `Env` matches wrangler.jsonc.
 		scripts['cf-typegen'] = 'wrangler types'
 		scripts.dev = 'pnpm cf-typegen && wrangler dev'
-		scripts.build = 'pnpm cf-typegen && wrangler deploy --dry-run --strict --outdir=dist'
+		scripts.build = cfBuild
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:staging'] =
@@ -154,7 +257,7 @@ function pkgJson({
 		devDependencies.tsx = '^4.19.0'
 		devDependencies['@types/node'] = '^22.10.0'
 		scripts.dev = 'tsx watch src/index.ts'
-		scripts.build = 'tsup src/index.ts --format esm --target=node20 --outdir dist'
+		scripts.build = nodeBuild
 		scripts.start = 'node dist/index.js'
 	}
 
@@ -214,7 +317,7 @@ function tsconfig({
 	)
 }
 
-function wranglerJsonc({
+function promiseWranglerJsonc({
 	project,
 	usesSqlite,
 	wantsEmailOTP,
@@ -225,14 +328,55 @@ function wranglerJsonc({
 	wantsEmailOTP: boolean
 	email: EmailChoice
 }): string {
+	return renderWranglerJsonc({
+		project,
+		usesSqlite,
+		wantsEmailOTP,
+		email,
+		migrationsLine: ''
+	})
+}
+
+function effectWranglerJsonc({
+	project,
+	usesSqlite,
+	wantsEmailOTP,
+	email
+}: {
+	project: string
+	usesSqlite: boolean
+	wantsEmailOTP: boolean
+	email: EmailChoice
+}): string {
+	return renderWranglerJsonc({
+		project,
+		usesSqlite,
+		wantsEmailOTP,
+		email,
+		migrationsLine: ',\n\t\t\t"migrations_dir": "../../../packages/db/migrations"'
+	})
+}
+
+function renderWranglerJsonc({
+	project,
+	usesSqlite,
+	wantsEmailOTP,
+	email,
+	migrationsLine
+}: {
+	project: string
+	usesSqlite: boolean
+	wantsEmailOTP: boolean
+	email: EmailChoice
+	migrationsLine: string
+}): string {
 	const dbBlock = usesSqlite
 		? `,
 	"d1_databases": [
 		{
 			"binding": "DB",
 			"database_name": "${project}-db",
-			"database_id": "<run: wrangler d1 create ${project}-db>",
-			"migrations_dir": "../../../packages/db/migrations"
+			"database_id": "<run: wrangler d1 create ${project}-db>"${migrationsLine}
 		}
 	]`
 		: `,
@@ -343,18 +487,340 @@ export {}
 `
 }
 
+type OtpDelivery = {
+	imports: string[]
+	cfMailerLine: string
+	cfPlugin: string
+	nodeMailerLine: string
+	nodePlugin: string
+}
+
+function effectAuthTs(args: {
+	runtime: Runtime
+	usesSqlite: boolean
+	wantsGoogle: boolean
+	auth: AuthChoice[]
+	email: EmailChoice
+}): string {
+	return authTs({ ...args, otpDelivery: effectOtpDelivery(args.email) })
+}
+
+function effectOtpDelivery(email: EmailChoice): OtpDelivery {
+	const imports = [
+		`import { MailerLive } from '@repo/mailer/effect'`,
+		`import { runOtpDelivery, sendOtp } from './effect/otp-mailer.js'`
+	]
+
+	if (email === 'notifuse')
+		return {
+			imports,
+			cfMailerLine: `\tconst mailerLayer = MailerLive({
+\t\tapiKey: env.NOTIFUSE_API_KEY,
+\t\tworkspaceId: env.NOTIFUSE_WORKSPACE_ID,
+\t\tbaseUrl: env.NOTIFUSE_BASE_URL
+\t})\n\n`,
+			cfPlugin: `\t\temailOTP({
+\t\t\totpLength: 6,
+\t\t\texpiresIn: 600,
+\t\t\tasync sendVerificationOTP({ email, otp }, ctx) {
+\t\t\t\tif (!env.NOTIFUSE_API_KEY) {
+\t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
+\t\t\t\t\treturn
+\t\t\t\t}
+\t\t\t\tawait runOtpDelivery(
+\t\t\t\t\tsendOtp({
+\t\t\t\t\t\temail,
+\t\t\t\t\t\totp,
+\t\t\t\t\t\tlocale: pickLocale(ctx?.request?.headers)
+\t\t\t\t\t}),
+\t\t\t\t\tmailerLayer
+\t\t\t\t)
+\t\t\t}
+\t\t})`,
+			nodeMailerLine: `const mailerLayer = MailerLive({
+\tapiKey: process.env.NOTIFUSE_API_KEY ?? '',
+\tworkspaceId: process.env.NOTIFUSE_WORKSPACE_ID ?? '',
+\tbaseUrl: process.env.NOTIFUSE_BASE_URL ?? ''
+})\n\n`,
+			nodePlugin: `\temailOTP({
+\t\totpLength: 6,
+\t\texpiresIn: 600,
+\t\tasync sendVerificationOTP({ email, otp }, ctx) {
+\t\t\tif (!process.env.NOTIFUSE_API_KEY) {
+\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
+\t\t\t\treturn
+\t\t\t}
+\t\t\tawait runOtpDelivery(
+\t\t\t\tsendOtp({
+\t\t\t\t\temail,
+\t\t\t\t\totp,
+\t\t\t\t\tlocale: pickLocale(ctx?.request?.headers)
+\t\t\t\t}),
+\t\t\t\tmailerLayer
+\t\t\t)
+\t\t}
+\t})`
+		}
+
+	return {
+		imports: [...imports, `import type { Locale } from '@repo/mailer'`],
+		cfMailerLine: `\tconst mailerLayer = MailerLive(env.RESEND_API_KEY)\n\n`,
+		cfPlugin: `\t\temailOTP({
+\t\t\totpLength: 6,
+\t\t\texpiresIn: 600,
+\t\t\tasync sendVerificationOTP({ email, otp }, ctx) {
+\t\t\t\tif (!env.RESEND_API_KEY) {
+\t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
+\t\t\t\t\treturn
+\t\t\t\t}
+\t\t\t\tawait runOtpDelivery(
+\t\t\t\t\tsendOtp({
+\t\t\t\t\t\tfrom: env.FROM_EMAIL,
+\t\t\t\t\t\temail,
+\t\t\t\t\t\totp,
+\t\t\t\t\t\tlocale: pickLocale(ctx?.request?.headers) as Locale
+\t\t\t\t\t}),
+\t\t\t\t\tmailerLayer
+\t\t\t\t)
+\t\t\t}
+\t\t})`,
+		nodeMailerLine: `const mailerLayer = MailerLive(process.env.RESEND_API_KEY ?? '')\n\n`,
+		nodePlugin: `\temailOTP({
+\t\totpLength: 6,
+\t\texpiresIn: 600,
+\t\tasync sendVerificationOTP({ email, otp }, ctx) {
+\t\t\tif (!process.env.RESEND_API_KEY) {
+\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
+\t\t\t\treturn
+\t\t\t}
+\t\t\tawait runOtpDelivery(
+\t\t\t\tsendOtp({
+\t\t\t\t\tfrom: process.env.FROM_EMAIL ?? '',
+\t\t\t\t\temail,
+\t\t\t\t\totp,
+\t\t\t\t\tlocale: pickLocale(ctx?.request?.headers) as Locale
+\t\t\t\t}),
+\t\t\t\tmailerLayer
+\t\t\t)
+\t\t}
+\t})`
+	}
+}
+
+function otpMailerEffectTs(email: EmailChoice): string {
+	if (email === 'notifuse')
+		return `import { Cause, Effect, type Layer } from 'effect'
+import { MailerService } from '@repo/mailer/effect'
+
+export type SendOtpInput = {
+\temail: string
+\totp: string
+\tlocale: string
+}
+
+export function sendOtp({ email, otp, locale }: SendOtpInput) {
+\treturn Effect.gen(function* () {
+\t\tconst mailer = yield* MailerService
+\t\treturn yield* mailer.send({
+\t\t\tto: { email, language: locale },
+\t\t\ttemplate: 'otp-login',
+\t\t\tdata: { code: otp, expiry_minutes: 10 }
+\t\t})
+\t})
+}
+
+export async function runOtpDelivery(
+\tprogram: ReturnType<typeof sendOtp>,
+\tmailerLayer: Layer.Layer<MailerService>
+): Promise<void> {
+\tconst exit = await Effect.runPromiseExit(program.pipe(Effect.provide(mailerLayer)))
+\tif (exit._tag === 'Success') return
+
+\tconsole.error('[auth] OTP delivery failed', { cause: Cause.pretty(exit.cause) })
+\tthrow new Error('OTP delivery failed')
+}
+`
+
+	return `import { Cause, Effect, type Layer } from 'effect'
+import type { Locale } from '@repo/mailer'
+import { MailerService } from '@repo/mailer/effect'
+
+export type SendOtpInput = {
+\tfrom: string
+\temail: string
+\totp: string
+\tlocale: Locale
+}
+
+export function sendOtp({ from, email, otp, locale }: SendOtpInput) {
+\treturn Effect.gen(function* () {
+\t\tconst mailer = yield* MailerService
+\t\treturn yield* mailer.sendTemplate({
+\t\t\tfrom,
+\t\t\tto: email,
+\t\t\ttemplate: 'otp',
+\t\t\tdata: { code: otp, expiryMinutes: 10, locale }
+\t\t})
+\t})
+}
+
+export async function runOtpDelivery(
+\tprogram: ReturnType<typeof sendOtp>,
+\tmailerLayer: Layer.Layer<MailerService>
+): Promise<void> {
+\tconst exit = await Effect.runPromiseExit(program.pipe(Effect.provide(mailerLayer)))
+\tif (exit._tag === 'Success') return
+
+\tconsole.error('[auth] OTP delivery failed', { cause: Cause.pretty(exit.cause) })
+\tthrow new Error('OTP delivery failed')
+}
+`
+}
+
+function otpMailerEffectTestTs(email: EmailChoice): string {
+	if (email === 'notifuse')
+		return `import { Effect, Layer } from 'effect'
+import { MailerError, type Mailer } from '@repo/mailer'
+import { MailerService, makeMailerEffect } from '@repo/mailer/effect'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+
+import { runOtpDelivery, sendOtp } from './otp-mailer.js'
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('OTP mailer workflow', () => {
+\ttest('delivers through MailerService', async () => {
+\t\tconst sent: unknown[] = []
+\t\tconst mailer: Mailer = {
+\t\t\tasync send(input) {
+\t\t\t\tsent.push(input)
+\t\t\t\treturn { message_id: 'message-1' }
+\t\t\t}
+\t\t}
+\t\tconst layer = Layer.succeed(MailerService, makeMailerEffect(mailer))
+
+\t\tawait runOtpDelivery(
+\t\t\tsendOtp({ email: 'ada@example.com', otp: '123456', locale: 'en' }),
+\t\t\tlayer
+\t\t)
+
+\t\texpect(sent).toEqual([
+\t\t\t{
+\t\t\t\tto: { email: 'ada@example.com', language: 'en' },
+\t\t\t\ttemplate: 'otp-login',
+\t\t\t\tdata: { code: '123456', expiry_minutes: 10 }
+\t\t\t}
+\t\t])
+\t})
+
+\ttest('keeps provider failures typed and maps them safely at the boundary', async () => {
+\t\tconst mailer: Mailer = {
+\t\t\tasync send() {
+\t\t\t\tthrow new MailerError('provider detail')
+\t\t\t}
+\t\t}
+\t\tconst layer = Layer.succeed(MailerService, makeMailerEffect(mailer))
+\t\tconst program = sendOtp({ email: 'ada@example.com', otp: '123456', locale: 'en' })
+\t\tconst typedFailure = await Effect.runPromise(
+\t\t\tprogram.pipe(Effect.provide(layer), Effect.flip)
+\t\t)
+\t\texpect(typedFailure).toBeInstanceOf(MailerError)
+
+\t\tconst errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+\t\tawait expect(runOtpDelivery(program, layer)).rejects.toThrow('OTP delivery failed')
+\t\texpect(errorLog).toHaveBeenCalledOnce()
+\t\texpect(JSON.stringify(errorLog.mock.calls)).toContain('provider detail')
+\t})
+})
+`
+
+	return `import { Effect, Layer } from 'effect'
+import { MailerError, type Mailer } from '@repo/mailer'
+import { MailerService, makeMailerEffect } from '@repo/mailer/effect'
+import { afterEach, describe, expect, test, vi } from 'vitest'
+
+import { runOtpDelivery, sendOtp } from './otp-mailer.js'
+
+afterEach(() => vi.restoreAllMocks())
+
+describe('OTP mailer workflow', () => {
+\ttest('delivers through MailerService', async () => {
+\t\tconst sent: unknown[] = []
+\t\tconst mailer: Mailer = {
+\t\t\tasync send() {
+\t\t\t\treturn { id: 'message-1' }
+\t\t\t},
+\t\t\tasync sendTemplate(input) {
+\t\t\t\tsent.push(input)
+\t\t\t\treturn { id: 'message-1' }
+\t\t\t}
+\t\t}
+\t\tconst layer = Layer.succeed(MailerService, makeMailerEffect(mailer))
+
+\t\tawait runOtpDelivery(
+\t\t\tsendOtp({
+\t\t\t\tfrom: 'auth@example.com',
+\t\t\t\temail: 'ada@example.com',
+\t\t\t\totp: '123456',
+\t\t\t\tlocale: 'en'
+\t\t\t}),
+\t\t\tlayer
+\t\t)
+
+\t\texpect(sent).toEqual([
+\t\t\t{
+\t\t\t\tfrom: 'auth@example.com',
+\t\t\t\tto: 'ada@example.com',
+\t\t\t\ttemplate: 'otp',
+\t\t\t\tdata: { code: '123456', expiryMinutes: 10, locale: 'en' }
+\t\t\t}
+\t\t])
+\t})
+
+\ttest('keeps provider failures typed and maps them safely at the boundary', async () => {
+\t\tconst mailer: Mailer = {
+\t\t\tasync send() {
+\t\t\t\treturn { id: 'message-1' }
+\t\t\t},
+\t\t\tasync sendTemplate() {
+\t\t\t\tthrow new MailerError('provider detail')
+\t\t\t}
+\t\t}
+\t\tconst layer = Layer.succeed(MailerService, makeMailerEffect(mailer))
+\t\tconst program = sendOtp({
+\t\t\tfrom: 'auth@example.com',
+\t\t\temail: 'ada@example.com',
+\t\t\totp: '123456',
+\t\t\tlocale: 'en'
+\t\t})
+\t\tconst typedFailure = await Effect.runPromise(
+\t\t\tprogram.pipe(Effect.provide(layer), Effect.flip)
+\t\t)
+\t\texpect(typedFailure).toBeInstanceOf(MailerError)
+
+\t\tconst errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+\t\tawait expect(runOtpDelivery(program, layer)).rejects.toThrow('OTP delivery failed')
+\t\texpect(errorLog).toHaveBeenCalledOnce()
+\t\texpect(JSON.stringify(errorLog.mock.calls)).toContain('provider detail')
+\t})
+})
+`
+}
+
 function authTs({
 	runtime,
 	usesSqlite,
 	wantsGoogle,
 	auth,
-	email
+	email,
+	otpDelivery
 }: {
 	runtime: Runtime
 	usesSqlite: boolean
 	wantsGoogle: boolean
 	auth: AuthChoice[]
 	email: EmailChoice
+	otpDelivery?: OtpDelivery
 }): string {
 	const wantsEmailOTP = auth.includes('emailOTP')
 	const provider = usesSqlite ? 'sqlite' : 'pg'
@@ -368,13 +834,16 @@ function authTs({
 	if (wantsEmailOTP) imports.push(`import { captcha, emailOTP } from 'better-auth/plugins'`)
 	imports.push(`import type { BetterAuthPlugin } from 'better-auth/types'`)
 	imports.push(`import { createDb } from '@repo/db/client'`)
-	if (wantsEmailOTP) {
+	if (wantsEmailOTP)
 		imports.push(
-			usesNotifuse
-				? `import { createMailer } from '@repo/mailer'`
-				: `import { createMailer, type Locale } from '@repo/mailer'`
+			...(otpDelivery
+				? otpDelivery.imports
+				: [
+						usesNotifuse
+							? `import { createMailer } from '@repo/mailer'`
+							: `import { createMailer, type Locale } from '@repo/mailer'`
+					])
 		)
-	}
 	imports.push(
 		wantsEmailOTP
 			? `import { parseTrustedOrigins, pickLocale } from './lib/utils.js'`
@@ -384,19 +853,23 @@ function authTs({
 	if (runtime === 'cf-workers') {
 		const dbExpr = usesSqlite ? '{ DB: env.DB }' : '{ HYPERDRIVE: env.HYPERDRIVE }'
 
-		const mailerLine = wantsEmailOTP
-			? usesNotifuse
-				? `\tconst mailer = createMailer({
+		const mailerLine = otpDelivery
+			? otpDelivery.cfMailerLine
+			: wantsEmailOTP
+				? usesNotifuse
+					? `\tconst mailer = createMailer({
 \t\tapiKey: env.NOTIFUSE_API_KEY,
 \t\tworkspaceId: env.NOTIFUSE_WORKSPACE_ID,
 \t\tbaseUrl: env.NOTIFUSE_BASE_URL
 \t})\n\n`
-				: `\tconst mailer = createMailer(env.RESEND_API_KEY)\n\n`
-			: ''
+					: `\tconst mailer = createMailer(env.RESEND_API_KEY)\n\n`
+				: ''
 
-		const otpPlugin = wantsEmailOTP
-			? usesNotifuse
-				? `\t\temailOTP({
+		const otpPlugin = otpDelivery
+			? otpDelivery.cfPlugin
+			: wantsEmailOTP
+				? usesNotifuse
+					? `\t\temailOTP({
 \t\t\totpLength: 6,
 \t\t\texpiresIn: 600,
 \t\t\tasync sendVerificationOTP({ email, otp }, ctx) {
@@ -411,7 +884,7 @@ function authTs({
 \t\t\t\t})
 \t\t\t}
 \t\t})`
-				: `\t\temailOTP({
+					: `\t\temailOTP({
 \t\t\totpLength: 6,
 \t\t\texpiresIn: 600,
 \t\t\tasync sendVerificationOTP({ email, otp }, ctx) {
@@ -431,7 +904,7 @@ function authTs({
 \t\t\t\t})
 \t\t\t}
 \t\t})`
-			: ''
+				: ''
 
 		const captchaPlugin = wantsEmailOTP
 			? `\t\tcaptcha({
@@ -481,19 +954,23 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 		? `createDb({ url: process.env.SQLITE_PATH ?? 'file:./local.db' })`
 		: `createDb({ DATABASE_URL: process.env.DATABASE_URL ?? '' })`
 
-	const mailerLine = wantsEmailOTP
-		? usesNotifuse
-			? `const mailer = createMailer({
+	const mailerLine = otpDelivery
+		? otpDelivery.nodeMailerLine
+		: wantsEmailOTP
+			? usesNotifuse
+				? `const mailer = createMailer({
 \tapiKey: process.env.NOTIFUSE_API_KEY ?? '',
 \tworkspaceId: process.env.NOTIFUSE_WORKSPACE_ID ?? '',
 \tbaseUrl: process.env.NOTIFUSE_BASE_URL ?? ''
 })\n\n`
-			: `const mailer = createMailer(process.env.RESEND_API_KEY ?? '')\n\n`
-		: ''
+				: `const mailer = createMailer(process.env.RESEND_API_KEY ?? '')\n\n`
+			: ''
 
-	const otpPlugin = wantsEmailOTP
-		? usesNotifuse
-			? `\temailOTP({
+	const otpPlugin = otpDelivery
+		? otpDelivery.nodePlugin
+		: wantsEmailOTP
+			? usesNotifuse
+				? `\temailOTP({
 \t\totpLength: 6,
 \t\texpiresIn: 600,
 \t\tasync sendVerificationOTP({ email, otp }, ctx) {
@@ -508,7 +985,7 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 \t\t\t})
 \t\t}
 \t})`
-			: `\temailOTP({
+				: `\temailOTP({
 \t\totpLength: 6,
 \t\texpiresIn: 600,
 \t\tasync sendVerificationOTP({ email, otp }, ctx) {
@@ -528,7 +1005,7 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 \t\t\t})
 \t\t}
 \t})`
-		: ''
+			: ''
 
 	const captchaPlugin = wantsEmailOTP
 		? `\tcaptcha({
@@ -633,8 +1110,7 @@ const ErrorResponseSchema = Schema.Struct({
 const SessionResponseStandard = Schema.standardSchemaV1(SessionResponseSchema)
 const ErrorResponseStandard = Schema.standardSchemaV1(ErrorResponseSchema)
 
-// Documents ONLY /internal/session. The public /api/auth/* surface is intentionally
-// excluded — sibling services must use the binding/HTTP boundary, not a typed client.
+// Sibling services use the documented /internal/session boundary instead of /api/auth/*.
 export const sessionRoute = describeRoute({
 	operationId: 'getInternalSession',
 	tags: ['internal'],
@@ -646,6 +1122,10 @@ export const sessionRoute = describeRoute({
 		},
 		401: {
 			description: 'No active session',
+			content: { 'application/json': { schema: resolver(ErrorResponseStandard) } }
+		},
+		500: {
+			description: 'Internal session resolution failure',
 			content: { 'application/json': { schema: resolver(ErrorResponseStandard) } }
 		}
 	}
@@ -672,12 +1152,10 @@ export function mountOpenApi<E extends HonoEnv>(app: Hono<E>): void {
 }
 
 function authSessionEffectTs(runtime: Runtime): string {
-	const imports =
+	const authImport =
 		runtime === 'cf-workers'
-			? `import { Context, Effect } from 'effect'
-import { getAuth } from '../auth.js'`
-			: `import { Effect } from 'effect'
-import { auth } from '../auth.js'`
+			? `import { getAuth } from '../auth.js'`
+			: `import { auth } from '../auth.js'`
 
 	const workerEnvService =
 		runtime === 'cf-workers'
@@ -705,15 +1183,57 @@ export class WorkerEnvService extends Context.Tag('WorkerEnvService')<
 })`
 			: `const makeAuth = Effect.succeed(auth)`
 
-	return `${imports}
+	return `import { Context, Effect } from 'effect'
+${authImport}
 
-import { UnexpectedServiceError } from '@repo/backend/effect/errors'
 import {
-\tresolveBetterAuthSession,
-\ttype AuthSessionServiceShape
-} from '@repo/backend/effect/auth-session'
-export { AuthSessionService } from '@repo/backend/effect/auth-session'
+\ttryPromiseUnexpected,
+\tUnauthorized,
+\tUnexpectedServiceError
+} from '@repo/backend/effect/errors'
 ${workerEnvService}
+
+export type AuthSession = {
+\tuserId: string
+\tsessionId: string
+\texpiresAt: string
+}
+
+export type AuthSessionServiceShape = {
+\treadonly resolve: (
+\t\theaders: Headers
+\t) => Effect.Effect<AuthSession, Unauthorized | UnexpectedServiceError>
+}
+
+export class AuthSessionService extends Context.Tag('auth/AuthSessionService')<
+\tAuthSessionService,
+\tAuthSessionServiceShape
+>() {}
+
+type BetterAuthSessionLike = {
+\tuser: { id: string }
+\tsession: { id: string; expiresAt: Date }
+}
+
+export function resolveBetterAuthSession(
+\tlookup: () => PromiseLike<BetterAuthSessionLike | null>
+) {
+\treturn tryPromiseUnexpected({
+\t\ttry: lookup,
+\t\tmessage: 'failed to resolve session',
+\t\tcode: 'SESSION_LOOKUP_FAILED'
+\t}).pipe(
+\t\tEffect.flatMap((session) =>
+\t\t\tsession
+\t\t\t\t? Effect.succeed({
+\t\t\t\t\t\tuserId: session.user.id,
+\t\t\t\t\t\tsessionId: session.session.id,
+\t\t\t\t\t\texpiresAt: session.session.expiresAt.toISOString()
+\t\t\t\t\t})
+\t\t\t\t: Effect.fail(new Unauthorized({ message: 'unauthorized', code: 'UNAUTHORIZED' }))
+\t\t)
+\t)
+}
 
 ${makeAuth}
 
@@ -746,7 +1266,7 @@ app.use('/api/auth/*', async (c, next) => {
 	const mw = cors({
 		origin: parseTrustedOrigins(c.env.BETTER_AUTH_TRUSTED_ORIGINS),
 		credentials: true,
-		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
+		allowHeaders: ['content-type', 'x-locale'],
 		maxAge: 600
 	})
 	return mw(c, next)
@@ -795,7 +1315,7 @@ app.use(
 	cors({
 		origin: parseTrustedOrigins(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
 		credentials: true,
-		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
+		allowHeaders: ['content-type', 'x-locale'],
 		maxAge: 600
 	})
 )
@@ -822,8 +1342,33 @@ export default app
 }
 
 function appEffectTs(runtime: Runtime): string {
-	if (runtime === 'cf-workers') {
-		return `import { runEffectJson } from '@repo/backend/effect/hono'
+	const httpBoundary = `type SessionError = Unauthorized | UnexpectedServiceError
+type ErrorResponse = { error: string; message: string; tag: string; code?: string }
+
+function mapSessionError(error: SessionError): EffectHttpResponse<ErrorResponse> {
+	switch (error._tag) {
+		case 'Unauthorized':
+			return {
+				status: 401,
+				body: { error: error.message, message: error.message, tag: error._tag, code: error.code }
+			}
+		case 'UnexpectedServiceError':
+			return {
+				status: 500,
+				body: {
+					error: 'internal server error',
+					message: 'internal server error',
+					tag: error._tag,
+					code: error.code
+				}
+			}
+	}
+}
+`
+
+	if (runtime === 'cf-workers')
+		return `import { type EffectHttpResponse, runEffectJson } from '@repo/backend/effect/hono'
+import { UnexpectedServiceError, Unauthorized } from '@repo/backend/effect/errors'
 import { Effect } from 'effect'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -837,12 +1382,12 @@ import {
 import { parseTrustedOrigins } from './lib/utils.js'
 import { mountOpenApi, sessionRoute } from './openapi.js'
 
+${httpBoundary}
 const app = new Hono<{ Bindings: Env }>()
 
 app.get('/healthz', (c) => c.text('ok'))
 
-// CORS shares the BETTER_AUTH_TRUSTED_ORIGINS allow-list with better-auth's
-// own CSRF check — one env var, two consistent gates.
+// CORS and better-auth CSRF must share the trusted-origin allow-list.
 app.use('/api/auth/*', async (c, next) => {
 	const mw = cors({
 		origin: parseTrustedOrigins(c.env.BETTER_AUTH_TRUSTED_ORIGINS),
@@ -868,16 +1413,21 @@ app.get('/internal/session', sessionRoute, (c) => {
 			makeAuthSessionService.pipe(Effect.provideService(WorkerEnvService, c.env))
 		)
 	)
-	return runEffectJson(c, program)
+	return runEffectJson({
+		c,
+		program,
+		onSuccess: (value) => ({ status: 200, body: value }),
+		onFailure: mapSessionError
+	})
 })
 
 mountOpenApi(app)
 
 export default app
 `
-	}
 
-	return `import { runEffectJson } from '@repo/backend/effect/hono'
+	return `import { type EffectHttpResponse, runEffectJson } from '@repo/backend/effect/hono'
+import { UnexpectedServiceError, Unauthorized } from '@repo/backend/effect/errors'
 import { Effect } from 'effect'
 import { Hono } from 'hono'
 import { cors } from 'hono/cors'
@@ -887,12 +1437,12 @@ import { AuthSessionService, makeAuthSessionService } from './effect/auth-sessio
 import { parseTrustedOrigins } from './lib/utils.js'
 import { mountOpenApi, sessionRoute } from './openapi.js'
 
+${httpBoundary}
 const app = new Hono<{ Bindings: Env }>()
 
 app.get('/healthz', (c) => c.text('ok'))
 
-// CORS shares the BETTER_AUTH_TRUSTED_ORIGINS allow-list with better-auth's
-// own CSRF check — one env var, two consistent gates.
+// CORS and better-auth CSRF must share the trusted-origin allow-list.
 app.use(
 	'/api/auth/*',
 	cors({
@@ -910,7 +1460,12 @@ app.get('/internal/session', sessionRoute, (c) => {
 		const authSession = yield* AuthSessionService
 		return yield* authSession.resolve(c.req.raw.headers)
 	}).pipe(Effect.provideServiceEffect(AuthSessionService, makeAuthSessionService))
-	return runEffectJson(c, program)
+	return runEffectJson({
+		c,
+		program,
+		onSuccess: (value) => ({ status: 200, body: value }),
+		onFailure: mapSessionError
+	})
 })
 
 mountOpenApi(app)

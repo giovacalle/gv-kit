@@ -22,6 +22,7 @@ export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 		flags: {
 			auth: cfg.choices.auth.length > 0,
 			cfWorkers: cfg.choices.deploy === 'cf-workers',
+			effectBackend: cfg.choices.backendRuntime === 'effect',
 			hono: cfg.choices.backend === 'hono',
 			i18nParaglide: cfg.choices.i18n === 'paraglide'
 		},
@@ -46,7 +47,11 @@ function renderStackSummary(cfg: GvKitConfig): string {
 	const lines: string[] = []
 	lines.push('- Frontend: SvelteKit (Svelte 5, runes)')
 	if (cfg.choices.backend === 'hono')
-		lines.push('- Backend: Hono workers under `apps/api/<service>/`')
+		lines.push(
+			cfg.choices.backendRuntime === 'effect'
+				? '- Backend: Hono HTTP adapters + Effect application workflows under `apps/api/<service>/`'
+				: '- Backend: Hono workers under `apps/api/<service>/`'
+		)
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
 	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
 	if (cfg.choices.auth.length > 0)
@@ -70,7 +75,11 @@ function renderLayoutTree(cfg: GvKitConfig): string {
 	if (cfg.choices.backend === 'hono')
 		lines.push('- `apps/api/<service>/` — independently deployable Hono workers')
 	lines.push('- `packages/db/` — Drizzle schema + client factory')
-	lines.push('- `packages/backend/` — shared backend helpers (logger, error helpers, middleware)')
+	lines.push(
+		cfg.choices.backendRuntime === 'effect'
+			? '- `packages/backend/` — horizontal Effect/Hono runners and logger; workflows and service clients stay in their owning `apps/api/<service>/`'
+			: '- `packages/backend/` — shared backend helpers (logger, error helpers, middleware)'
+	)
 	if (cfg.choices.i18n === 'paraglide')
 		lines.push(
 			'- `packages/i18n/` — Paraglide messages + compiled runtime (`@repo/i18n/messages`, `@repo/i18n/runtime`, `@repo/i18n/server`)'
@@ -180,6 +189,9 @@ function renderStackManifest(cfg: GvKitConfig): string {
 		name: cfg.choices.name,
 		frontend: cfg.choices.frontend,
 		backend: cfg.choices.backend,
+		...(cfg.choices.backendRuntime === 'effect'
+			? { backendRuntime: cfg.choices.backendRuntime }
+			: {}),
 		db: cfg.choices.db,
 		auth: cfg.choices.auth,
 		deploy: cfg.choices.deploy,
@@ -226,7 +238,18 @@ function renderClaudeSettings(): string {
 
 function renderServiceArchitectAgent(cfg: GvKitConfig): string {
 	const isCfWorkers = cfg.choices.deploy === 'cf-workers'
+	const isEffect = cfg.choices.backendRuntime === 'effect'
 	const project = cfg.choices.name
+	const backendMandate = isEffect
+		? `2. Organize each vertical slice under \`src/features/<feature>/\`: keep its Hono route contract, handler, Effect workflow, typed failures, and tests together.
+3. Put concrete \`Database\` and consumer-local service-client adapters under \`src/infrastructure/\`. Build request-scoped layers from the Hono context, provide them to workflows, and map typed failures to declared JSON responses in each feature handler.`
+		: `2. DB access via \`createDb(env)\` from \`@repo/db\`. No raw drivers.
+3. Errors via \`errors.*\` from \`@repo/backend/helpers\` (\`errors.notFound\`, \`errors.badRequest\`, …). Catch \`HttpError\` once at the boundary.`
+	const backendConstraint = isEffect
+		? `- **REFUSE to import auth implementation details into another service.** Keep the service client and response decoder local to the consumer; Better Auth translation stays in \`apps/api/auth/\`.
+- **REFUSE to add cross-service domain logic to \`packages/backend/\`.** It contains horizontal Effect/Hono runners, typed-error utilities, and logging only.`
+		: `- **REFUSE to import \`@repo/backend/auth\` from any service other than \`apps/api/auth/\`.** That import path is reserved for the auth Worker's own bootstrap.
+- **REFUSE to add cross-service domain logic to \`packages/backend/\`.** That package is for horizontal helpers only (logger, error helpers, generic middleware). Auth state, billing state, RBAC live with their owning service.`
 
 	return `---
 name: service-architect
@@ -251,8 +274,7 @@ When asked to add service \`<svc>\` (e.g. \`billing\`, \`notifications\`, \`asse
    - \`src/app.ts\` — Hono app wiring (routes, middleware).
    - \`src/routes/\` — one file per resource.
 
-2. DB access via \`createDb(env)\` from \`@repo/db\`. No raw drivers.
-3. Errors via \`errors.*\` from \`@repo/backend/helpers\` (\`errors.notFound\`, \`errors.badRequest\`, …). Catch \`HttpError\` once at the boundary.
+${backendMandate}
 4. If the service needs the current session, consume the auth boundary:
 ${
 	isCfWorkers
@@ -262,13 +284,16 @@ ${
 		: `   - Add \`AUTH_URL: string\` to \`Env\` in \`env.d.ts\` (default \`http://127.0.0.1:8787\` in dev).
    - Call \`fetch(\\\`\${env.AUTH_URL}/internal/session\\\`, { headers: { cookie } })\`.`
 }
-   - Or use the existing Hono auth adapter: \`@repo/backend/hono/auth/require\` (it does exactly this against the binding/URL).
+${
+	cfg.choices.backendRuntime === 'effect'
+		? '   - Keep a consumer-local Effect `AuthClient` beside the service and Schema-decode every successful response before domain logic.'
+		: '   - Or use the existing middleware: `@repo/backend/middleware/auth` (it does exactly this against the binding/URL).'
+}
 
 ## Hard constraints (REFUSE)
 
 - **REFUSE \`wrangler.toml\`.** \`wrangler.jsonc\` only.
-- **REFUSE to import \`@repo/backend/auth\` from any service other than \`apps/api/auth/\`.** That import path is reserved for the auth Worker's own bootstrap.
-- **REFUSE to add cross-service domain logic to \`packages/backend/\`.** That package is for horizontal helpers only (logger, error helpers, generic middleware). Auth state, billing state, RBAC live with their owning service.
+${backendConstraint}
 - **REFUSE to query \`user\`, \`session\`, \`account\`, \`verification\` from a non-auth service.** Read session via the auth boundary.
 - **REFUSE to extract a shared service-client SDK** (\`packages/<svc>-client/\`). Each consumer keeps its own ~10 LOC inline client. Duplication is the feature.
 - **REFUSE to share a \`Fetcher\`/\`Env\` between services.** Each \`apps/api/<svc>/\` declares its own.

@@ -24,7 +24,11 @@ You write the code that ships. You follow the rules in `.claude/rules/` — they
 - **No `as any`. No `: any`.** Use `unknown` + narrowing.
 - **No `// eslint-disable`, `// @ts-ignore`, `// @ts-expect-error`** without a `// reason:` clause on the same line.
 - **No comments restating the code.** WHY-only.
+<!--@gvkit:if effectBackend-->
+- **Inline single-statement bodies.** `if (!row) return yield* Effect.fail(new UserNotFound({ message: 'not found', code: 'USER_NOT_FOUND' }))` — no braces.
+<!--@gvkit:else-->
 - **Inline single-statement bodies.** `if (!row) throw errors.notFound('x')` — no braces.
+<!--@gvkit:endif-->
 - **3+ args → named bag.** `fn({ a, b, c })` not `fn(a, b, c)`.
 - **kebab-case filenames.** `user-card.svelte`, never `UserCard.svelte`.
 

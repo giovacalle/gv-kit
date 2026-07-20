@@ -97,7 +97,7 @@
 	}
 	/*@gvkit:endif*/
 
-	/*@gvkit:if authGoogle*/
+	/*@gvkit:if googleHandler*/
 	async function continueWithGoogle() {
 		await authClient.signIn.social({ provider: 'google', callbackURL: '/me' })
 	}

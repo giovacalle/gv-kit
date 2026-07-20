@@ -49,6 +49,22 @@ describe('generateOpenapiClient', () => {
 		expect(config.content).toContain('tsConfigPath')
 	})
 
+	test('Effect config reads the runtime route URL without a contract file', () => {
+		const entries = generateOpenapiClient(makeCfg({ backendRuntime: 'effect' }))
+		const config = find(entries, 'packages/openapi-client/openapi-ts.config.ts')!
+		const pkg = JSON.parse(find(entries, 'packages/openapi-client/package.json')!.content) as {
+			devDependencies: Record<string, string>
+		}
+
+		expect(config.content).toContain('process.env.OPENAPI_URL')
+		expect(config.content).toContain("'http://localhost:8788/openapi.json'")
+		expect(config.content).toContain('input: openApiUrl')
+		expect(config.content).not.toContain('app.request(')
+		expect(config.content).not.toContain("input: '../../apps/api/users/openapi.json'")
+		expect(pkg.devDependencies['@apidevtools/swagger-parser']).toBeUndefined()
+		expect(pkg.devDependencies['@types/node']).toBe('^22.10.0')
+	})
+
 	test('package.json declares hey-api + tanstack deps and the codegen script', () => {
 		const pkg = JSON.parse(
 			find(generateOpenapiClient(makeCfg({})), 'packages/openapi-client/package.json')!.content

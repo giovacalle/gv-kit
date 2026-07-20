@@ -57,25 +57,28 @@ describe('users-worker bindings', () => {
 				const userSources = entries.filter((e) => e.path.startsWith('apps/api/users/src/'))
 				for (const src of userSources) {
 					expect(src.content).not.toContain('BETTER_AUTH_SECRET')
-					// Forbidden: the better-auth handler factory subpath. The
-					// boundary contract is that users-worker NEVER imports the
-					// auth factory directly. The deploy-aware session middleware
-					// at `@repo/backend/hono/auth/require` is allowed and required.
+					// users-worker must consume the deploy-aware session adapter, never the auth factory.
 					expect(src.content).not.toContain(`from '@repo/backend/auth'`)
 				}
 			})
 		}
 
-		test(`${file} users-worker uses @repo/backend/hono/auth/require (deploy-aware) on protected routes`, () => {
+		test(`${file} users-worker uses the deploy-aware auth adapter on protected routes`, () => {
 			const entries = runGenerators(cfg)
 			const appTs = entries.find((e) => e.path === 'apps/api/users/src/app.ts')
 			expect(appTs).toBeDefined()
-			// Must import requireAuth from the deploy-aware middleware. Asserts
-			// W4 wired the middleware/auth subpath rather than a local
-			// auth-client + factory pair.
-			expect(appTs!.content).toContain(`from '@repo/backend/hono/auth/require'`)
-			expect(appTs!.content).not.toContain(`from '@repo/backend/hono/auth'\n`)
-			expect(appTs!.content).toContain('requireAuth')
+			if (cfg.choices.backendRuntime === 'effect') {
+				expect(appTs!.content).toContain('createMeRouter')
+				expect(appTs!.content).not.toContain('requireAuth')
+				expect(
+					entries.find(
+						(entry) => entry.path === 'apps/api/users/src/infrastructure/auth-client.ts'
+					)
+				).toBeDefined()
+			} else {
+				expect(appTs!.content).toContain("from '@repo/backend/middleware/auth'")
+				expect(appTs!.content).toContain('requireAuth')
+			}
 		})
 
 		test(`${file} users-worker does NOT emit removed auth-client / require-auth / env.ts`, () => {
@@ -90,6 +93,5 @@ describe('users-worker bindings', () => {
 				expect(found).toBeUndefined()
 			}
 		})
-
 	}
 })

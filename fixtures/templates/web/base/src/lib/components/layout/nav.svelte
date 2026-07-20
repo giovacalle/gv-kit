@@ -1,11 +1,15 @@
 <script lang="ts">
+	/*@gvkit:if authUiImports*/
 	import UserIcon from '@lucide/svelte/icons/user'
 	import LogOutIcon from '@lucide/svelte/icons/log-out'
 	import * as Button from '@repo/ui/primitives/button'
 	import * as DropdownMenu from '@repo/ui/primitives/dropdown-menu'
+	/*@gvkit:endif*/
 	import { ModeToggle } from '@repo/ui/components/mode-toggle'
 	/*@gvkit:if i18nParaglide*/
+	/*@gvkit:if authUiImports*/
 	import * as m from '@repo/i18n/messages'
+	/*@gvkit:endif*/
 	import { getLocale } from '@repo/i18n/runtime'
 
 	import LocaleSwitcher from '$lib/components/layout/locale-switcher.svelte'

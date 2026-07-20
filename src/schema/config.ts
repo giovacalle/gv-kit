@@ -40,13 +40,14 @@ export const GvKitConfig = z
 				path: ['choices', 'apiClient']
 			})
 		}
-		if (cfg.choices.backend === 'inside-frontend' && cfg.choices.backendRuntime === 'effect') {
-			ctx.addIssue({
-				code: 'custom',
-				message: 'backendRuntime="effect" requires backend="hono"',
-				path: ['choices', 'backendRuntime']
-			})
+		const effectRequiresHonoIssue = {
+			code: 'custom' as const,
+			message: 'backendRuntime="effect" requires backend="hono"',
+			path: ['choices', 'backendRuntime']
 		}
+		const usesEffectInsideFrontend =
+			cfg.choices.backend === 'inside-frontend' && cfg.choices.backendRuntime === 'effect'
+		if (usesEffectInsideFrontend) ctx.addIssue(effectRequiresHonoIssue)
 		if (cfg.choices.auth.includes('emailOTP') && cfg.choices.email === 'skip') {
 			ctx.addIssue({
 				code: 'custom',

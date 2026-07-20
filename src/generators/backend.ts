@@ -1,69 +1,64 @@
 import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
 
-/**
- * Generator for `packages/backend/` — core types, Hono adapters, and runtime helpers.
- */
 export function generateBackend(cfg: GvKitConfig): FileEntry[] {
+	return cfg.choices.backendRuntime === 'effect'
+		? generateEffectBackend(cfg)
+		: generatePromiseBackend(cfg)
+}
+
+function generatePromiseBackend(cfg: GvKitConfig): FileEntry[] {
 	const isHono = cfg.choices.backend === 'hono'
 	const isCf = cfg.choices.deploy === 'cf-workers'
 	const isSqlite = cfg.choices.db === 'sqlite'
 	const hasAuth = cfg.choices.auth.length > 0
-	const effectMode = cfg.choices.backendRuntime === 'effect'
 
 	const entries: FileEntry[] = [
 		{
 			path: 'packages/backend/package.json',
-			content: renderPackageJson({ isHono, isCf, isSqlite, hasAuth, effectMode })
+			content: renderPackageJson({ isHono, isCf, isSqlite, hasAuth, effectMode: false })
 		},
-		{ path: 'packages/backend/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) }
+		{ path: 'packages/backend/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
+		{ path: 'packages/backend/src/helpers/index.ts', content: HELPERS_INDEX },
+		{ path: 'packages/backend/src/helpers/index.test.ts', content: HELPERS_TEST }
+	]
+	const coreEntries: FileEntry[] = [
+		{ path: 'packages/backend/src/core/types.ts', content: CORE_TYPES },
+		{ path: 'packages/backend/src/core/data-access/users.ts', content: CORE_USERS },
+		{ path: 'packages/backend/src/core/use-cases/users.ts', content: USE_CASE_USERS }
+	]
+	const middlewareEntries: FileEntry[] = [
+		{ path: 'packages/backend/src/middleware/index.ts', content: MIDDLEWARE_INDEX },
+		{ path: 'packages/backend/src/middleware/logger.ts', content: HONO_LOGGER },
+		{ path: 'packages/backend/src/middleware/error-handler.ts', content: HONO_ERROR_HANDLER },
+		{ path: 'packages/backend/src/middleware/auth/index.ts', content: MIDDLEWARE_AUTH_INDEX },
+		{ path: 'packages/backend/src/middleware/auth/client.ts', content: HONO_AUTH_CLIENT },
+		{ path: 'packages/backend/src/middleware/auth/require.ts', content: HONO_AUTH_REQUIRE }
 	]
 
-	if (!effectMode) {
-		entries.push(
-			{ path: 'packages/backend/src/helpers/index.ts', content: HELPERS_INDEX },
-			{ path: 'packages/backend/src/helpers/index.test.ts', content: HELPERS_TEST }
-		)
-	}
+	if (hasAuth) entries.push(...coreEntries)
+	if (isHono) entries.push(...middlewareEntries)
 
-	if (effectMode) {
-		entries.push(
-			{ path: 'packages/backend/src/effect/errors.ts', content: EFFECT_ERRORS },
-			{ path: 'packages/backend/src/effect/hono.ts', content: EFFECT_HONO },
-			{ path: 'packages/backend/src/effect/auth-session.ts', content: EFFECT_AUTH_SESSION }
-		)
-	}
+	return entries
+}
 
-	// users DAO + use-cases require the better-auth `user` table emitted by
-	// `@repo/db`, which is only present when at least one auth provider was
-	// chosen. Skip these emissions otherwise so the package still typechecks.
-	if (hasAuth) {
-		entries.push(
-			{ path: 'packages/backend/src/core/types.ts', content: CORE_TYPES },
-			{
-				path: 'packages/backend/src/core/data-access/users.ts',
-				content: effectMode ? CORE_USERS_EFFECT : CORE_USERS
-			},
-			{
-				path: 'packages/backend/src/core/use-cases/users.ts',
-				content: effectMode ? USE_CASE_USERS_EFFECT : USE_CASE_USERS
-			}
-		)
-	}
+function generateEffectBackend(cfg: GvKitConfig): FileEntry[] {
+	const isHono = cfg.choices.backend === 'hono'
+	const isCf = cfg.choices.deploy === 'cf-workers'
+	const isSqlite = cfg.choices.db === 'sqlite'
+	const hasAuth = cfg.choices.auth.length > 0
+	const entries: FileEntry[] = [
+		{
+			path: 'packages/backend/package.json',
+			content: renderPackageJson({ isHono, isCf, isSqlite, hasAuth, effectMode: true })
+		},
+		{ path: 'packages/backend/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
+		{ path: 'packages/backend/src/effect/errors.ts', content: EFFECT_ERRORS },
+		{ path: 'packages/backend/src/effect/hono.ts', content: EFFECT_HONO },
+		{ path: 'packages/backend/src/effect/hono.test.ts', content: EFFECT_HONO_TEST }
+	]
 
-	if (isHono) {
-		entries.push(
-			{ path: 'packages/backend/src/hono/logger.ts', content: HONO_LOGGER },
-			{ path: 'packages/backend/src/hono/auth/client.ts', content: HONO_AUTH_CLIENT },
-			{ path: 'packages/backend/src/hono/auth/require.ts', content: HONO_AUTH_REQUIRE }
-		)
-		if (!effectMode) {
-			entries.push({
-				path: 'packages/backend/src/hono/error-handler.ts',
-				content: HONO_ERROR_HANDLER
-			})
-		}
-	}
+	if (isHono) entries.push({ path: 'packages/backend/src/hono/logger.ts', content: HONO_LOGGER })
 
 	return entries
 }
@@ -85,23 +80,24 @@ function renderPackageJson({
 	hasAuth: boolean
 	effectMode: boolean
 }): string {
-	const exportsBlock: Record<string, string> = {}
-	if (!effectMode) exportsBlock['./helpers'] = './src/helpers/index.ts'
+	const exportsBlock: Record<string, string> = effectMode
+		? {}
+		: {
+				'./helpers': './src/helpers/index.ts'
+			}
 	if (effectMode) {
 		exportsBlock['./effect/errors'] = './src/effect/errors.ts'
 		exportsBlock['./effect/hono'] = './src/effect/hono.ts'
-		exportsBlock['./effect/auth-session'] = './src/effect/auth-session.ts'
 	}
-	if (hasAuth) {
+	if (hasAuth && !effectMode) {
 		exportsBlock['./core/types'] = './src/core/types.ts'
 		exportsBlock['./core/data-access/users'] = './src/core/data-access/users.ts'
 		exportsBlock['./core/use-cases/users'] = './src/core/use-cases/users.ts'
 	}
-	if (isHono) {
-		exportsBlock['./hono/logger'] = './src/hono/logger.ts'
-		exportsBlock['./hono/auth/client'] = './src/hono/auth/client.ts'
-		exportsBlock['./hono/auth/require'] = './src/hono/auth/require.ts'
-		if (!effectMode) exportsBlock['./hono/error-handler'] = './src/hono/error-handler.ts'
+	if (isHono && effectMode) exportsBlock['./hono/logger'] = './src/hono/logger.ts'
+	if (isHono && !effectMode) {
+		exportsBlock['./middleware'] = './src/middleware/index.ts'
+		exportsBlock['./middleware/auth'] = './src/middleware/auth/index.ts'
 	}
 
 	const dependencies: Record<string, string> = {
@@ -109,9 +105,12 @@ function renderPackageJson({
 		zod: '^4.3.0'
 	}
 	// users DAO + use-cases import the better-auth `user` table from `@repo/db`.
-	if (hasAuth) dependencies['@repo/db'] = 'workspace:*'
+	if (hasAuth && !effectMode) dependencies['@repo/db'] = 'workspace:*'
 	if (isHono) dependencies.hono = '^4.12.0'
-	if (effectMode) dependencies.effect = '^3.21.2'
+	if (effectMode) {
+		dependencies.effect = '^3.21.2'
+		dependencies['hono-openapi'] = '^1.3.0'
+	}
 
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
@@ -119,6 +118,7 @@ function renderPackageJson({
 		typescript: '~5.9.0',
 		vitest: '^4.1.7'
 	}
+	if (effectMode) devDependencies.ajv = '^8.17.1'
 	if (isCf) devDependencies['@cloudflare/workers-types'] = '^4.20251101.0'
 
 	const pkg = {
@@ -143,7 +143,13 @@ function renderPackageJson({
 /*  tsconfig.json                                                      */
 /* ------------------------------------------------------------------ */
 
-function renderTsconfig({ isCf, isSqlite: _isSqlite }: { isCf: boolean; isSqlite: boolean }): string {
+function renderTsconfig({
+	isCf,
+	isSqlite: _isSqlite
+}: {
+	isCf: boolean
+	isSqlite: boolean
+}): string {
 	// Inherit the shared compiler base from `@repo/tooling-typescript` so every
 	// package agrees on strictness + module resolution. cf-workers consumers
 	// pick up `@cloudflare/workers-types`; everything else picks up `node`.
@@ -214,8 +220,15 @@ describe('errors', () => {
 })
 `
 
+const MIDDLEWARE_INDEX = `export { logger } from './logger.js'
+export { errorHandler } from './error-handler.js'
+`
+
+const MIDDLEWARE_AUTH_INDEX = `export { getSession, type SessionLike } from './client.js'
+export { requireAuth } from './require.js'
+`
+
 const EFFECT_ERRORS = `import { Data, Effect } from 'effect'
-import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
 export class Unauthorized extends Data.TaggedError('Unauthorized')<{
 	message: string
@@ -233,19 +246,6 @@ export class UnexpectedServiceError extends Data.TaggedError('UnexpectedServiceE
 	cause?: unknown
 }> {}
 
-export type AppError = Unauthorized | UserNotFound | UnexpectedServiceError
-
-export function statusForAppError(error: AppError): ContentfulStatusCode {
-	switch (error._tag) {
-		case 'Unauthorized':
-			return 401
-		case 'UserNotFound':
-			return 404
-		case 'UnexpectedServiceError':
-			return 500
-	}
-}
-
 export function tryPromiseUnexpected<A>({
 \ttry: run,
 \tmessage,
@@ -262,40 +262,372 @@ export function tryPromiseUnexpected<A>({
 }
 `
 
-const EFFECT_HONO = `import { Effect } from 'effect'
+const EFFECT_HONO = `import { Cause, Effect, Option } from 'effect'
 import type { Context } from 'hono'
+import type { ContentfulStatusCode } from 'hono/utils/http-status'
 
-import { statusForAppError, type AppError } from './errors.js'
+export type EffectHttpResponse<Body> = {
+	status: ContentfulStatusCode
+	body: Body
+}
 
-export async function runEffectJson<A>(
-	c: Context,
-	program: Effect.Effect<A, AppError, never>
-): Promise<Response> {
+export type UnexpectedEffectLog = {
+	cause: Cause.Cause<unknown>
+	request: {
+		method: string
+		path: string
+		requestId?: string
+	}
+}
+
+type EffectHttpOptions<A, E, SuccessBody, FailureBody> = {
+	c: Context
+	program: Effect.Effect<A, E, never>
+	onSuccess: (value: A) => EffectHttpResponse<SuccessBody>
+	onFailure: (error: E) => EffectHttpResponse<FailureBody>
+	logUnexpected?: (entry: UnexpectedEffectLog) => void
+}
+
+const ValidationErrorResponse = {
+	error: 'invalid request',
+	message: 'request validation failed',
+	tag: 'ValidationError',
+	code: 'VALIDATION_ERROR'
+} as const
+
+const UnexpectedErrorResponse = {
+	error: 'internal server error',
+	message: 'internal server error',
+	tag: 'UnexpectedFailure',
+	code: 'INTERNAL_SERVER_ERROR'
+} as const
+
+export function effectValidationHook(
+	result: { success: boolean },
+	c: Context
+): Response | undefined {
+	if (!result.success) return c.json(ValidationErrorResponse, 400)
+}
+
+export async function runEffectJson<A, E, SuccessBody, FailureBody>({
+	c,
+	program,
+	onSuccess,
+	onFailure,
+	logUnexpected
+}: EffectHttpOptions<A, E, SuccessBody, FailureBody>): Promise<Response> {
 	const exit = await Effect.runPromiseExit(program)
 
-	if (exit._tag === 'Success') return c.json(exit.value)
-
-	const error = exit.cause._tag === 'Fail' ? exit.cause.error : undefined
-	if (!error) {
-		return c.json(
-			{ error: 'internal server error', message: 'internal server error', tag: 'Defect' },
-			500
-		)
+	if (exit._tag === 'Success') {
+		const response = onSuccess(exit.value)
+		return c.json(response.body, response.status)
 	}
 
-	return c.json(
-		{
-			error: error.message,
-			message: error.message,
-			tag: error._tag,
-			...(error.code ? { code: error.code } : {})
-		},
-		statusForAppError(error)
-	)
+	if (!Cause.isDie(exit.cause) && !Cause.isInterrupted(exit.cause)) {
+		const failure = Cause.failureOption(exit.cause)
+		if (Option.isSome(failure)) {
+			const response = onFailure(failure.value)
+			return c.json(response.body, response.status)
+		}
+	}
+
+	const requestId = c.req.header('x-request-id')
+	const entry: UnexpectedEffectLog = {
+		cause: exit.cause,
+		request: {
+			method: c.req.method,
+			path: new URL(c.req.url).pathname,
+			...(requestId ? { requestId } : {})
+		}
+	}
+	if (logUnexpected) logUnexpected(entry)
+	else console.error('[effect-http] unexpected cause', Cause.pretty(exit.cause), entry.request)
+
+	return c.json(UnexpectedErrorResponse, 500)
 }
 `
 
-const EFFECT_AUTH_SESSION = `import { Context, Effect } from 'effect'
+const EFFECT_HONO_TEST = `import Ajv2020 from 'ajv/dist/2020.js'
+import { Cause, Data, Effect, Schema } from 'effect'
+import { Hono } from 'hono'
+import { describeRoute, openAPIRouteHandler, resolver, validator } from 'hono-openapi'
+import { describe, expect, test } from 'vitest'
+
+import {
+	effectValidationHook,
+	runEffectJson,
+	type EffectHttpResponse,
+	type UnexpectedEffectLog
+} from './hono.js'
+
+const ValidationError = {
+	error: 'invalid request',
+	message: 'request validation failed',
+	tag: 'ValidationError',
+	code: 'VALIDATION_ERROR'
+} as const
+
+const ErrorResponseSchema = Schema.Struct({
+	error: Schema.String,
+	message: Schema.String,
+	tag: Schema.String,
+	code: Schema.String
+})
+const SuccessResponseSchema = Schema.Struct({ accepted: Schema.String })
+const PathSchema = Schema.Struct({ id: Schema.Literal('valid') })
+const QuerySchema = Schema.Struct({ mode: Schema.Literal('full') })
+const BodySchema = Schema.Struct({ title: Schema.String })
+
+const ErrorResponseStandard = Schema.standardSchemaV1(ErrorResponseSchema)
+const SuccessResponseStandard = Schema.standardSchemaV1(SuccessResponseSchema)
+const PathStandard = Schema.standardSchemaV1(PathSchema)
+const QueryStandard = Schema.standardSchemaV1(QuerySchema)
+const BodyStandard = Schema.standardSchemaV1(BodySchema)
+
+class Conflict extends Data.TaggedError('Conflict')<{ message: string }> {}
+class Missing extends Data.TaggedError('Missing')<{ message: string }> {}
+type RouteError = Conflict | Missing
+
+function mapRouteError(error: RouteError): EffectHttpResponse<Schema.Schema.Type<typeof ErrorResponseSchema>> {
+	switch (error._tag) {
+		case 'Conflict':
+			return {
+				status: 409,
+				body: { error: error.message, message: error.message, tag: error._tag, code: 'CONFLICT' }
+			}
+		case 'Missing':
+			return {
+				status: 404,
+				body: { error: error.message, message: error.message, tag: error._tag, code: 'NOT_FOUND' }
+			}
+	}
+}
+
+function createTestApp(logs: UnexpectedEffectLog[]) {
+	const app = new Hono()
+	const logUnexpected = (entry: UnexpectedEffectLog) => logs.push(entry)
+	const errorResponse = (status: 400 | 404 | 409 | 500, description: string) => ({
+		[status]: {
+			description,
+			content: { 'application/json': { schema: resolver(ErrorResponseStandard) } }
+		}
+	})
+
+	app.post(
+		'/validate/:id',
+		validator('param', PathStandard, effectValidationHook),
+		validator('query', QueryStandard, effectValidationHook),
+		validator('json', BodyStandard, effectValidationHook),
+		describeRoute({
+			responses: {
+				201: {
+					description: 'Validated request',
+					content: { 'application/json': { schema: resolver(SuccessResponseStandard) } }
+				},
+				...errorResponse(400, 'Invalid request')
+			}
+		}),
+		(c) => c.json({ accepted: 'validated' }, 201)
+	)
+
+	app.get(
+		'/expected',
+		describeRoute({ responses: errorResponse(409, 'Conflict') }),
+		(c) =>
+			runEffectJson({
+				c,
+				program: Effect.fail(new Conflict({ message: 'already exists' })),
+				onSuccess: () => ({ status: 200, body: { accepted: 'unused' } }),
+				onFailure: mapRouteError,
+				logUnexpected
+			})
+	)
+
+	app.get(
+		'/defect',
+		describeRoute({ responses: errorResponse(500, 'Internal server error') }),
+		(c) =>
+			runEffectJson({
+				c,
+				program: Effect.die(new Error('secret defect detail')),
+				onSuccess: () => ({ status: 200, body: { accepted: 'unused' } }),
+				onFailure: mapRouteError,
+				logUnexpected
+			})
+	)
+
+	app.get(
+		'/interrupt',
+		describeRoute({ responses: errorResponse(500, 'Internal server error') }),
+		(c) =>
+			runEffectJson({
+				c,
+				program: Effect.interrupt,
+				onSuccess: () => ({ status: 200, body: { accepted: 'unused' } }),
+				onFailure: mapRouteError,
+				logUnexpected
+			})
+	)
+
+	app.get(
+		'/accepted',
+		describeRoute({
+			responses: {
+				202: {
+					description: 'Accepted',
+					content: { 'application/json': { schema: resolver(SuccessResponseStandard) } }
+				},
+				...errorResponse(500, 'Internal server error')
+			}
+		}),
+		(c) =>
+			runEffectJson({
+				c,
+				program: Effect.succeed('queued'),
+				onSuccess: (value) => ({ status: 202, body: { accepted: value } }),
+				onFailure: mapRouteError,
+				logUnexpected
+			})
+	)
+
+	app.get(
+		'/openapi.json',
+		openAPIRouteHandler(app, {
+			documentation: { info: { title: 'Effect HTTP boundary', version: '1.0.0' } }
+		})
+	)
+
+	return app
+}
+
+type OpenApiDocument = {
+	paths: Record<
+		string,
+		Record<
+			string,
+			{ responses: Record<string, { content: { 'application/json': { schema: object } } }> }
+		>
+	>
+}
+
+async function requestJson({ app, path, init }: { app: Hono; path: string; init?: RequestInit }) {
+	const response = await app.request('http://test.local' + path, init)
+	return { response, body: (await response.json()) as unknown }
+}
+
+function expectDeclaredResponse({
+	spec,
+	path,
+	method,
+	status,
+	body
+}: {
+	spec: OpenApiDocument
+	path: string
+	method: string
+	status: number
+	body: unknown
+}) {
+	const schema = spec.paths[path]![method]!.responses[String(status)]!.content['application/json']
+		.schema
+	const ajv = new Ajv2020({ strict: false })
+	expect(ajv.validate(schema, body), JSON.stringify(ajv.errors)).toBe(true)
+}
+
+describe('Effect HTTP boundary', () => {
+	test.each([
+		{ target: 'path', path: '/validate/nope?mode=full', body: { title: 'ok' } },
+		{ target: 'query', path: '/validate/valid?mode=compact', body: { title: 'ok' } },
+		{ target: 'json', path: '/validate/valid?mode=full', body: { title: 42 } }
+	])('maps invalid $target input to the declared response', async ({ path, body }) => {
+		const logs: UnexpectedEffectLog[] = []
+		const app = createTestApp(logs)
+		const spec = (await (await app.request('/openapi.json')).json()) as OpenApiDocument
+		const result = await requestJson({
+			app,
+			path,
+			init: {
+				method: 'POST',
+				headers: { 'content-type': 'application/json' },
+				body: JSON.stringify(body)
+			}
+		})
+
+		expect(result.response.status).toBe(400)
+		expect(result.body).toEqual(ValidationError)
+		expectDeclaredResponse({
+			spec,
+			path: '/validate/{id}',
+			method: 'post',
+			status: 400,
+			body: result.body
+		})
+		expect(logs).toEqual([])
+	})
+
+	test('maps an expected tagged failure through the route-owned mapper', async () => {
+		const logs: UnexpectedEffectLog[] = []
+		const app = createTestApp(logs)
+		const spec = (await (await app.request('/openapi.json')).json()) as OpenApiDocument
+		const result = await requestJson({ app, path: '/expected' })
+
+		expect(result.response.status).toBe(409)
+		expect(result.body).toEqual({
+			error: 'already exists',
+			message: 'already exists',
+			tag: 'Conflict',
+			code: 'CONFLICT'
+		})
+		expectDeclaredResponse({ spec, path: '/expected', method: 'get', status: 409, body: result.body })
+		expect(logs).toEqual([])
+	})
+
+	test.each([
+		{ kind: 'defect', path: '/defect', causeText: 'secret defect detail' },
+		{ kind: 'interruption', path: '/interrupt', causeText: 'All fibers interrupted without errors' }
+	])('returns a safe 500 and logs the full $kind cause', async ({ path, causeText }) => {
+		const logs: UnexpectedEffectLog[] = []
+		const app = createTestApp(logs)
+		const spec = (await (await app.request('/openapi.json')).json()) as OpenApiDocument
+		const result = await requestJson({
+			app,
+			path,
+			init: { headers: { 'x-request-id': 'request-123' } }
+		})
+
+		expect(result.response.status).toBe(500)
+		expect(result.body).toEqual({
+			error: 'internal server error',
+			message: 'internal server error',
+			tag: 'UnexpectedFailure',
+			code: 'INTERNAL_SERVER_ERROR'
+		})
+		expect(JSON.stringify(result.body)).not.toContain('secret defect detail')
+		expectDeclaredResponse({ spec, path, method: 'get', status: 500, body: result.body })
+		expect(logs).toHaveLength(1)
+		expect(Cause.pretty(logs[0]!.cause)).toContain(causeText)
+		expect(logs[0]!.request).toEqual({
+			method: 'GET',
+			path,
+			requestId: 'request-123'
+		})
+	})
+
+	test('uses explicit success encoding and a non-200 status', async () => {
+		const logs: UnexpectedEffectLog[] = []
+		const app = createTestApp(logs)
+		const spec = (await (await app.request('/openapi.json')).json()) as OpenApiDocument
+		const result = await requestJson({ app, path: '/accepted' })
+
+		expect(result.response.status).toBe(202)
+		expect(result.body).toEqual({ accepted: 'queued' })
+		expectDeclaredResponse({ spec, path: '/accepted', method: 'get', status: 202, body: result.body })
+		expect(logs).toEqual([])
+	})
+})
+`
+
+const _EFFECT_AUTH_SESSION = `import { Context, Effect } from 'effect'
 
 import { tryPromiseUnexpected, Unauthorized, type UnexpectedServiceError } from './errors.js'
 
@@ -339,10 +671,6 @@ export function resolveBetterAuthSession(
 \t)
 }
 `
-
-/* ------------------------------------------------------------------ */
-/*  src/hono/* (hono-only)                                             */
-/* ------------------------------------------------------------------ */
 
 const HONO_LOGGER = `import type { MiddlewareHandler } from 'hono'
 
@@ -402,7 +730,7 @@ export async function findUserById(db: Db, id: UserId) {
 }
 `
 
-const CORE_USERS_EFFECT = `import { eq } from 'drizzle-orm'
+const _CORE_USERS_EFFECT = `import { eq } from 'drizzle-orm'
 import { authSchema, type Db } from '@repo/db'
 
 import { tryPromiseUnexpected } from '../../effect/errors.js'
@@ -433,7 +761,7 @@ export async function getMeUseCase(db: Db, userId: UserId) {
 }
 `
 
-const USE_CASE_USERS_EFFECT = `import type { Db } from '@repo/db'
+const _USE_CASE_USERS_EFFECT = `import type { Db } from '@repo/db'
 import { Effect } from 'effect'
 
 import { UserNotFound } from '../../effect/errors.js'
@@ -503,8 +831,22 @@ export const requireAuth: MiddlewareHandler<{
 	Variables: { user: SessionLike }
 }> = async (c, next) => {
 	const session = await getSession(c.env, c.req.raw)
-	if (!session)
-		return c.json(
+	if (!session) return c.json({ error: 'unauthorized' }, 401)
+	c.set('user', session)
+	await next()
+}
+`
+
+const _HONO_AUTH_REQUIRE_EFFECT = `import type { MiddlewareHandler } from 'hono'
+
+import { getSession, type SessionLike } from './client.js'
+
+export const requireAuth: MiddlewareHandler<{
+	Bindings: Record<string, unknown>
+	Variables: { user: SessionLike }
+}> = async (c, next) => {
+	const session = await getSession(c.env, c.req.raw)
+	if (!session) return c.json(
 			{ error: 'unauthorized', message: 'unauthorized', tag: 'Unauthorized', code: 'UNAUTHORIZED' },
 			401
 		)

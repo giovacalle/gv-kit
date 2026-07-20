@@ -25,6 +25,7 @@ export function generateAiToolingRules(cfg: GvKitConfig): FileEntry[] {
 		flags: {
 			auth: cfg.choices.auth.length > 0,
 			cfWorkers: cfg.choices.deploy === 'cf-workers',
+			effectBackend: cfg.choices.backendRuntime === 'effect',
 			hono: cfg.choices.backend === 'hono',
 			i18nParaglide: cfg.choices.i18n === 'paraglide',
 			apiClientHeyApi: cfg.choices.apiClient === 'hey-api'
@@ -51,7 +52,7 @@ no service bindings, no inter-service \`fetch\`.
 
 - \`apps/web/\` — SvelteKit app, contains all HTTP entry points
 - \`packages/db/\` — Drizzle schema + client factory (\`createDb(env)\`)
-	- \`packages/backend/\` — shared helpers (logger, error helpers, Hono adapters)
+${cfg.choices.backendRuntime === 'effect' ? '- `packages/backend/` — horizontal Effect/Hono runners and logger' : '- `packages/backend/` — shared helpers (logger, error helpers, middleware)'}
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\n' : ''}
 
 ## Request lifecycle
@@ -83,7 +84,7 @@ subdirectory under \`apps/api/\` is its own Worker with its own
 - \`apps/web/\` — SvelteKit app
 - \`apps/api/<service>/\` — independently deployable Hono workers (e.g. \`auth\`, \`users\`)
 - \`packages/db/\` — Drizzle schema + client factory
-	- \`packages/backend/\` — horizontal helpers (logger, error helpers, Hono adapters) ONLY
+${cfg.choices.backendRuntime === 'effect' ? '- `packages/backend/` — horizontal Effect/Hono runners and logger ONLY' : '- `packages/backend/` — horizontal helpers (logger, error helpers, middleware) ONLY'}
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — generated TS clients per service\n' : ''}
 
 ## Request lifecycle
@@ -99,7 +100,7 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\
 - **Auth is a service.** Served EXCLUSIVELY by \`apps/api/auth/\`. No other
   service exposes auth endpoints.
 - **Inter-service calls = inline \`fetch\`.** Each consumer keeps a local
-  ~10 LOC client (e.g. \`apps/api/users/src/lib/auth-client.ts\`) that wraps
+  ~10 LOC client (e.g. ${cfg.choices.backendRuntime === 'effect' ? '`apps/api/users/src/infrastructure/auth-client.ts`' : '`apps/api/users/src/lib/auth-client.ts`'}) that wraps
   \`fetch\` against the auth Worker via a CF service binding. **Do NOT extract
   a shared SDK package.**
 - **No cross-service infra in \`packages/backend\`.** That package is reserved
@@ -111,7 +112,7 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\
 
 ## Forbidden patterns
 
-- \`apps/api/users/\` importing from \`@repo/backend/auth\`
+${cfg.choices.backendRuntime === 'effect' ? '- Non-auth services importing auth implementation details' : '- `apps/api/users/` importing from `@repo/backend/auth`'}
 - \`apps/api/users/\` reading \`BETTER_AUTH_SECRET\`
 - Any service other than \`apps/api/auth/\` querying \`user\`, \`session\`,
   \`account\`, or \`verification\` tables directly
@@ -126,6 +127,7 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\
 export function renderBackendRule(cfg: GvKitConfig): string {
 	const isCfWorkers = cfg.choices.deploy === 'cf-workers'
 	const isHono = cfg.choices.backend === 'hono'
+	if (cfg.choices.backendRuntime === 'effect') return renderEffectBackendRule(isCfWorkers)
 
 	const sections: string[] = []
 
@@ -183,7 +185,7 @@ The domain layer is split into **data-access** and **use-cases**.
 **Use cases (\`core/use-cases/**\`)**
 - Coordinate one or more DAO calls; throw \`HttpError\` via \`errors.*\` from \`@repo/backend/helpers\`.
 - Never reach into HTTP. No \`Request\`, \`Response\`, \`c.json\`, no \`Context\`.
-- Don't import Hono adapters from \`@repo/backend/hono\` inside core modules — that's a layering break.
+- Don't import \`@repo/backend/auth\` or \`@repo/backend/middleware\` — that's a layering break.
 
 **Both layers**
 - 1–2 args → positional. 3+ → named bag.
@@ -197,6 +199,110 @@ The domain layer is split into **data-access** and **use-cases**.
 - No \`wrangler.toml\` — \`wrangler.jsonc\` only`)
 
 	return sections.join('\n\n') + '\n'
+}
+
+function renderEffectBackendRule(isCfWorkers: boolean): string {
+	const cloudflareSection = isCfWorkers
+		? `## Cloudflare request layers
+
+- Treat Worker \`env\`, the incoming \`Request\`, service bindings, D1, and the
+  execution context as request-boundary inputs with request-scoped lifetime.
+- Build only service layers the workflow consumes, such as \`AuthClient\` and
+  \`Database\`. Keep raw \`Request\` and execution-context values in the Hono
+  adapter until cancellation or background-work semantics justify a service;
+  do not invent \`IncomingRequest\` or \`WorkerContext\` tags just to wrap them.
+- Keep bindings visible at this adapter boundary. Do not route D1, R2, KV,
+  service bindings, or the execution context through Effect \`Config\`.
+- Wrangler generates \`worker-configuration.d.ts\`; never edit that file.
+  Each service owns a hand-edited \`env.d.ts\` augmentation for its local
+  bindings and secrets. After changing \`wrangler.jsonc\` or \`env.d.ts\`, run
+  \`pnpm cf-typegen\` and keep the two declarations compatible. Never replace
+  \`wrangler.jsonc\` with TOML.`
+		: `## Request layers
+
+Build only service layers the workflow consumes from request-boundary inputs.
+Keep raw request/runtime values and concrete clients at the Hono adapter rather
+than inventing wrapper tags or capturing them inside application workflows.`
+
+	return `# Backend: Hono + Effect
+
+Each \`apps/api/<service>/\` directory is an independently deployable Hono
+service. Hono owns routing and the HTTP adapter: request validation, layer
+construction, response serialization, and status codes. Effect programs own
+application workflows and compose typed service failures. Do not put Hono
+\`Context\`, \`Request\`, \`Response\`, or HTTP status codes inside workflows.
+This runtime is scoped to \`backend=hono\`; \`backend=inside-frontend\` remains
+Promise/Zod. Svelte UI code is outside this backend architecture unless a
+separate frontend runtime is explicitly adopted.
+
+## HTTP failure boundary
+
+- Model expected failures as typed Effect errors.
+- Map those errors to declared JSON responses in each route with
+  \`runEffectJson({ c, program, onSuccess, onFailure })\`; the shared runner is generic
+  and does not own a central status switch.
+- Use \`effectValidationHook\` for validator failures so runtime responses match
+  the declared error schema.
+- Treat defects and interruptions as unexpected. Log the full Effect \`Cause\`
+  server-side, return only the generic declared JSON error, and never expose
+  causes, stack traces, provider responses, or secrets to clients.
+
+## Runtime OpenAPI is the client contract
+
+Effect Schema is the backend boundary schema. Bridge it with
+\`Schema.standardSchemaV1\`, register validators and explicit responses with
+\`hono-openapi\`, and expose the assembled Hono app through \`/openapi.json\`.
+That runtime document is the canonical input for Hey API; do not maintain a
+second handwritten client contract. After changing a route or schema, run
+the users API and then \`pnpm client:generate\`. It reads \`OPENAPI_URL\`, which
+defaults to \`http://localhost:8788/openapi.json\`; use a reachable staging URL
+when appropriate. Do not materialize a second OpenAPI file.
+- Response schemas are explicit and must remain Hey
+  API compatible. Before adding an Effect Schema shape that could break
+  generated \`$ref\` or \`components\`, extend the OpenAPI validation and
+  generated-client consumer tests.
+
+## Service-local workflows and layers
+
+- In the users service, the \`me\` route contract, handler, workflow, and tests
+  live together under \`apps/api/users/src/features/me/\`. \`AuthClient\` and
+  \`Database\` are concrete adapters under \`src/infrastructure/\`. The Hono
+  handler builds their request layers from \`c.env\` and \`c.req.raw\`, then
+  provides them to the workflow.
+- Keep every inter-service client local to its consumer. The users-local auth
+  client calls \`/internal/session\` and Schema-decodes successful payloads
+  before application logic sees them.
+- Better Auth translation stays inside \`apps/api/auth\` through its local
+  \`AuthSessionService\`; do not move auth state or translation into a shared
+  backend package.
+- When email OTP is enabled, the auth-owned OTP workflow consumes
+  \`MailerService\` from \`@repo/mailer/effect\`. The Better Auth adapter provides
+  \`MailerLive\`, logs typed delivery failures safely, and exposes only its
+  generic boundary error. Provider construction remains in \`packages/mailer\`.
+- \`packages/backend\` contains horizontal Effect/Hono helpers only. Domain
+  clients, database workflows, auth translation, and mailer workflows stay
+  with the service that owns or consumes them.
+
+${cloudflareSection}
+
+## What not to do
+
+- No \`as any\` in worker code.
+- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths.
+- No shared cross-service auth client or domain infrastructure package.
+- No concrete database or auth client captured inside an Effect workflow.
+- No central error-to-status mapping in \`packages/backend\`.
+- No HTTP-shaped error objects or status codes inside domain use-cases.
+- Do not replace the Hono adapter with Effect \`HttpApi\` or add a parallel
+  Effect HTTP contract.
+- Do not mix \`@hono/effect-validator\` into documented routes; use the Effect
+  Schema Standard Schema bridge and \`hono-openapi\` path above.
+- Do not change the default Promise/Zod generated output while working on
+  Effect mode.
+- In Cloudflare Workflows, keep \`step.do\`, \`step.sleep\`, and
+  \`step.waitForEvent\` as visible durable boundaries. Run Effect inside each
+  step; do not hide the Workflow model behind opaque wrappers.
+`
 }
 
 /* ------------------------------------------------------------------ */
@@ -259,7 +365,7 @@ the same import gives you the right driver for the runtime.
 
 \`packages/db/src/schema/\`:
 
-- \`sample.ts\` — example table to extend or replace
+${cfg.choices.backendRuntime === 'effect' ? '' : '- `sample.ts` — example table to extend or replace'}
 ${cfg.choices.auth.length > 0 ? '- `auth.ts` — better-auth tables (`user`, `session`, `account`, `verification`)\n' : ''}
 Each new domain gets its own file under \`schema/\`, re-exported from
 \`schema/index.ts\`.

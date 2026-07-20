@@ -20,7 +20,7 @@ declare global {
 		interface Platform {
 			env: {
 				PUBLIC_AUTH_URL?: string
-				/*@gvkit:if apiClientHeyApi*/
+				/*@gvkit:if effectBackend*/
 				PUBLIC_USERS_URL?: string
 				/*@gvkit:endif*/
 				/*@gvkit:if authEmailOtp*/
@@ -32,7 +32,7 @@ declare global {
 	namespace NodeJS {
 		interface ProcessEnv {
 			PUBLIC_AUTH_URL: string
-			/*@gvkit:if apiClientHeyApi*/
+			/*@gvkit:if effectBackend*/
 			PUBLIC_USERS_URL: string
 			/*@gvkit:endif*/
 			/*@gvkit:if authEmailOtp*/

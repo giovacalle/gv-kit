@@ -2,43 +2,34 @@ import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
 
 export function generateEmail(cfg: GvKitConfig): FileEntry[] {
+	if (cfg.choices.email === 'skip') return []
+	return cfg.choices.backendRuntime === 'effect'
+		? generateEffectEmail(cfg)
+		: generatePromiseEmail(cfg)
+}
+
+function generatePromiseEmail(cfg: GvKitConfig): FileEntry[] {
 	const choice = cfg.choices.email
-	if (choice === 'skip') return []
-	const effectMode = cfg.choices.backendRuntime === 'effect'
-	if (choice === 'notifuse') return notifuseFiles(effectMode)
+	if (choice === 'notifuse')
+		return [
+			{ path: 'packages/mailer/package.json', content: notifusePromisePkgJson() },
+			{ path: 'packages/mailer/tsconfig.json', content: NOTIFUSE_TSCONFIG },
+			{ path: 'packages/mailer/tsup.config.ts', content: notifusePromiseTsupConfig() },
+			{ path: 'packages/mailer/src/index.ts', content: NOTIFUSE_INDEX_TS },
+			{ path: 'packages/mailer/src/types.ts', content: NOTIFUSE_TYPES_TS },
+			{ path: 'packages/mailer/src/client.ts', content: NOTIFUSE_CLIENT_TS },
+			{ path: 'packages/mailer/README.md', content: NOTIFUSE_README }
+		]
 
 	const usesParaglide = cfg.choices.i18n === 'paraglide'
 	const usesOtp = cfg.choices.auth.includes('emailOTP')
-	return resendFiles({ usesParaglide, usesOtp, effectMode })
-}
-
-function notifuseFiles(effectMode: boolean): FileEntry[] {
 	const entries: FileEntry[] = [
-		{ path: 'packages/mailer/package.json', content: notifusePkgJson(effectMode) },
-		{ path: 'packages/mailer/tsconfig.json', content: NOTIFUSE_TSCONFIG },
-		{ path: 'packages/mailer/tsup.config.ts', content: notifuseTsupConfig(effectMode) },
-		{ path: 'packages/mailer/src/index.ts', content: NOTIFUSE_INDEX_TS },
-		{ path: 'packages/mailer/src/types.ts', content: NOTIFUSE_TYPES_TS },
-		{ path: 'packages/mailer/src/client.ts', content: NOTIFUSE_CLIENT_TS },
-		{ path: 'packages/mailer/README.md', content: NOTIFUSE_README }
-	]
-	if (effectMode) entries.push({ path: 'packages/mailer/src/effect.ts', content: NOTIFUSE_EFFECT_TS })
-	return entries
-}
-
-function resendFiles({
-	usesParaglide,
-	usesOtp,
-	effectMode
-}: {
-	usesParaglide: boolean
-	usesOtp: boolean
-	effectMode: boolean
-}): FileEntry[] {
-	const entries: FileEntry[] = [
-		{ path: 'packages/mailer/package.json', content: resendPkgJson({ usesParaglide, effectMode }) },
+		{ path: 'packages/mailer/package.json', content: resendPromisePkgJson(usesParaglide) },
 		{ path: 'packages/mailer/tsconfig.json', content: RESEND_TSCONFIG },
-		{ path: 'packages/mailer/tsup.config.ts', content: resendTsupConfig({ usesParaglide, effectMode }) },
+		{
+			path: 'packages/mailer/tsup.config.ts',
+			content: resendPromiseTsupConfig(usesParaglide)
+		},
 		{ path: 'packages/mailer/src/index.ts', content: RESEND_INDEX_TS },
 		{ path: 'packages/mailer/src/types.ts', content: RESEND_TYPES_TS },
 		{ path: 'packages/mailer/src/render.ts', content: RESEND_RENDER_TS },
@@ -59,16 +50,78 @@ function resendFiles({
 			path: 'packages/mailer/src/templates/welcome.tsx',
 			content: resendWelcomeTsx(usesParaglide)
 		},
-		{ path: 'packages/mailer/README.md', content: resendReadme(usesParaglide, usesOtp) }
+		{
+			path: 'packages/mailer/README.md',
+			content: resendReadme({ usesParaglide, usesOtp })
+		}
 	]
-	if (effectMode) entries.push({ path: 'packages/mailer/src/effect.ts', content: RESEND_EFFECT_TS })
 
-	if (usesOtp) {
+	if (usesOtp)
 		entries.push({
 			path: 'packages/mailer/src/templates/otp-login.tsx',
 			content: resendOtpLoginTsx(usesParaglide)
 		})
-	}
+
+	return entries
+}
+
+function generateEffectEmail(cfg: GvKitConfig): FileEntry[] {
+	const choice = cfg.choices.email
+	const usesOtp = cfg.choices.auth.includes('emailOTP')
+	if (!usesOtp) return generatePromiseEmail(cfg)
+
+	if (choice === 'notifuse')
+		return [
+			{ path: 'packages/mailer/package.json', content: notifuseEffectPkgJson() },
+			{ path: 'packages/mailer/tsconfig.json', content: NOTIFUSE_TSCONFIG },
+			{ path: 'packages/mailer/tsup.config.ts', content: notifuseEffectTsupConfig() },
+			{ path: 'packages/mailer/src/index.ts', content: NOTIFUSE_INDEX_TS },
+			{ path: 'packages/mailer/src/types.ts', content: NOTIFUSE_TYPES_TS },
+			{ path: 'packages/mailer/src/client.ts', content: NOTIFUSE_CLIENT_TS },
+			{ path: 'packages/mailer/README.md', content: NOTIFUSE_README + EFFECT_MAILER_README },
+			{ path: 'packages/mailer/src/effect.ts', content: NOTIFUSE_EFFECT_TS }
+		]
+
+	const usesParaglide = cfg.choices.i18n === 'paraglide'
+	const entries: FileEntry[] = [
+		{ path: 'packages/mailer/package.json', content: resendEffectPkgJson(usesParaglide) },
+		{ path: 'packages/mailer/tsconfig.json', content: RESEND_TSCONFIG },
+		{
+			path: 'packages/mailer/tsup.config.ts',
+			content: resendEffectTsupConfig(usesParaglide)
+		},
+		{ path: 'packages/mailer/src/index.ts', content: RESEND_INDEX_TS },
+		{ path: 'packages/mailer/src/types.ts', content: RESEND_TYPES_TS },
+		{ path: 'packages/mailer/src/render.ts', content: RESEND_RENDER_TS },
+		{ path: 'packages/mailer/src/client.ts', content: RESEND_CLIENT_TS },
+		{
+			path: 'packages/mailer/src/templates/index.ts',
+			content: resendTemplatesIndexTs(usesOtp)
+		},
+		{
+			path: 'packages/mailer/src/templates/_shared/types.ts',
+			content: resendSharedTypesTs(usesParaglide)
+		},
+		{
+			path: 'packages/mailer/src/templates/_shared/Layout.tsx',
+			content: RESEND_LAYOUT_TSX
+		},
+		{
+			path: 'packages/mailer/src/templates/welcome.tsx',
+			content: resendWelcomeTsx(usesParaglide)
+		},
+		{
+			path: 'packages/mailer/README.md',
+			content: resendReadme({ usesParaglide, usesOtp, effectMode: true })
+		},
+		{ path: 'packages/mailer/src/effect.ts', content: RESEND_EFFECT_TS }
+	]
+
+	if (usesOtp)
+		entries.push({
+			path: 'packages/mailer/src/templates/otp-login.tsx',
+			content: resendOtpLoginTsx(usesParaglide)
+		})
 
 	return entries
 }
@@ -78,22 +131,31 @@ function resendFiles({
 // Templates live in the Notifuse console (MJML + Liquid). No local rendering.
 // -----------------------------------------------------------------------------
 
-function notifusePkgJson(effectMode: boolean): string {
-	const exportsBlock: Record<string, { types: string; default: string }> = {
-		'.': {
-			types: './dist/index.d.ts',
-			default: './dist/index.js'
+function notifusePromisePkgJson(): string {
+	return renderNotifusePkgJson({
+		exportsBlock: {
+			'.': { types: './dist/index.d.ts', default: './dist/index.js' }
 		}
-	}
-	if (effectMode) {
-		exportsBlock['./effect'] = {
-			types: './dist/effect.d.ts',
-			default: './dist/effect.js'
-		}
-	}
-	const dependencies: Record<string, string> = {}
-	if (effectMode) dependencies.effect = '^3.21.2'
+	})
+}
 
+function notifuseEffectPkgJson(): string {
+	return renderNotifusePkgJson({
+		exportsBlock: {
+			'.': { types: './dist/index.d.ts', default: './dist/index.js' },
+			'./effect': { types: './dist/effect.d.ts', default: './dist/effect.js' }
+		},
+		dependencies: { effect: '^3.21.2' }
+	})
+}
+
+function renderNotifusePkgJson({
+	exportsBlock,
+	dependencies
+}: {
+	exportsBlock: Record<string, { types: string; default: string }>
+	dependencies?: Record<string, string>
+}): string {
 	return (
 		JSON.stringify(
 			{
@@ -111,7 +173,7 @@ function notifusePkgJson(effectMode: boolean): string {
 					typecheck: 'tsc --noEmit',
 					lint: 'eslint .'
 				},
-				...(Object.keys(dependencies).length > 0 ? { dependencies } : {}),
+				...(dependencies ? { dependencies } : {}),
 				devDependencies: {
 					'@repo/tooling-typescript': 'workspace:*',
 					tsup: '^8.5.0'
@@ -134,30 +196,12 @@ const NOTIFUSE_TSCONFIG = `{
 }
 `
 
-function notifuseTsupConfig(effectMode: boolean): string {
-	if (!effectMode) {
-		return `import { defineConfig } from 'tsup'
+function notifusePromiseTsupConfig(): string {
+	return renderTsupConfig({ entry: "['src/index.ts']" })
+}
 
-export default defineConfig({
-	entry: ['src/index.ts'],
-	format: ['esm'],
-	dts: true,
-	clean: true,
-	sourcemap: true
-})
-`
-	}
-
-	return `import { defineConfig } from 'tsup'
-
-export default defineConfig({
-	entry: ${JSON.stringify(effectMode ? ['src/index.ts', 'src/effect.ts'] : ['src/index.ts'])},
-	format: ['esm'],
-	dts: true,
-	clean: true,
-	sourcemap: true
-})
-`
+function notifuseEffectTsupConfig(): string {
+	return renderTsupConfig({ entry: JSON.stringify(['src/index.ts', 'src/effect.ts']) })
 }
 
 const NOTIFUSE_INDEX_TS = `export { createMailer, type Mailer, type MailerConfig } from './client.js'
@@ -288,6 +332,17 @@ export function MailerLive(config: MailerConfig) {
 }
 `
 
+const EFFECT_MAILER_README = `
+## Effect API
+
+The root \`@repo/mailer\` export remains the plain Promise API created with
+\`createMailer(...)\`. Effect workflows import \`MailerService\`,
+\`makeMailerEffect\`, and \`MailerLive\` from \`@repo/mailer/effect\` instead.
+The provider adapter converts rejected provider calls into typed
+\`MailerError\` failures; provider construction stays in this package, while
+the owning Hono service builds and provides the request-scoped layer.
+`
+
 const NOTIFUSE_README = `# @repo/mailer
 
 Thin RPC client for a self-hosted [Notifuse](https://notifuse.com) instance.
@@ -391,33 +446,43 @@ Notifuse's overall API style.
 // Resend — react-email templates rendered locally to HTML + plain text
 // -----------------------------------------------------------------------------
 
-function resendPkgJson({
-	usesParaglide,
-	effectMode
-}: {
-	usesParaglide: boolean
-	effectMode: boolean
-}): string {
+function resendPromisePkgJson(usesParaglide: boolean): string {
 	const dependencies: Record<string, string> = {
 		react: '^19.0.0',
 		'react-email': '^6.0.0',
 		resend: '^4.0.0'
 	}
 	if (usesParaglide) dependencies['@repo/i18n'] = 'workspace:*'
-	if (effectMode) dependencies.effect = '^3.21.2'
-	const exportsBlock: Record<string, { types: string; default: string }> = {
-		'.': {
-			types: './dist/index.d.ts',
-			default: './dist/index.js'
-		}
-	}
-	if (effectMode) {
-		exportsBlock['./effect'] = {
-			types: './dist/effect.d.ts',
-			default: './dist/effect.js'
-		}
-	}
+	return renderResendPkgJson({
+		dependencies,
+		exportsBlock: { '.': { types: './dist/index.d.ts', default: './dist/index.js' } }
+	})
+}
 
+function resendEffectPkgJson(usesParaglide: boolean): string {
+	const dependencies: Record<string, string> = {
+		react: '^19.0.0',
+		'react-email': '^6.0.0',
+		resend: '^4.0.0'
+	}
+	if (usesParaglide) dependencies['@repo/i18n'] = 'workspace:*'
+	dependencies.effect = '^3.21.2'
+	return renderResendPkgJson({
+		dependencies,
+		exportsBlock: {
+			'.': { types: './dist/index.d.ts', default: './dist/index.js' },
+			'./effect': { types: './dist/effect.d.ts', default: './dist/effect.js' }
+		}
+	})
+}
+
+function renderResendPkgJson({
+	dependencies,
+	exportsBlock
+}: {
+	dependencies: Record<string, string>
+	exportsBlock: Record<string, { types: string; default: string }>
+}): string {
 	return (
 		JSON.stringify(
 			{
@@ -449,39 +514,31 @@ function resendPkgJson({
 	)
 }
 
-function resendTsupConfig({
-	usesParaglide,
-	effectMode
-}: {
-	usesParaglide: boolean
-	effectMode: boolean
-}): string {
+function resendPromiseTsupConfig(usesParaglide: boolean): string {
 	const externals = ['react', 'react-email', 'resend']
 	if (usesParaglide) externals.push('@repo/i18n')
-	if (!effectMode) {
-		return `import { defineConfig } from 'tsup'
+	return renderTsupConfig({ entry: "['src/index.ts']", externals })
+}
 
-export default defineConfig({
-	entry: ['src/index.ts'],
-	format: ['esm'],
-	dts: true,
-	clean: true,
-	sourcemap: true,
-	external: ${JSON.stringify(externals)}
-})
-`
-	}
+function resendEffectTsupConfig(usesParaglide: boolean): string {
+	const externals = ['react', 'react-email', 'resend']
+	if (usesParaglide) externals.push('@repo/i18n')
 	externals.push('effect')
+	return renderTsupConfig({
+		entry: JSON.stringify(['src/index.ts', 'src/effect.ts']),
+		externals
+	})
+}
 
+function renderTsupConfig({ entry, externals }: { entry: string; externals?: string[] }): string {
 	return `import { defineConfig } from 'tsup'
 
 export default defineConfig({
-	entry: ${JSON.stringify(effectMode ? ['src/index.ts', 'src/effect.ts'] : ['src/index.ts'])},
+	entry: ${entry},
 	format: ['esm'],
 	dts: true,
 	clean: true,
-	sourcemap: true,
-	external: ${JSON.stringify(externals)}
+	sourcemap: true${externals ? `,\n\texternal: ${JSON.stringify(externals)}` : ''}
 })
 `
 }
@@ -831,7 +888,15 @@ export { MailerError, type SendInput, type SendResult } from './types.js'
 export type { BaseTemplateProps, Locale } from './templates/_shared/types.js'
 `
 
-function resendReadme(usesParaglide: boolean, usesOtp: boolean): string {
+function resendReadme({
+	usesParaglide,
+	usesOtp,
+	effectMode = false
+}: {
+	usesParaglide: boolean
+	usesOtp: boolean
+	effectMode?: boolean
+}): string {
 	const otpListItem = usesOtp
 		? `
 - \`src/templates/otp-login.tsx\` — OTP sign-in code`
@@ -966,6 +1031,6 @@ get \`packages/mailer/dist/\` rebuilt on demand. Run \`pnpm build\` once after
 | Env var | Required | Description |
 |---|---|---|
 | RESEND_API_KEY | yes | Resend API key |
-${i18nSection}
+${i18nSection}${effectMode ? `\n${EFFECT_MAILER_README}` : ''}
 `
 }

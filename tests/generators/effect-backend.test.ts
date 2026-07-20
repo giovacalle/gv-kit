@@ -1,7 +1,6 @@
-import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
+import { describe, expect, test } from 'bun:test'
 import { runGenerators } from '../../src/generators/index.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
 import { GvKitConfig } from '../../src/schema/config.js'
@@ -48,8 +47,8 @@ describe('Effect backend runtime generation', () => {
 		expect(usersPkg.dependencies?.zod).toBeUndefined()
 		expect(usersPkg.scripts?.build).toContain('wrangler deploy --dry-run --strict')
 
-		expect(requireContent('apps/api/users/src/routes/me/schema.ts')).toContain("from 'effect'")
-		expect(requireContent('apps/api/users/src/routes/me/route.ts')).toContain('describeRoute')
+		expect(requireContent('apps/api/users/src/features/me/schema.ts')).toContain("from 'effect'")
+		expect(requireContent('apps/api/users/src/features/me/route.ts')).toContain('describeRoute')
 		expect(requireContent('apps/api/users/src/openapi.ts')).toContain('openAPIRouteHandler')
 	})
 
@@ -71,50 +70,51 @@ describe('Effect backend runtime generation', () => {
 		const service = requireContent('apps/api/auth/src/effect/auth-session.ts')
 
 		expect(app).toContain('yield* AuthSessionService')
-		expect(app).toContain('makeAuthSessionService.pipe(Effect.provideService(WorkerEnvService, c.env))')
+		expect(app).toContain(
+			'makeAuthSessionService.pipe(Effect.provideService(WorkerEnvService, c.env))'
+		)
 		expect(app).toContain('Effect.provideServiceEffect(')
 		expect(app).not.toContain('auth.api.getSession')
 		expect(service).toContain('WorkerEnvService')
-		expect(service).toContain('@repo/backend/effect/auth-session')
+		expect(service).not.toContain('@repo/backend/effect/auth-session')
+		expect(service).toContain('AuthSessionService')
 		expect(service).toContain('resolveBetterAuthSession')
 		expect(service).toContain('getAuth(env)')
 		expect(service).toContain('resolvedAuth.api.getSession')
 	})
 
-	test('Effect users service exposes a real example route for params, query, body, and DB I/O', () => {
-		expect(requireContent('apps/api/users/src/app.ts')).toContain("app.route('/examples', examplePostsRouter)")
-		expect(requireContent('apps/api/users/src/routes/example-posts/schema.ts')).toContain(
-			'ExamplePostParamSchema'
-		)
-		expect(requireContent('apps/api/users/src/routes/example-posts/schema.ts')).toContain('ExamplePostQuery')
-		expect(requireContent('apps/api/users/src/routes/example-posts/schema.ts')).toContain('ExamplePostBody')
-		expect(requireContent('apps/api/users/src/routes/example-posts/route.ts')).toContain("validator('param'")
-		expect(requireContent('apps/api/users/src/routes/example-posts/route.ts')).toContain("validator('query'")
-		expect(requireContent('apps/api/users/src/routes/example-posts/route.ts')).toContain("validator('json'")
-		expect(requireContent('apps/api/users/src/routes/example-posts/handler.ts')).toContain(
-			'.insert(schema.posts)'
-		)
-		expect(requireContent('apps/api/users/src/routes/example-posts/handler.ts')).toContain(
-			'.from(schema.posts)'
-		)
+	test('Effect output has no production example route or database write surface', () => {
+		const forbiddenPaths = [
+			'apps/api/users/src/routes/example-posts/schema.ts',
+			'apps/api/users/src/routes/example-posts/route.ts',
+			'apps/api/users/src/routes/example-posts/handler.ts',
+			'apps/api/users/src/routes/example-posts/index.ts',
+			'packages/db/src/schema/sample.ts'
+		]
+
+		for (const path of forbiddenPaths) expect(content(path)).toBeUndefined()
+		expect(entries.some((entry) => entry.path.includes('effect-schema-harness'))).toBe(false)
+
+		const generated = entries.map((entry) => `${entry.path}\n${entry.content}`).join('\n')
+		expect(generated).not.toContain('/examples')
+		expect(generated).not.toContain('upsertExamplePost')
+		expect(generated).not.toContain('schema.posts')
+		expect(generated).not.toContain("sqliteTable('posts'")
+		expect(generated).not.toContain("pgTable('posts'")
+		expect(requireContent('packages/db/src/schema/index.ts')).not.toContain('./sample.js')
 	})
 
-	test('static users OpenAPI bootstrap includes the Effect contract used by Hey API', () => {
-		const spec = JSON.parse(requireContent('apps/api/users/openapi.json')) as {
-			openapi: string
-			paths: Record<string, Record<string, unknown>>
-			components: { schemas: Record<string, unknown> }
-		}
+	test('runtime users OpenAPI excludes the removed production example contract', () => {
+		expect(content('apps/api/users/openapi.json')).toBeUndefined()
 
-		expect(spec.openapi).toBe('3.1.0')
-		expect(spec.paths['/examples/posts/{id}']?.post).toBeDefined()
-		expect(JSON.stringify(spec.paths['/examples/posts/{id}'])).toContain('requestBody')
-		expect(JSON.stringify(spec.paths['/examples/posts/{id}'])).toContain('includeBody')
-		expect(JSON.stringify(spec.paths['/examples/posts/{id}'])).toContain('ExamplePostBody')
-		expect(JSON.stringify(spec.paths['/api/me']?.get)).toContain('ErrorResponse')
-		expect(spec.components.schemas.ExamplePostBody).toBeDefined()
-		expect(spec.components.schemas.ExamplePost).toBeDefined()
-		expect(spec.components.schemas.ErrorResponse).toBeDefined()
+		const contractSources = [
+			requireContent('apps/api/users/src/openapi.ts'),
+			requireContent('apps/api/users/src/features/me/route.ts'),
+			requireContent('apps/api/users/src/features/me/schema.ts')
+		].join('\n')
+		expect(contractSources).not.toContain('/examples')
+		expect(contractSources).not.toContain('ExamplePost')
+		expect(contractSources).toContain('ErrorResponseStandard')
 	})
 
 	test('shared backend owns Effect helpers while db stays thin', () => {
@@ -124,12 +124,12 @@ describe('Effect backend runtime generation', () => {
 		expect(backendPkg.exports?.['./effect']).toBeUndefined()
 		expect(backendPkg.exports?.['./effect/errors']).toBeDefined()
 		expect(backendPkg.exports?.['./effect/hono']).toBeDefined()
-		expect(backendPkg.exports?.['./effect/auth-session']).toBeDefined()
+		expect(backendPkg.exports?.['./effect/auth-session']).toBeUndefined()
 		expect(backendPkg.exports?.['./hono']).toBeUndefined()
 		expect(backendPkg.exports?.['./hono/auth']).toBeUndefined()
 		expect(backendPkg.exports?.['./hono/logger']).toBeDefined()
-		expect(backendPkg.exports?.['./hono/auth/client']).toBeDefined()
-		expect(backendPkg.exports?.['./hono/auth/require']).toBeDefined()
+		expect(backendPkg.exports?.['./hono/auth/client']).toBeUndefined()
+		expect(backendPkg.exports?.['./hono/auth/require']).toBeUndefined()
 		expect(backendPkg.exports?.['./helpers']).toBeUndefined()
 		expect(content('packages/backend/src/helpers/index.ts')).toBeUndefined()
 		expect(content('packages/backend/src/helpers/index.test.ts')).toBeUndefined()
@@ -138,20 +138,14 @@ describe('Effect backend runtime generation', () => {
 		expect(content('packages/backend/src/hono/index.ts')).toBeUndefined()
 		expect(content('packages/backend/src/hono/auth/index.ts')).toBeUndefined()
 		expect(content('packages/backend/src/hono/error-handler.ts')).toBeUndefined()
-		expect(requireContent('packages/backend/src/effect/errors.ts')).toContain('tryPromiseUnexpected')
-		expect(requireContent('packages/backend/src/effect/auth-session.ts')).toContain('AuthSessionService')
-		expect(requireContent('packages/backend/src/effect/auth-session.ts')).toContain(
-			'resolveBetterAuthSession'
-		)
-		expect(requireContent('packages/backend/src/core/data-access/users.ts')).toContain(
+		expect(requireContent('packages/backend/src/effect/errors.ts')).toContain(
 			'tryPromiseUnexpected'
 		)
-		expect(requireContent('packages/backend/src/core/use-cases/users.ts')).not.toContain(
-			'Effect.tryPromise'
-		)
-		expect(requireContent('packages/backend/src/core/use-cases/users.ts')).toContain(
-			'return findUserById(db, userId).pipe'
-		)
+		expect(content('packages/backend/src/effect/auth-session.ts')).toBeUndefined()
+		expect(content('packages/backend/src/hono/auth/client.ts')).toBeUndefined()
+		expect(content('packages/backend/src/hono/auth/require.ts')).toBeUndefined()
+		expect(content('packages/backend/src/core/data-access/users.ts')).toBeUndefined()
+		expect(content('packages/backend/src/core/use-cases/users.ts')).toBeUndefined()
 
 		const dbPkg = pkg('packages/db/package.json')
 		expect(dbPkg.dependencies?.effect).toBeUndefined()
@@ -169,7 +163,9 @@ describe('Effect backend runtime generation', () => {
 		const mailerPkg = pkg('packages/mailer/package.json')
 		expect(mailerPkg.dependencies?.effect).toBeDefined()
 		expect(mailerPkg.exports?.['./effect']).toBeDefined()
-		expect(requireContent('packages/mailer/src/client.ts')).toContain('export function createMailer')
+		expect(requireContent('packages/mailer/src/client.ts')).toContain(
+			'export function createMailer'
+		)
 		expect(requireContent('packages/mailer/src/effect.ts')).toContain('MailerService')
 	})
 

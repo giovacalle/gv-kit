@@ -1,6 +1,6 @@
 {
 	"name": "gv-kit",
-	"version": "0.1.0",
+	"version": "0.2.0",
 	"description": "Scaffolding CLI for Turborepo monorepos (SvelteKit + Hono on CF Workers)",
 	"license": "MIT",
 	"author": "giovacalle",

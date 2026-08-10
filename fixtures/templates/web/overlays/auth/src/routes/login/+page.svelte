@@ -103,9 +103,11 @@
 	}
 	/*@gvkit:endif*/
 
+	/*@gvkit:if authGoogle*/
 	async function continueWithGoogle() {
 		await authClient.signIn.social({ provider: 'google', callbackURL: '/me' })
 	}
+	/*@gvkit:endif*/
 </script>
 
 <Seo

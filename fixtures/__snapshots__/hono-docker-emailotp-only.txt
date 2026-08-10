@@ -86,7 +86,7 @@ apps/web/src/routes/+layout.ts  a10f188f71094046
 apps/web/src/routes/+page.svelte  59e9c2b5a4f7fcf8
 apps/web/src/routes/healthz/+server.ts  304fd1274599ff2b
 apps/web/src/routes/login/+page.server.ts  404a09fcdddf9a5c
-apps/web/src/routes/login/+page.svelte  cebb36316383d752
+apps/web/src/routes/login/+page.svelte  b0055f9473aa363e
 apps/web/src/routes/me/+layout.server.ts  905e6d19d5a6f089
 apps/web/src/routes/me/+page.svelte  ec05e1786f90d379
 apps/web/src/routes/me/account/+page.server.ts  17caccb5db26bf5d

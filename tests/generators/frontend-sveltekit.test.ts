@@ -92,7 +92,9 @@ describe('generateFrontendSveltekit — auth inclusion / exclusion', () => {
 		const loginGoogle = findEntry(withGoogle, 'apps/web/src/routes/login/+page.svelte')!
 		const loginNoGoogle = findEntry(withoutGoogle, 'apps/web/src/routes/login/+page.svelte')!
 		expect(loginGoogle.content).toContain('Continue with Google')
+		expect(loginGoogle.content).toContain('continueWithGoogle')
 		expect(loginNoGoogle.content).not.toContain('Continue with Google')
+		expect(loginNoGoogle.content).not.toContain('continueWithGoogle')
 	})
 
 	test('Astro Google-only login omits email OTP imports and state', () => {

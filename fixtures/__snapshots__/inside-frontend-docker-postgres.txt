@@ -58,7 +58,7 @@ apps/web/src/routes/+layout.svelte  f30837d9be05c1fa
 apps/web/src/routes/+page.svelte  998d512947fc17a4
 apps/web/src/routes/healthz/+server.ts  304fd1274599ff2b
 apps/web/src/routes/login/+page.server.ts  404a09fcdddf9a5c
-apps/web/src/routes/login/+page.svelte  c0f47c70403cad93
+apps/web/src/routes/login/+page.svelte  7bd43288babc3684
 apps/web/src/routes/me/+layout.server.ts  905e6d19d5a6f089
 apps/web/src/routes/me/+page.svelte  5d95b9d3efaaea8c
 apps/web/src/routes/me/account/+page.server.ts  17caccb5db26bf5d

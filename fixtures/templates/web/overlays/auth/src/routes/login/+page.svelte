@@ -21,7 +21,7 @@
 	/*@gvkit:if authEmailOtp*/
 	import { toast } from 'svelte-sonner'
 	/*@gvkit:endif*/
-	import { /*@gvkit:if authEmailOtp*/fieldProxy, setError, /*@gvkit:endif*/superForm } from 'sveltekit-superforms'
+	import { /*@gvkit:if authEmailOtp*/fieldProxy, setError, /*@gvkit:endif*/superForm } from 'sveltekit-superforms/client'
 	import { zodClient } from 'sveltekit-superforms/adapters'
 
 	/*@gvkit:if authEmailOtp*/

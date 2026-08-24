@@ -72,6 +72,13 @@ export const GvKitConfig = z
 				path: ['choices', 'apiClient']
 			})
 		}
+		if (cfg.choices.backend === 'inside-frontend' && cfg.choices.auth.length > 0) {
+			ctx.addIssue({
+				code: 'custom',
+				message: 'auth requires backend "hono"; choose Hono or disable authentication',
+				path: ['choices', 'auth']
+			})
+		}
 		if (cfg.choices.auth.includes('emailOTP') && cfg.choices.email === 'skip') {
 			ctx.addIssue({
 				code: 'custom',

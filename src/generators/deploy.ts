@@ -49,8 +49,13 @@ function marketingMonitoringEnvKeys(cfg: GvKitConfig): string[] {
 }
 
 function marketingPublicEnvKeys(cfg: GvKitConfig): string[] {
-	if (cfg.choices.marketing !== 'astro') return []
-	return ['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL', ...marketingMonitoringEnvKeys(cfg)]
+	const keys =
+		cfg.choices.marketing === 'astro'
+			? ['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL', ...marketingMonitoringEnvKeys(cfg)]
+			: []
+	if (cfg.choices.auth.length > 0) keys.push('PUBLIC_AUTH_URL')
+	if (cfg.choices.auth.includes('emailOTP')) keys.push('PUBLIC_TURNSTILE_SITE_KEY')
+	return keys
 }
 
 function workflowVariableRequirements(keys: string[]): string {
@@ -67,6 +72,9 @@ function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
 	const publicKeys = marketingPublicEnvKeys(cfg)
 	const publicOriginRequirements = workflowVariableRequirements(publicKeys)
 	const publicOriginEnv = workflowVariableEnv(publicKeys)
+	const publicVariableChecks = publicKeys
+		.map((key) => `          test -n "$${key}"`)
+		.join('\n')
 	return `# Deploy ${project} to production on push to main.
 #
 # Required GitHub Secrets:
@@ -136,7 +144,8 @@ jobs:
         run: echo "No database migration inputs changed."
 
       - name: Deploy affected Workers
-        run: pnpm turbo run deploy:production --affected
+        run: |
+${publicVariableChecks ? `${publicVariableChecks}\n` : ''}          pnpm turbo run deploy:production --affected
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -345,6 +354,12 @@ function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): strin
                 DATABASE_URL: process.env.STAGING_DATABASE_URL
               }
             }
+            if (Array.isArray(config.services)) {
+              config.services = config.services.map((service) => ({
+                ...service,
+                service: \`\${service.service}-\${process.env.STAGING_ALIAS}\`
+              }))
+            }
             fs.writeFileSync(
               path.join(path.dirname(configPath), 'wrangler.staging.jsonc'),
               JSON.stringify(config, null, 2) + '\\n'
@@ -352,6 +367,7 @@ function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): strin
           }
           NODE
         env:
+          STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
 ${envLines}`
 }
 

@@ -1,6 +1,6 @@
 .commitlintrc.json  1a921be1aa693bb1
 .dockerignore  d16cdb1adac10a8a
-.env.example  17774b5e4a3f6010
+.env.example  b7c44c18f84c30cc
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -11,7 +11,7 @@ README.md  ea8d7b8308abd6e8
 apps/api/auth/README.md  b29ad79df80344f2
 apps/api/auth/env.d.ts  f9cd25f82e15ac3d
 apps/api/auth/package.json  c83355e5c5c86041
-apps/api/auth/src/app.ts  54fdcf8aef57c5ea
+apps/api/auth/src/app.ts  9e0fddc5a25b7d5f
 apps/api/auth/src/auth.ts  e49c627dc12b731f
 apps/api/auth/src/index.ts  f937ce6f356f10f7
 apps/api/auth/src/lib/utils.ts  f8a04b723eb8ae59
@@ -29,14 +29,14 @@ apps/api/users/src/routes/me/index.ts  15a1bddfd03e9c31
 apps/api/users/src/routes/me/route.ts  4b19b276a8ac470c
 apps/api/users/src/routes/me/schema.ts  548dd639807027b1
 apps/api/users/tsconfig.json  f5cee125f468d286
-apps/web/.env.example  ff54bf081440e26f
+apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  7abc4885d67c5639
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  fcc23f0edf9afdd1
 apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
-apps/web/src/app.d.ts  fab01a79ba576330
+apps/web/src/app.d.ts  22f18288e38fe9a9
 apps/web/src/app.html  c808322710b7d3ea
 apps/web/src/hooks.server.ts  c91ca24aeda59378
 apps/web/src/lib/components/layout/footer.svelte  58d0e7441e7d2d7f

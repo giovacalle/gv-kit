@@ -22,9 +22,9 @@
 	"observability": {
 		"enabled": true
 	}
-	/*@gvkit:if insideFrontendAuth*/
-	// inside-frontend mode: this Worker holds BETTER_AUTH_SECRET.
-	// Set via:  wrangler secret put BETTER_AUTH_SECRET
-	// All auth state lives here — there is no separate auth Worker.
+	/*@gvkit:if honoAuth*/
+	,"services": [
+		{ "binding": "AUTH", "service": "__PROJECT__-auth" }
+	]
 	/*@gvkit:endif*/
 }

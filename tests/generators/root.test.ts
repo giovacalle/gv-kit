@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { generateDeploy } from '../../src/generators/deploy.js'
 import { generateRoot } from '../../src/generators/root.js'
 import { generateTooling } from '../../src/generators/tooling.js'
 import type { FileEntry } from '../../src/lib/files.js'
@@ -71,6 +72,33 @@ describe('generateRoot — Astro project shape', () => {
 				'PUBLIC_POSTHOG_HOST'
 			])
 		)
+	})
+
+	test('auth public variables are forwarded to builds and documented without secret values', () => {
+		const entries = generateRoot(
+			makeCfg({ marketing: 'inside-web', auth: ['emailOTP'], email: 'resend' })
+		)
+		const turbo = JSON.parse(content(entries, 'turbo.json')) as {
+			tasks: { build: { env?: string[] } }
+		}
+		expect(turbo.tasks.build.env).toEqual([
+			'PUBLIC_AUTH_URL',
+			'PUBLIC_TURNSTILE_SITE_KEY'
+		])
+		const env = content(entries, '.env.example')
+		expect(env).toContain('PUBLIC_AUTH_URL=http://localhost:5173')
+		expect(env).toContain('PUBLIC_TURNSTILE_SITE_KEY=')
+		expect(env).toContain('FROM_EMAIL=')
+	})
+
+	test('non-Cloudflare Hono auth variables use the auth-service origin', () => {
+		const cfg = makeCfg({ deploy: 'docker', auth: ['emailOTP'], email: 'resend' })
+		const env = content(generateRoot(cfg), '.env.example')
+		const compose = content(generateDeploy(cfg), 'docker-compose.yml')
+
+		expect(env).toContain('BETTER_AUTH_URL=http://localhost:8787')
+		expect(env).not.toContain('BETTER_AUTH_URL=http://localhost:5173')
+		expect(compose).toContain('BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8787}')
 	})
 
 	test('PostHog example uses the EU ingestion host forwarded by Docker builds', () => {

@@ -8,8 +8,8 @@
 		"monitoring": [],
 		"db": "postgres",
 		"apiClient": "skip",
-		"auth": ["emailOTP"],
-		"email": "resend",
+		"auth": [],
+		"email": "skip",
 		"aiTooling": ["claude"],
 		"deploy": "docker"
 	}

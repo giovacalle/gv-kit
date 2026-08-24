@@ -62,7 +62,9 @@ describe('generateDeploy — single-Dockerfile architecture', () => {
 	test('no per-app Dockerfiles are emitted in any backend mode', () => {
 		for (const backend of ['hono', 'inside-frontend'] as const) {
 			const cfg = makeCfg(
-				backend === 'inside-frontend' ? { backend, apiClient: 'skip' } : { backend }
+				backend === 'inside-frontend'
+					? { backend, apiClient: 'skip', auth: [], email: 'skip' }
+					: { backend }
 			)
 			const entries = generateDeploy(cfg)
 			expect(findEntry(entries, 'apps/web/Dockerfile')).toBeUndefined()
@@ -187,14 +189,24 @@ describe('generateDeploy — backend topology', () => {
 	})
 
 	test('backend=inside-frontend → no auth/users service blocks', () => {
-		const yaml = compose(makeCfg({ backend: 'inside-frontend', apiClient: 'skip' }))
+		const yaml = compose(
+			makeCfg({ backend: 'inside-frontend', apiClient: 'skip', auth: [], email: 'skip' })
+		)
 		expect(yaml).not.toMatch(/^\s+auth:/m)
 		expect(yaml).not.toMatch(/^\s+users:/m)
 		expect(yaml).toMatch(/^\s+web:/m)
 	})
 
 	test('inside-frontend + postgres → web has DATABASE_URL and depends_on postgres', () => {
-		const yaml = compose(makeCfg({ backend: 'inside-frontend', apiClient: 'skip', db: 'postgres' }))
+		const yaml = compose(
+			makeCfg({
+				backend: 'inside-frontend',
+				apiClient: 'skip',
+				db: 'postgres',
+				auth: [],
+				email: 'skip'
+			})
+		)
 		const webBlock = yaml.split(/^ {2}web:/m)[1]!
 		expect(webBlock).toContain('DATABASE_URL')
 		expect(webBlock).toMatch(/depends_on:[\s\S]*postgres:[\s\S]*condition: service_healthy/)
@@ -213,19 +225,6 @@ describe('generateDeploy — backend topology', () => {
 		const webBlock = yaml.split(/^ {2}web:/m)[1]!
 		expect(webBlock).toContain('SQLITE_PATH: file:/data/local.db')
 		expect(webBlock).toContain('sqlite_data:/data')
-	})
-
-	test('inside-frontend + auth → web has BETTER_AUTH_SECRET (not auth service)', () => {
-		const yaml = compose(
-			makeCfg({
-				backend: 'inside-frontend',
-				apiClient: 'skip',
-				auth: ['emailOTP'],
-				email: 'resend'
-			})
-		)
-		const webBlock = yaml.split(/^ {2}web:/m)[1]!
-		expect(webBlock).toContain('${BETTER_AUTH_SECRET:?')
 	})
 })
 
@@ -386,6 +385,18 @@ describe('generateDeploy — cf-workers workflows', () => {
 		}
 	})
 
+	test('production forwards public auth and Turnstile build variables', () => {
+		const entries = generateDeploy(
+			makeCfg({ deploy: 'cf-workers', marketing: 'inside-web', auth: ['emailOTP'] })
+		)
+		const yml = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
+		for (const key of ['PUBLIC_AUTH_URL', 'PUBLIC_TURNSTILE_SITE_KEY']) {
+			expect(yml).toContain(`#   - ${key}`)
+			expect(yml).toContain(`${key}: \${{ vars.${key} }}`)
+			expect(yml).toContain(`test -n "$${key}"`)
+		}
+	})
+
 	test('generated workflows do not contain YAML tab indentation', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		for (const entry of entries.filter((entry) => entry.path.endsWith('.yml'))) {
@@ -409,6 +420,13 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).not.toContain('working-directory: apps/api/auth')
 		expect(yml).not.toContain('working-directory: apps/api/users')
 		expect(yml).not.toContain('wrangler deploy --name')
+	})
+
+	test('staging rewrites Service Bindings to the same preview alias', () => {
+		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
+		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
+		expect(yml).toContain('STAGING_ALIAS: ${{ needs.preview-db.outputs.alias }}')
+		expect(yml).toContain('service: `${service.service}-${process.env.STAGING_ALIAS}`')
 	})
 
 	test('deploy-staging.yml triggers on pull_request open/sync/reopen with paths-ignore', () => {

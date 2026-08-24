@@ -1,6 +1,6 @@
 .commitlintrc.json  1a921be1aa693bb1
 .dockerignore  d16cdb1adac10a8a
-.env.example  708ec305a2a985f5
+.env.example  11c126c8845e4418
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -11,7 +11,7 @@ README.md  e5d73158571f9645
 apps/api/auth/README.md  24b28b1ed7274b40
 apps/api/auth/env.d.ts  4b71fae0147e833d
 apps/api/auth/package.json  88392b6969f1af8b
-apps/api/auth/src/app.ts  54fdcf8aef57c5ea
+apps/api/auth/src/app.ts  9e0fddc5a25b7d5f
 apps/api/auth/src/auth.ts  676face8c2ccf7d8
 apps/api/auth/src/index.ts  f937ce6f356f10f7
 apps/api/auth/src/lib/utils.ts  f8a04b723eb8ae59
@@ -44,14 +44,14 @@ apps/marketing/src/pages/index.astro  5f820e2381840e03
 apps/marketing/src/pages/robots.txt.ts  c9389f7f2864779c
 apps/marketing/src/styles/app.css  3b143b4dedae7e6d
 apps/marketing/tsconfig.json  bf116ae4200916ac
-apps/web/.env.example  ff54bf081440e26f
+apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  5e071ab6f5418d0e
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  9814278755196c79
 apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
-apps/web/src/app.d.ts  fab01a79ba576330
+apps/web/src/app.d.ts  22f18288e38fe9a9
 apps/web/src/app.html  513274e88776d9c6
 apps/web/src/hooks.server.ts  c91ca24aeda59378
 apps/web/src/lib/components/layout/footer.svelte  58d0e7441e7d2d7f

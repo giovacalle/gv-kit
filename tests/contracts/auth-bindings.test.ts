@@ -21,16 +21,37 @@ describe('auth-worker bindings', () => {
 		const isCf = cfg.choices.deploy === 'cf-workers'
 
 		if (isCf) {
-			test(`${file} (cf-workers) declares no service bindings and references BETTER_AUTH_SECRET`, () => {
+			test(`${file} (cf-workers) declares no service bindings and exact required secrets`, () => {
 				const entries = runGenerators(cfg)
 				const wrangler = entries.find((e) => e.path === 'apps/api/auth/wrangler.jsonc')
 				expect(wrangler).toBeDefined()
 
-				const parsed = parseJsonc<{ services?: unknown[] }>(wrangler!.content)
-				const services = parsed.services ?? []
-				expect(services.length).toBe(0)
+				const parsed = parseJsonc<{
+					services?: unknown[]
+					secrets?: { required?: string[] }
+				}>(wrangler!.content)
+				expect(parsed.services ?? []).toEqual([])
+				const expected = ['BETTER_AUTH_SECRET']
+				if (cfg.choices.auth.includes('google')) {
+					expected.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
+				}
+				if (cfg.choices.auth.includes('emailOTP')) {
+					expected.push('TURNSTILE_SECRET_KEY')
+					if (cfg.choices.email === 'resend') expected.push('RESEND_API_KEY', 'FROM_EMAIL')
+					if (cfg.choices.email === 'notifuse') {
+						expected.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
+					}
+				}
+				expect(parsed.secrets?.required).toEqual(expected)
 
-				expect(wrangler!.content).toContain('BETTER_AUTH_SECRET')
+				const devVars = entries.find((e) => e.path === 'apps/api/auth/.dev.vars')
+				expect(devVars).toBeDefined()
+				const localNames = devVars!.content
+					.split('\n')
+					.filter((line) => line && !line.startsWith('#'))
+					.map((line) => line.slice(0, line.indexOf('=')))
+				expect(localNames).toEqual(expected)
+				expect(devVars!.content).toContain('local-only')
 			})
 		} else {
 			test(`${file} (non-cf) does NOT emit apps/api/auth/wrangler.jsonc`, () => {
@@ -62,6 +83,12 @@ describe('auth-worker bindings', () => {
 
 describe('auth-worker generator (post-rewrite)', () => {
 	for (const { file, cfg } of honoFixtures) {
+		test(`${file} allows the generated CAPTCHA request header`, () => {
+			const entries = runGenerators(cfg)
+			const app = entries.find((e) => e.path === 'apps/api/auth/src/app.ts')
+			expect(app?.content).toContain("'x-captcha-response'")
+		})
+
 		test(`${file} auth.ts uses drizzleAdapter and skips forbidden helpers`, () => {
 			const entries = runGenerators(cfg)
 			const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')

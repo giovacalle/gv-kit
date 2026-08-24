@@ -80,6 +80,11 @@ describe('generateFrontendSveltekit — auth inclusion / exclusion', () => {
 		expect(login.content).toContain('superForm')
 		expect(login.content).toContain('InputOTP')
 		expect(login.content).toContain('turnstile')
+		const load = findEntry(entries, 'apps/web/src/routes/login/+page.server.ts')!
+		expect(load.content).toContain(
+			"import { PUBLIC_TURNSTILE_SITE_KEY } from '$env/static/public'"
+		)
+		expect(load.content).not.toContain('platform?.env')
 	})
 
 	test('login page renders Google CTA only when authGoogle is on', () => {
@@ -275,25 +280,7 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 		expect(wrangler.content).not.toContain('auth.api.')
 	})
 
-	test('wrangler.jsonc references BETTER_AUTH_SECRET only with inside-frontend + auth', () => {
-		const insideAuth = generateFrontendSveltekit(
-			makeCfg({
-				deploy: 'cf-workers',
-				backend: 'inside-frontend',
-				apiClient: 'skip',
-				auth: ['emailOTP'],
-				email: 'resend'
-			})
-		)
-		const insideNoAuth = generateFrontendSveltekit(
-			makeCfg({
-				deploy: 'cf-workers',
-				backend: 'inside-frontend',
-				apiClient: 'skip',
-				auth: [],
-				email: 'skip'
-			})
-		)
+	test('Hono auth uses an AUTH service binding without exposing its secret to web', () => {
 		const honoAuth = generateFrontendSveltekit(
 			makeCfg({
 				deploy: 'cf-workers',
@@ -302,15 +289,20 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 				email: 'resend'
 			})
 		)
-		expect(findEntry(insideAuth, 'apps/web/wrangler.jsonc')!.content).toContain(
-			'BETTER_AUTH_SECRET'
+		const wrangler = findEntry(honoAuth, 'apps/web/wrangler.jsonc')!.content
+		expect(wrangler).toContain('"binding": "AUTH"')
+		expect(wrangler).toContain('"service": "demo-auth"')
+		expect(wrangler).not.toContain('BETTER_AUTH_SECRET')
+		const proxy = findEntry(
+			honoAuth,
+			'apps/web/src/routes/api/auth/[...path]/+server.ts'
 		)
-		expect(findEntry(insideNoAuth, 'apps/web/wrangler.jsonc')!.content).not.toContain(
-			'BETTER_AUTH_SECRET'
-		)
-		expect(findEntry(honoAuth, 'apps/web/wrangler.jsonc')!.content).not.toContain(
-			'BETTER_AUTH_SECRET'
-		)
+		expect(proxy).toBeDefined()
+		expect(proxy!.content).toContain('auth.fetch(request)')
+		const session = findEntry(honoAuth, 'apps/web/src/lib/server/load-session.ts')!
+		expect(session.content).toContain("event.fetch('/api/auth/get-session'")
+		const env = findEntry(honoAuth, 'apps/web/.env.example')!
+		expect(env.content).toContain('PUBLIC_AUTH_URL=http://localhost:5173')
 	})
 })
 

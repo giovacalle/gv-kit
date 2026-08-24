@@ -176,7 +176,7 @@ The auth Worker handles the round-trip via Google Cloud Console's redirect URI (
 
 ## Server-side session loading
 
-`src/lib/server/load-session.ts` calls `${AUTH_URL}/api/auth/get-session` from `hooks.server.ts#handle` and populates `event.locals.user`. `handleFetch` forwards the inbound cookie to the upstream — without this, the server-rendered load sees no session even when the user is logged in.
+`src/lib/server/load-session.ts` calls the same-origin `/api/auth/get-session` façade with `event.fetch` and populates `event.locals.user`. On Cloudflare, the façade forwards the original request through the `AUTH` Service Binding and returns the auth Worker's response unchanged, including `Set-Cookie`. The browser therefore stores a host-only cookie for the web origin and sends it on SSR requests.
 
 This is the **only** server-side auth call. All mutations go through `authClient` from the browser.
 
@@ -185,7 +185,8 @@ This is the **only** server-side auth call. All mutations go through `authClient
 | Don't | Do |
 |---|---|
 | Add password fields, `/register`, `/forgot-password` | Passwordless only — email-OTP + Google |
-| Hardcode `PUBLIC_AUTH_URL` or the Turnstile site key | Read from `$env/static/public` / `data.turnstileSiteKey` |
+| Point `PUBLIC_AUTH_URL` at a public auth subdomain | Point it at the web origin; `/api/auth/*` is the same-origin façade |
+| Hardcode `PUBLIC_AUTH_URL` or the Turnstile site key | Read both from `$env/static/public` |
 | Verify Turnstile in `apps/web` | Forward via `x-captcha-response`; the auth Worker verifies |
 | Two separate `<form>`s for send + verify | Single `<form>`, single `superForm`, discriminated union schema |
 | Skip the SSR session gate | `me/+layout.server.ts` redirects to `/login` when no session |

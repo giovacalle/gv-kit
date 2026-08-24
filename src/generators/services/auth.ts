@@ -66,14 +66,14 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	if (runtime === 'cf-workers') {
 		entries.push({
 			path: 'apps/api/auth/wrangler.jsonc',
-			content: wranglerJsonc({ project, usesSqlite, wantsEmailOTP, email })
+			content: wranglerJsonc({ project, usesSqlite, wantsGoogle, wantsEmailOTP, email })
 		})
 	}
 
-	if (wantsEmailOTP) {
+	if (runtime === 'cf-workers') {
 		entries.push({
 			path: 'apps/api/auth/.dev.vars',
-			content: devVars()
+			content: devVars({ wantsGoogle, wantsEmailOTP, email })
 		})
 	}
 
@@ -192,11 +192,13 @@ function tsconfig({
 function wranglerJsonc({
 	project,
 	usesSqlite,
+	wantsGoogle,
 	wantsEmailOTP,
 	email
 }: {
 	project: string
 	usesSqlite: boolean
+	wantsGoogle: boolean
 	wantsEmailOTP: boolean
 	email: EmailChoice
 }): string {
@@ -214,39 +216,67 @@ function wranglerJsonc({
 	// "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive id>" }]
 	"vars": {}`
 
+	const requiredSecrets = ['BETTER_AUTH_SECRET']
+	if (wantsGoogle) requiredSecrets.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
+	if (wantsEmailOTP) {
+		requiredSecrets.push('TURNSTILE_SECRET_KEY')
+		if (email === 'resend') requiredSecrets.push('RESEND_API_KEY', 'FROM_EMAIL')
+		if (email === 'notifuse')
+			requiredSecrets.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
+	}
+
 	return `{
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "${project}-auth",
 	"main": "src/index.ts",
 	"compatibility_date": "${COMPATIBILITY_DATE}",
 	"compatibility_flags": ["nodejs_compat"],
-	// Replace <domain> with the project's apex domain before deploying.
-	"routes": [
-		{ "pattern": "auth.api.<domain>", "custom_domain": true }
-	],
-	// "host" is required because production routes use a placeholder domain.
+	"workers_dev": false,
+	"preview_urls": false,
+	"services": [],
+	"secrets": { "required": ${JSON.stringify(requiredSecrets)} },
 	"dev": {
 		"ip": "127.0.0.1",
 		"port": 8787,
 		"host": "localhost",
 		"inspector_port": 9229
 	},
-	// Secrets: \`wrangler secret put BETTER_AUTH_SECRET\` (and OAuth secrets). NEVER commit values.${
-		wantsEmailOTP ? '\n\t// SECRET: TURNSTILE_SECRET_KEY — required when emailOTP is enabled.' : ''
-	}${
-		wantsEmailOTP && email === 'notifuse'
-			? '\n\t// SECRETS: NOTIFUSE_API_KEY, NOTIFUSE_WORKSPACE_ID, NOTIFUSE_BASE_URL — self-hosted Notifuse instance.'
-			: ''
-	}
 	"observability": { "enabled": true }${dbBlock}
 }
 `
 }
 
-function devVars(): string {
-	return `# Replace with real Turnstile keys before deploy. Get them at https://dash.cloudflare.com/?to=/:account/turnstile
-TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA
-`
+function devVars({
+	wantsGoogle,
+	wantsEmailOTP,
+	email
+}: {
+	wantsGoogle: boolean
+	wantsEmailOTP: boolean
+	email: EmailChoice
+}): string {
+	const lines = [
+		'# Local-only placeholders. Wrangler reads this ignored file for `wrangler dev`.',
+		'# Install real values with `wrangler secret put <NAME>` before any deployment.',
+		'BETTER_AUTH_SECRET=local-only-better-auth-secret-at-least-32-characters'
+	]
+	if (wantsGoogle) {
+		lines.push('GOOGLE_CLIENT_ID=local-only-google-client-id')
+		lines.push('GOOGLE_CLIENT_SECRET=local-only-google-client-secret')
+	}
+	if (wantsEmailOTP) {
+		lines.push('TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA')
+		if (email === 'resend') {
+			lines.push('RESEND_API_KEY=local-only-resend-api-key')
+			lines.push('FROM_EMAIL=local@example.test')
+		}
+		if (email === 'notifuse') {
+			lines.push('NOTIFUSE_API_KEY=local-only-notifuse-api-key')
+			lines.push('NOTIFUSE_WORKSPACE_ID=local-only-notifuse-workspace')
+			lines.push('NOTIFUSE_BASE_URL=http://127.0.0.1:3000')
+		}
+	}
+	return `${lines.join('\n')}\n`
 }
 
 function envDts({
@@ -605,7 +635,7 @@ app.use('/api/auth/*', async (c, next) => {
 	const mw = cors({
 		origin: parseTrustedOrigins(c.env.BETTER_AUTH_TRUSTED_ORIGINS),
 		credentials: true,
-		allowHeaders: ['content-type', 'x-locale'],
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
 		maxAge: 600
 	})
 	return mw(c, next)
@@ -654,7 +684,7 @@ app.use(
 	cors({
 		origin: parseTrustedOrigins(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
 		credentials: true,
-		allowHeaders: ['content-type', 'x-locale'],
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
 		maxAge: 600
 	})
 )

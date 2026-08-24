@@ -99,18 +99,23 @@ allowBuilds:
 `
 
 function renderTurboJson(cfg: GvKitConfig): string {
-	const marketingBuildEnv = ['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL']
-	if (cfg.choices.monitoring.includes('umami')) {
-		marketingBuildEnv.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
+	const publicBuildEnv: string[] = []
+	if (cfg.choices.marketing === 'astro') {
+		publicBuildEnv.push('PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL')
+		if (cfg.choices.monitoring.includes('umami')) {
+			publicBuildEnv.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
+		}
+		if (cfg.choices.monitoring.includes('posthog')) {
+			publicBuildEnv.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
+		}
 	}
-	if (cfg.choices.monitoring.includes('posthog')) {
-		marketingBuildEnv.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
-	}
+	if (cfg.choices.auth.length > 0) publicBuildEnv.push('PUBLIC_AUTH_URL')
+	if (cfg.choices.auth.includes('emailOTP')) publicBuildEnv.push('PUBLIC_TURNSTILE_SITE_KEY')
 	const tasks: Record<string, unknown> = {
 		build: {
 			dependsOn: ['^build'],
 			outputs: ['dist/**', '.svelte-kit/**', '.wrangler/**', 'src/paraglide/**'],
-			...(cfg.choices.marketing === 'astro' ? { env: marketingBuildEnv } : {})
+			...(publicBuildEnv.length > 0 ? { env: publicBuildEnv } : {})
 		},
 		typecheck: {
 			dependsOn: ['^build']
@@ -334,8 +339,13 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push('')
 		lines.push('# Auth (better-auth)')
 		lines.push('BETTER_AUTH_SECRET=')
-		lines.push(`BETTER_AUTH_URL=${isHono ? 'http://localhost:8787' : 'http://localhost:5173'}`)
+		lines.push(
+			`BETTER_AUTH_URL=${isHono && !isCf ? 'http://localhost:8787' : 'http://localhost:5173'}`
+		)
 		lines.push('BETTER_AUTH_TRUSTED_ORIGINS=http://localhost:5173')
+		lines.push(
+			`PUBLIC_AUTH_URL=${isHono && isCf ? 'http://localhost:5173' : 'http://localhost:8787'}`
+		)
 	}
 
 	if (cfg.choices.auth.includes('google')) {
@@ -359,6 +369,7 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push('')
 		lines.push('# Resend')
 		lines.push('RESEND_API_KEY=')
+		lines.push('FROM_EMAIL=')
 	} else if (cfg.choices.email === 'notifuse') {
 		lines.push('')
 		lines.push('# Notifuse (self-hosted instance)')
@@ -371,6 +382,7 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push('')
 		lines.push('# Cloudflare Turnstile (auth Worker only — apps/web holds the public site key)')
 		lines.push('TURNSTILE_SECRET_KEY=')
+		lines.push('PUBLIC_TURNSTILE_SITE_KEY=1x00000000000000000000AA')
 	}
 
 	if (cfg.choices.monitoring.includes('umami')) {
@@ -394,7 +406,6 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		} else {
 			lines.push('# Service URLs (apps/api/{auth,users} run as standalone Node/Bun servers)')
 			lines.push('AUTH_URL=http://localhost:8787')
-			lines.push('PUBLIC_AUTH_URL=http://localhost:8787/api/auth')
 			lines.push('PUBLIC_API_URL=http://localhost:8788')
 		}
 	}

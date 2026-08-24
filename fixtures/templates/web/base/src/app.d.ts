@@ -19,9 +19,8 @@ declare global {
 		}
 		interface Platform {
 			env: {
-				PUBLIC_AUTH_URL?: string
-				/*@gvkit:if authEmailOtp*/
-				PUBLIC_TURNSTILE_SITE_KEY?: string
+				/*@gvkit:if authCfWorkers*/
+				AUTH: Fetcher
 				/*@gvkit:endif*/
 			}
 		}

@@ -1,0 +1,17 @@
+{
+	"configVersion": 2,
+	"choices": {
+		"name": "integrated-cf-workers-emailotp",
+		"frontend": "sveltekit",
+		"marketing": "inside-web",
+		"backend": "hono",
+		"i18n": "paraglide",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP"],
+		"email": "resend",
+		"aiTooling": ["codex"],
+		"deploy": "cf-workers"
+	}
+}

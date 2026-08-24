@@ -8,9 +8,7 @@ The auth service has its own client SDK (`better-auth`). Use `authClient` from `
 
 ## The boundary
 
-`apps/web` is a SvelteKit Worker. Backend services are independent Hono Workers. Communication is over public HTTP — service bindings are NOT used when cookies are involved (cookies don't round-trip across service-binding `fetch()`).
-
-> Service bindings ARE fine when no cookies are involved (server → server data fetch with a service-issued bearer token).
+`apps/web` is a SvelteKit Worker. Backend services are independent Hono Workers. On Cloudflare, auth is exposed only through the web app's same-origin `/api/auth/*` façade, which forwards the original request through the `AUTH` Service Binding and returns the response unchanged. Non-auth services use the transport declared for that service; never expose an internal Worker merely to avoid a binding.
 
 ## Typed fetch wrapper
 
@@ -40,7 +38,7 @@ Request the typed JSON via a thin helper at the call site, not inside the wrappe
 
 ## Use `event.fetch` on the server, NOT global `fetch`
 
-In `+page.server.ts`, `+layout.server.ts`, `+server.ts`, hooks, and any server module called from one of those, use the `fetch` parameter from the SvelteKit event. SvelteKit's `event.fetch` runs through `handleFetch` (so cookie forwarding works) and integrates with caching / dedup.
+In `+page.server.ts`, `+layout.server.ts`, `+server.ts`, hooks, and any server module called from one of those, use the `fetch` parameter from the SvelteKit event. SvelteKit's `event.fetch` integrates with same-origin routing, caching, and deduplication.
 
 ```typescript
 // src/routes/users/+page.server.ts
@@ -56,25 +54,9 @@ export const load = async ({ fetch, locals }) => {
 
 The helper accepts `fetch` and forwards it. Never call the global `fetch` from server code.
 
-## `handleFetch` — cookie forwarding for cross-origin services
+## Same-origin auth façade
 
-`apps/web` and `apps/api/auth` are on different origins (e.g. `example.com` and `auth.example.com`). When the server-side `event.fetch` calls the upstream, SvelteKit's `handleFetch` hook is the only correct place to forward the user's cookie.
-
-```typescript
-// src/hooks.server.ts
-import { PUBLIC_AUTH_URL } from '$env/static/public';
-
-export const handleFetch: HandleFetch = async ({ request, fetch, event }) => {
-	if (request.url.startsWith(PUBLIC_AUTH_URL)) {
-		// Forward the inbound cookie (set by upstream auth) to the upstream so it
-		// can resolve the session.
-		request.headers.set('cookie', event.request.headers.get('cookie') ?? '');
-	}
-	return fetch(request);
-};
-```
-
-Without this, the upstream sees no session cookie on server-rendered loads and returns 401 even though the user is logged in.
+The browser and SSR code call `/api/auth/*` on the web origin. The catch-all SvelteKit endpoint forwards the request over the `AUTH` Service Binding. Preserve method, body, query, `Cookie`, `Origin`, and the response's `Set-Cookie`; do not reconstruct auth payloads or publish the auth Worker on another hostname.
 
 ## Session loading
 
@@ -104,7 +86,7 @@ Wrap the call in `Result<T, AppError>` (see `core-errors.md`). No `try/catch` fo
 |---|---|
 | Call global `fetch(...)` in `+*.server.ts` | Use `event.fetch` and pass it through wrappers |
 | Hardcode upstream URLs | Read from `$env/static/public` (`PUBLIC_*_URL`) |
-| Service binding when cookies are involved | Public HTTP fetch with `handleFetch` cookie forwarding |
+| Public auth Worker hostname | Same-origin web façade over the `AUTH` Service Binding |
 | Inline a 40-line fetch in a route | One thin wrapper per service in `src/lib/api/` |
 | Write a `lib/api/auth.ts` fetch wrapper | Use `authClient` from `$lib/auth/client` (better-auth's SDK) |
 | `try/catch` to convert errors | `fromPromise` from `$lib/utils/result` |

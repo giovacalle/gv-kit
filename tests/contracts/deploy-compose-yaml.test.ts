@@ -35,10 +35,6 @@ const COMBINATIONS: Array<[string, Partial<Choices>]> = [
 	['hono + postgres + google only', { auth: ['google'], email: 'skip' }],
 	['hono + sqlite + emailOTP + notifuse', { db: 'sqlite', auth: ['emailOTP'], email: 'notifuse' }],
 	[
-		'inside-frontend + postgres + emailOTP',
-		{ backend: 'inside-frontend', apiClient: 'skip', auth: ['emailOTP'], email: 'resend' }
-	],
-	[
 		'inside-frontend + sqlite + no auth',
 		{
 			backend: 'inside-frontend',
@@ -90,7 +86,13 @@ describe('deploy compose — service topology contract', () => {
 
 	test('inside-frontend mode emits postgres+migrate+web only (when postgres)', () => {
 		const doc = parseCompose(
-			makeCfg({ backend: 'inside-frontend', apiClient: 'skip', db: 'postgres' })
+			makeCfg({
+				backend: 'inside-frontend',
+				apiClient: 'skip',
+				db: 'postgres',
+				auth: [],
+				email: 'skip'
+			})
 		)
 		const services = Object.keys(doc.services as object).sort()
 		expect(services).toEqual(['migrate', 'postgres', 'web'])
@@ -148,23 +150,5 @@ describe('deploy compose — env contract with services generators', () => {
 
 		expect(authEnv).not.toContain('NOTIFUSE_API_KEY')
 		expect(authEnv).not.toContain('SQLITE_PATH')
-	})
-
-	test('inside-frontend mode injects all auth env on web instead of auth service', () => {
-		const doc = parseCompose(
-			makeCfg({
-				backend: 'inside-frontend',
-				apiClient: 'skip',
-				auth: ['emailOTP', 'google'],
-				email: 'resend'
-			})
-		)
-		const services = doc.services as Record<string, { environment?: Record<string, string> }>
-		expect(services.auth).toBeUndefined()
-		const webEnv = Object.keys(services.web?.environment ?? {})
-		expect(webEnv).toContain('BETTER_AUTH_SECRET')
-		expect(webEnv).toContain('GOOGLE_CLIENT_ID')
-		expect(webEnv).toContain('RESEND_API_KEY')
-		expect(webEnv).toContain('DATABASE_URL')
 	})
 })

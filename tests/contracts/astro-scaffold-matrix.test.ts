@@ -11,7 +11,7 @@ import { GvKitConfig } from '../../src/schema/config.js'
 
 describe('Astro generated-project verification matrix', () => {
 	test('pairwise covers every supported prompt-reachable option interaction', () => {
-		expect(ASTRO_SUPPORTED_CARTESIAN_ROWS).toBe(11_520)
+		expect(ASTRO_SUPPORTED_CARTESIAN_ROWS).toBe(8_832)
 		expect(uncoveredSupportedPairs()).toEqual([])
 		expect(new Set(ASTRO_SCAFFOLD_MATRIX.map((entry) => entry.choices.topology))).toEqual(
 			new Set(['hono', 'inside-frontend'])
@@ -54,6 +54,7 @@ describe('Astro generated-project verification matrix', () => {
 	test('documents every unsupported Astro combination as a schema rejection', () => {
 		expect(UNSUPPORTED_ASTRO_CASES.map((entry) => entry.id)).toEqual([
 			'inside-frontend-hey-api',
+			'inside-frontend-auth',
 			'email-otp-without-mailer'
 		])
 		for (const unsupported of UNSUPPORTED_ASTRO_CASES) {

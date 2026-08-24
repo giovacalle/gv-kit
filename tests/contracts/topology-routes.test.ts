@@ -16,7 +16,7 @@ const honoCfFixtures = readdirSync(fixturesDir)
 	.filter((x) => x.cfg.choices.backend === 'hono' && x.cfg.choices.deploy === 'cf-workers')
 
 type Route = { pattern: string; custom_domain?: boolean }
-type Wrangler = { routes?: Route[] }
+type Wrangler = { routes?: Route[]; services?: { binding: string; service: string }[] }
 
 function patterns(content: string): string[] {
 	const parsed = parseJsonc<Wrangler>(content)
@@ -25,13 +25,22 @@ function patterns(content: string): string[] {
 
 describe('topology routes (hono + cf-workers)', () => {
 	for (const { file, cfg } of honoCfFixtures) {
-		test(`${file} auth route is on auth.api.<domain>`, () => {
+		test(`${file} keeps auth internal and binds it to the web gateway`, () => {
 			const entries = runGenerators(cfg)
 			const auth = entries.find((e) => e.path === 'apps/api/auth/wrangler.jsonc')
+			const web = entries.find((e) => e.path === 'apps/web/wrangler.jsonc')
 			expect(auth).toBeDefined()
-			const ps = patterns(auth!.content)
-			expect(ps.length).toBeGreaterThan(0)
-			expect(ps.every((p) => p.includes('auth.api.'))).toBe(true)
+			expect(web).toBeDefined()
+			expect(patterns(auth!.content)).toEqual([])
+			const parsedWeb = parseJsonc<Wrangler>(web!.content)
+			if (cfg.choices.auth.length === 0) {
+				expect(parsedWeb.services).toBeUndefined()
+			} else {
+				expect(parsedWeb.services).toContainEqual({
+					binding: 'AUTH',
+					service: `${cfg.choices.name}-auth`
+				})
+			}
 		})
 
 		test(`${file} users route is on api.<domain> (not auth.api.)`, () => {

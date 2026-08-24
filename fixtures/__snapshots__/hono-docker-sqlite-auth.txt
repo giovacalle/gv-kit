@@ -1,5 +1,5 @@
 .ai/rules/api-backend.md  1cc8ad9d51fb6de5
-.ai/rules/auth-flow.md  f5be10c84945eb0f
+.ai/rules/auth-flow.md  4999980421fdecec
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
 .ai/rules/core-stack.md  992f2eba93b14501
@@ -9,7 +9,7 @@
 .ai/rules/db-drizzle.md  4bdbe794beb65b4f
 .ai/rules/email-templates.md  42f8ee191e5bb372
 .ai/rules/hooks.md  6dd03126d2ec9420
-.ai/rules/web-api.md  b1f99686f730f748
+.ai/rules/web-api.md  bee5d9782ab284d6
 .ai/rules/web-forms.md  18d060e15c611273
 .ai/rules/web-query.md  a4db4a7a2444e539
 .ai/rules/web-seo.md  4d46fd12199ce1b5
@@ -25,7 +25,7 @@
 .claude/stack.json  616c92c02d6fb68e
 .commitlintrc.json  1a921be1aa693bb1
 .dockerignore  d16cdb1adac10a8a
-.env.example  fb17ba2fb2f561e8
+.env.example  aa7c1ef5b6f06b95
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -34,11 +34,10 @@ CLAUDE.md  a7068a66ffe6bf41
 Dockerfile  a9438afd325c5b92
 LICENSE  508a77d2e7b51d98
 README.md  3eebd4dad7ab7fef
-apps/api/auth/.dev.vars  43cbd0379e4feb55
 apps/api/auth/README.md  9eb9367866e12185
 apps/api/auth/env.d.ts  a12f65b9ff015fd0
 apps/api/auth/package.json  15a76e1b4a432a1b
-apps/api/auth/src/app.ts  54fdcf8aef57c5ea
+apps/api/auth/src/app.ts  9e0fddc5a25b7d5f
 apps/api/auth/src/auth.ts  29a4cb1c686f1fcf
 apps/api/auth/src/index.ts  f937ce6f356f10f7
 apps/api/auth/src/lib/utils.ts  c10b60e1a56290c8
@@ -56,14 +55,14 @@ apps/api/users/src/routes/me/index.ts  15a1bddfd03e9c31
 apps/api/users/src/routes/me/route.ts  4b19b276a8ac470c
 apps/api/users/src/routes/me/schema.ts  dfb72772dfcd8402
 apps/api/users/tsconfig.json  f5cee125f468d286
-apps/web/.env.example  ff54bf081440e26f
+apps/web/.env.example  dee9919e7a8de0ba
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  6e9375f0c8ae31a1
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  198b74a6710dc1fb
 apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
-apps/web/src/app.d.ts  04d4864efaef9126
+apps/web/src/app.d.ts  8320d1b2ef128b55
 apps/web/src/app.html  71446bbc67212e78
 apps/web/src/hooks.server.ts  27d1eebdeecb655b
 apps/web/src/lib/auth/client.ts  4b861f9ec374beab
@@ -75,7 +74,7 @@ apps/web/src/lib/context/auth-context.svelte.ts  84cdf07d5d08b7ec
 apps/web/src/lib/schemas/.gitkeep  e3b0c44298fc1c14
 apps/web/src/lib/schemas/auth.ts  1b24b554e2a52478
 apps/web/src/lib/server/errors.ts  980f17bf308d5965
-apps/web/src/lib/server/load-session.ts  ba4666e41443281b
+apps/web/src/lib/server/load-session.ts  32d9611e9870f0b9
 apps/web/src/lib/utils/result.ts  9f382c0e532c4c24
 apps/web/src/routes/+error.svelte  36ed66be600c8d3e
 apps/web/src/routes/+layout.server.ts  d0cd17269f1d9bb1
@@ -83,12 +82,12 @@ apps/web/src/routes/+layout.svelte  49e224c959b0b8c7
 apps/web/src/routes/+layout.ts  a10f188f71094046
 apps/web/src/routes/+page.svelte  998d512947fc17a4
 apps/web/src/routes/healthz/+server.ts  304fd1274599ff2b
-apps/web/src/routes/login/+page.server.ts  404a09fcdddf9a5c
-apps/web/src/routes/login/+page.svelte  ed0ce65603373e16
+apps/web/src/routes/login/+page.server.ts  20a1bcb175174432
+apps/web/src/routes/login/+page.svelte  cc95ac4fa6143d71
 apps/web/src/routes/me/+layout.server.ts  905e6d19d5a6f089
 apps/web/src/routes/me/+page.svelte  5d95b9d3efaaea8c
-apps/web/src/routes/me/account/+page.server.ts  17caccb5db26bf5d
-apps/web/src/routes/me/account/+page.svelte  a660f72428e119da
+apps/web/src/routes/me/account/+page.server.ts  297140c71e8b3f40
+apps/web/src/routes/me/account/+page.svelte  4cbd0ca2aad04f8c
 apps/web/src/routes/robots.txt/+server.ts  66aea35efb4ee1b1
 apps/web/src/routes/sitemap.xml/+server.ts  2e783c699ce31baf
 apps/web/src/routes/users/+page.svelte  7033c27e64a0dc89
@@ -283,4 +282,4 @@ packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e
 prettier.config.js  76a534fdcb4541a5
 tsconfig.json  30916d65cceb0f5a
-turbo.json  a71501a3945d1141
+turbo.json  1408556542452fc0

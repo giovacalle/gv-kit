@@ -12,7 +12,7 @@
 	import * as m from '@repo/i18n/messages'
 	/*@gvkit:endif*/
 	import { toast } from 'svelte-sonner'
-	import { superForm } from 'sveltekit-superforms'
+	import { superForm } from 'sveltekit-superforms/client'
 	import { zodClient } from 'sveltekit-superforms/adapters'
 
 	import { authClient } from '$lib/auth/client'

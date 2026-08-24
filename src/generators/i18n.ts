@@ -323,7 +323,7 @@ const INLANG_SETTINGS =
 			$schema: 'https://inlang.com/schema/project-settings',
 			baseLocale: 'en',
 			locales: ['en', 'it'],
-			modules: ['https://cdn.jsdelivr.net/npm/@inlang/plugin-message-format@4/dist/index.js'],
+			modules: ['https://cdn.jsdelivr.net/npm/@inlang/plugin-message-format@4.4.1/dist/index.js'],
 			'plugin.inlang.messageFormat': {
 				pathPattern: './messages/{locale}.json'
 			}

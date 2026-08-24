@@ -7,7 +7,7 @@
 .ai/rules/core-workflow.md  30ddaad5a684cb81
 .ai/rules/db-drizzle.md  199662d63e28e772
 .ai/rules/hooks.md  6dd03126d2ec9420
-.ai/rules/web-api.md  b1f99686f730f748
+.ai/rules/web-api.md  bee5d9782ab284d6
 .ai/rules/web-forms.md  18d060e15c611273
 .ai/rules/web-query.md  a4db4a7a2444e539
 .ai/rules/web-seo.md  4d46fd12199ce1b5
@@ -23,7 +23,7 @@
 .claude/stack.json  8db95726826cc88a
 .commitlintrc.json  1a921be1aa693bb1
 .dockerignore  d16cdb1adac10a8a
-.env.example  d0d82c0f7126070d
+.env.example  81f2f5bb3974b613
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -35,7 +35,7 @@ README.md  49c4729888d5d6c1
 apps/api/auth/README.md  49102d977eb180f2
 apps/api/auth/env.d.ts  4b71fae0147e833d
 apps/api/auth/package.json  9b68b2164e2b9c2b
-apps/api/auth/src/app.ts  54fdcf8aef57c5ea
+apps/api/auth/src/app.ts  9e0fddc5a25b7d5f
 apps/api/auth/src/auth.ts  676face8c2ccf7d8
 apps/api/auth/src/index.ts  f937ce6f356f10f7
 apps/api/auth/src/lib/utils.ts  f8a04b723eb8ae59
@@ -53,14 +53,14 @@ apps/api/users/src/routes/me/index.ts  15a1bddfd03e9c31
 apps/api/users/src/routes/me/route.ts  4b19b276a8ac470c
 apps/api/users/src/routes/me/schema.ts  548dd639807027b1
 apps/api/users/tsconfig.json  f5cee125f468d286
-apps/web/.env.example  ff54bf081440e26f
+apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  533fc1d574ed75aa
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  760ea29107755005
 apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
-apps/web/src/app.d.ts  fab01a79ba576330
+apps/web/src/app.d.ts  22f18288e38fe9a9
 apps/web/src/app.html  9c90a9a5306c1411
 apps/web/src/hooks.server.ts  c91ca24aeda59378
 apps/web/src/lib/components/layout/footer.svelte  58d0e7441e7d2d7f

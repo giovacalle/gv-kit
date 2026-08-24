@@ -1,4 +1,4 @@
-import { superValidate } from 'sveltekit-superforms'
+import { superValidate } from 'sveltekit-superforms/server'
 import { zod } from 'sveltekit-superforms/adapters'
 
 import { profileSchema } from '$lib/schemas/auth'

@@ -83,12 +83,31 @@ describe('GvKitConfig schema', () => {
 		expect(result.success).toBe(true)
 	})
 
-	test('accepts apiClient="skip" when backend is "inside-frontend"', () => {
+	test('accepts apiClient="skip" without auth when backend is "inside-frontend"', () => {
+		const result = GvKitConfig.safeParse({
+			...baseV2,
+			choices: {
+				...baseV2.choices,
+				backend: 'inside-frontend',
+				apiClient: 'skip',
+				auth: [],
+				email: 'skip'
+			}
+		})
+		expect(result.success).toBe(true)
+	})
+
+	test('rejects auth when backend is "inside-frontend"', () => {
 		const result = GvKitConfig.safeParse({
 			...baseV2,
 			choices: { ...baseV2.choices, backend: 'inside-frontend', apiClient: 'skip' }
 		})
-		expect(result.success).toBe(true)
+		expect(result.success).toBe(false)
+		if (!result.success) {
+			const flat = JSON.stringify(result.error.issues)
+			expect(flat).toContain('auth')
+			expect(flat).toContain('auth requires backend')
+		}
 	})
 
 	test('rejects apiClient="hey-api" when backend is "inside-frontend"', () => {

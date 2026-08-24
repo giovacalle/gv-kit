@@ -64,6 +64,10 @@ const insideHeyApi = unsupportedBase('astro-invalid-inside-hey-api')
 insideHeyApi.choices.backend = 'inside-frontend'
 insideHeyApi.choices.apiClient = 'hey-api'
 
+const insideAuth = unsupportedBase('astro-invalid-inside-auth')
+insideAuth.choices.backend = 'inside-frontend'
+insideAuth.choices.auth = ['google']
+
 const otpWithoutMailer = unsupportedBase('astro-invalid-otp-mailer')
 otpWithoutMailer.choices.auth = ['emailOTP']
 
@@ -72,6 +76,11 @@ export const UNSUPPORTED_ASTRO_CASES = [
 		id: 'inside-frontend-hey-api',
 		config: insideHeyApi,
 		expected: 'apiClient must be "skip" when backend is "inside-frontend"'
+	},
+	{
+		id: 'inside-frontend-auth',
+		config: insideAuth,
+		expected: 'auth requires backend "hono"; choose Hono or disable authentication'
 	},
 	{
 		id: 'email-otp-without-mailer',
@@ -84,6 +93,7 @@ const axisNames = Object.keys(AXES) as AxisName[]
 
 function isSupported(choices: AstroMatrixChoices): boolean {
 	if (choices.topology === 'inside-frontend' && choices.apiClient !== 'skip') return false
+	if (choices.topology === 'inside-frontend' && choices.auth !== 'none') return false
 	return !choices.auth.includes('emailOTP') || choices.email !== 'skip'
 }
 
@@ -218,7 +228,8 @@ type EntryResult = {
 const matrixEnvironment = {
 	PUBLIC_MARKETING_URL: 'https://marketing.example.test',
 	PUBLIC_APP_URL: 'https://app.example.test',
-	PUBLIC_AUTH_URL: 'https://auth.example.test/api/auth',
+	PUBLIC_AUTH_URL: 'https://app.example.test',
+	PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
 	PUBLIC_API_URL: 'https://api.example.test',
 	PUBLIC_UMAMI_HOST: 'https://stats.example.test',
 	PUBLIC_UMAMI_WEBSITE_ID: 'matrix-site',

@@ -3,7 +3,8 @@ import { renderTemplate } from '../lib/template-renderer.js'
 import { WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
 
-const DEV_AUTH_URL = 'http://127.0.0.1:8787'
+const WEB_DEV_AUTH_URL = 'http://localhost:5173'
+const SERVICE_DEV_AUTH_URL = 'http://127.0.0.1:8787'
 const ASTRO_OWNED_SEO_ROUTES = new Set([
 	'apps/web/src/routes/robots.txt/+server.ts',
 	'apps/web/src/routes/sitemap.xml/+server.ts'
@@ -34,13 +35,18 @@ export function generateFrontendSveltekit(cfg: GvKitConfig): FileEntry[] {
 			deployCfWorkers: cfg.choices.deploy === 'cf-workers',
 			deployNode: cfg.choices.deploy !== 'cf-workers',
 			insideFrontend: isInsideFrontend,
-			insideFrontendAuth: isInsideFrontend && hasAuth,
+			honoAuth: cfg.choices.backend === 'hono' && hasAuth,
+			authCfWorkers:
+				cfg.choices.backend === 'hono' && hasAuth && cfg.choices.deploy === 'cf-workers',
 			apiClientHeyApi: cfg.choices.apiClient === 'hey-api'
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,
 			__COMPAT_DATE__: WORKERS_COMPAT_DATE,
-			__AUTH_URL__: DEV_AUTH_URL
+			__AUTH_URL__:
+				cfg.choices.backend === 'hono' && hasAuth && cfg.choices.deploy === 'cf-workers'
+					? WEB_DEV_AUTH_URL
+					: SERVICE_DEV_AUTH_URL
 		}
 	})
 

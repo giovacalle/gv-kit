@@ -40,7 +40,7 @@ export const load = async ({ platform }) => {
 };
 ```
 
-> The web app's `wrangler.jsonc` only configures the static-asset Worker. Database / KV / R2 / DO bindings live with their owning service under `apps/api/<service>/wrangler.jsonc`. The web app talks to those services over HTTP (see `web-api.md`), not through bindings.
+> The web app owns static assets and gateway Service Bindings such as `AUTH`; it does not receive database, KV, R2, queue, or Durable Object bindings. Data capabilities live with their owning service under `apps/api/<service>/wrangler.jsonc`.
 
 ## Typing — `App.Platform.env`
 

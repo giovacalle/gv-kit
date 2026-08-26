@@ -1,7 +1,8 @@
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
-import { WORKERS_COMPAT_DATE } from '../lib/workers.js'
+import { HONO_WORKERS_COMPAT_DATE, WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
+import { AUTH_SERVICE, USERS_SERVICE } from './hono-topology.js'
 
 /**
  * Canonical source of rule bodies. Emits `.ai/rules/*.md`, the neutral
@@ -34,7 +35,8 @@ export function generateAiToolingRules(cfg: GvKitConfig): FileEntry[] {
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,
-			__COMPAT_DATE__: WORKERS_COMPAT_DATE
+			__COMPAT_DATE__:
+				cfg.choices.backend === 'hono' ? HONO_WORKERS_COMPAT_DATE : WORKERS_COMPAT_DATE
 		}
 	})
 	entries.push(...fixtureRules.filter((e) => e.path.startsWith('.ai/rules/')))
@@ -124,48 +126,63 @@ a future split into Hono workers stays cheap.
 
 	return `# Stack
 
-\`apps/api/\` is a CONTAINER of independently deployable Hono workers. Each
-subdirectory under \`apps/api/\` is its own Worker with its own
-\`wrangler.jsonc\` and bindings.
+\`apps/api/\` is the public Hono API gateway. The web origin's \`/api/*\` alias
+and canonical API origin reach the same gateway. Independently deployable private
+Hono workers live under \`services/\`. Browser and SSR code depend on the
+gateway contract, never on a private service's deployment address.
 
 ## Layout
 
 - \`apps/web/\` — SvelteKit app
-- \`apps/api/<service>/\` — independently deployable Hono workers (e.g. \`auth\`, \`users\`)
+- \`apps/api/\` — public Hono API gateway
+- \`services/<service>/\` — independently deployable private Hono workers (e.g. \`auth\`, \`users\`)
 - \`packages/db/\` — Drizzle schema + client factory
 - \`packages/backend/\` — horizontal helpers (logger, error helpers, middleware) ONLY
-${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — generated TS clients per service\n' : ''}
+${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — flat client generated from `apps/api/openapi.json`\n' : ''}
 
 ## Request lifecycle
 
-1. Browser hits the SvelteKit app (\`apps/web/\`).
-2. SvelteKit calls a service via the appropriate URL/binding.
-3. The service handles the request entirely on its own. Cross-service calls
-   go through inline \`fetch\` (~10 LOC) or CF service bindings — never a
-   shared SDK package.
+1. Browser requests use same-origin \`/api/*\` paths and reach the gateway. Better Auth uses
+   \`/api/auth/*\`; domain operations use versioned \`/api/v1/*\` paths.
+2. SvelteKit SSR passes its request-scoped \`fetch\` ${cfg.choices.apiClient === 'hey-api' ? 'to the flat gateway client' : 'to same-origin gateway requests'}.
+   On Cloudflare, \`handleFetch\` sends these requests through the web Worker's
+   \`GATEWAY\` Service Binding. Node and Docker use the private gateway URL.
+3. The gateway maps explicit public prefixes to private services. Private
+   services call one another directly and never hairpin through the gateway.
+   Web code never bypasses the gateway.
 
 ## Service boundary policy (CRITICAL)
 
-- **Auth is a service.** Served EXCLUSIVELY by \`apps/api/auth/\`. No other
+- **The gateway owns public API ingress.** It must not import or mount a private service application.
+  Private workers under \`services/\` have no browser-facing route.
+- **Private services stay private.** They must not gain a public route, workers.dev hostname, or preview URL.
+- **Auth is a service.** Served EXCLUSIVELY by \`${AUTH_SERVICE.workspacePath}/\`. No other
   service exposes auth endpoints.
-- **Inter-service calls = inline \`fetch\`.** Each consumer keeps a local
-  ~10 LOC client (e.g. \`apps/api/users/src/lib/auth-client.ts\`) that wraps
-  \`fetch\` against the auth Worker via a CF service binding. **Do NOT extract
-  a shared SDK package.**
+- **Inter-service calls stay private.** Session-aware services use the existing
+  \`@repo/backend/middleware/auth\` transport, which calls \`/internal/session\`
+  through an explicit \`${AUTH_SERVICE.internalTarget}\` binding on Cloudflare or the private
+  \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` URL on Node and Docker. Do not generate a duplicate
+  local auth client or extract a service SDK.
 - **No cross-service infra in \`packages/backend\`.** That package is reserved
   for truly horizontal concerns. Auth state, billing state, RBAC live with
   their owning service.
-- **Bindings are explicit per service.** Each service declares its own
-  \`wrangler.jsonc\` with its own bindings (D1, KV, R2, secrets, service
-  bindings). No shared \`env\` blob.
+- **OpenAPI ownership stays with services.** Each domain service owns a deterministic fragment.
+  The gateway composes \`apps/api/openapi.json\` and serves it at \`/api/openapi.json\`. Better Auth
+  stays outside that document.${cfg.choices.apiClient === 'hey-api' ? ' Hey API generates one flat client from it.' : ' No API client package is generated.'}
+- **Bindings are explicit per deployable.** The web Worker binds only to the
+  gateway. The gateway binds to its private services. Each private service owns
+  its data and service bindings. No shared \`env\` blob.
 
 ## Forbidden patterns
 
-- \`apps/api/users/\` importing from \`@repo/backend/auth\`
-- \`apps/api/users/\` reading \`BETTER_AUTH_SECRET\`
-- Any service other than \`apps/api/auth/\` querying \`user\`, \`session\`,
+- Browser or SSR code calling \`${AUTH_SERVICE.workspacePath}/\` or \`${USERS_SERVICE.workspacePath}/\` directly
+- \`${USERS_SERVICE.workspacePath}/\` importing from \`@repo/backend/auth\`
+- \`${USERS_SERVICE.workspacePath}/\` reading \`BETTER_AUTH_SECRET\`
+- Any service other than \`${AUTH_SERVICE.workspacePath}/\` querying \`user\`, \`session\`,
   \`account\`, or \`verification\` tables directly
-- Adding a \`packages/auth-client/\` or similar shared SDK
+- Adding a per-service public client package or fetch wrapper
+- Sending an internal service call through the gateway
+- Configuring credentialed wildcard CORS; use an explicit origin allowlist
 `
 }
 
@@ -176,6 +193,13 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\
 export function renderBackendRule(cfg: GvKitConfig): string {
 	const isCfWorkers = cfg.choices.deploy === 'cf-workers'
 	const isHono = cfg.choices.backend === 'hono'
+	const gatewayConsumer =
+		cfg.choices.apiClient === 'hey-api'
+			? `- Browser code imports operations from the flat \`@repo/openapi-client\` package
+  and uses same-origin \`/api/*\` paths.
+- SvelteKit server code passes request-scoped \`fetch\` to that client.`
+			: `- This workspace has no generated API client package. Browser code uses same-origin
+  \`/api/*\` paths, and SvelteKit server code uses request-scoped \`fetch\`.`
 
 	const sections: string[] = []
 
@@ -183,11 +207,28 @@ export function renderBackendRule(cfg: GvKitConfig): string {
 
 ${
 	isHono
-		? `Hono workers live under \`apps/api/<service>/\`. Each service is its own
-deployable Worker with its own dependencies, bindings, and runtime entry.`
+		? `The public Hono gateway lives at \`apps/api/\`. Independently deployable
+private workers live under \`services/<service>/\`, each with its own
+dependencies, bindings, and runtime entry.`
 		: `Backend logic lives in SvelteKit endpoints (\`+server.ts\`, \`+page.server.ts\`)
 inside \`apps/web/\`. A single deployable unit.`
 }`)
+
+	if (isHono)
+		sections.push(`## Gateway boundary
+
+- \`apps/api/\` owns every public API route. Private workers live under
+  \`services/<service>/\` and are not browser or web dependencies.
+${gatewayConsumer} On Cloudflare, the web Worker's \`GATEWAY\` Service Binding carries SSR requests.
+  Node and Docker use the private gateway URL.
+- Only the gateway calls private services for public API work. A private service
+  calls another private service directly for an internal domain flow.
+- Never import a service app into the gateway. Forward requests through the
+  explicit target transport instead.
+- Never send an internal service call through the gateway. Use a direct private
+  binding or private URL.
+- Never combine credentials with a wildcard CORS origin. Use an explicit origin
+  allowlist and reject unknown origins.`)
 
 	sections.push(`## Errors: \`HttpError\` + factory
 
@@ -211,9 +252,9 @@ shape stays consistent.`)
 
 - **No Node primitives.** No \`fs\`, no \`path\`, no \`process.env\`, no \`Buffer\`.
   Use \`Web Crypto\`, \`fetch\`, \`Response\`, \`Request\`, \`URL\`.
-- **\`Env\` is generated by wrangler**, never hand-written. Run
-  \`pnpm cf-typegen\` after editing \`wrangler.jsonc\`.
-  Import the generated \`Env\` from \`worker-configuration.d.ts\`.
+- **\`Env\` is generated from Wrangler config**, never hand-written. Clean scaffolds use
+  \`worker-configuration.bootstrap.d.ts\`; run \`pnpm cf-typegen\` to replace it with
+  Wrangler's \`worker-configuration.d.ts\`, and rerun after editing \`wrangler.jsonc\`.
 - **Wrangler config is always \`wrangler.jsonc\`** — never \`wrangler.toml\`.
 - **Bindings are explicit.** D1, KV, R2, secrets, service bindings are
   declared per-service in that service's \`wrangler.jsonc\`.`)
@@ -242,7 +283,7 @@ The domain layer is split into **data-access** and **use-cases**.
 	sections.push(`## What NOT to do
 
 - No \`as any\` in worker code
-- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths${isHono ? '\n- No \\`@repo/backend/auth\\` import outside of `apps/api/auth/`' : ''}
+- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths${isHono ? '\n- No \\`@repo/backend/auth\\` import outside of `' + AUTH_SERVICE.workspacePath + '/`' : ''}
 - No hand-written \`Env\` interface — let wrangler generate it
 - No \`wrangler.toml\` — \`wrangler.jsonc\` only`)
 
@@ -326,7 +367,7 @@ ${migrationCmds}
 ## Boundary
 
 - \`packages/db\` does NOT contain auth business logic
-- ${cfg.choices.backend === 'hono' ? 'Only `apps/api/auth/` queries the auth tables. Other services that need session data go through `/internal/session`.' : 'Auth tables are queried by the auth handler in `apps/web/`. Other route handlers should use the resolved session from `locals`.'}
+- ${cfg.choices.backend === 'hono' ? `Only \`${AUTH_SERVICE.workspacePath}/\` queries the auth tables. Other services that need session data go through \`/internal/session\`.` : 'Auth tables are queried by the auth handler in `apps/web/`. Other route handlers should use the resolved session from `locals`.'}
 `
 }
 
@@ -370,7 +411,7 @@ uses \`contact.language\` to pick the right localized template variant when
 the notification has multiple languages configured. If the workspace only
 has English templates, the field is harmless.
 
-\`apps/api/auth\` resolves the locale from request headers via
+\`${AUTH_SERVICE.workspacePath}\` resolves the locale from request headers via
 \`pickLocale(...)\` and forwards it through \`to.language\`.
 
 `

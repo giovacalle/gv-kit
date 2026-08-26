@@ -1,7 +1,22 @@
 import type { FileEntry } from '../../lib/files.js'
+import { HONO_WORKERS_COMPAT_DATE } from '../../lib/workers.js'
 import type { GvKitConfig } from '../../schema/config.js'
+import {
+	CLOUDFLARE_TYPEGEN_SCRIPT,
+	CLOUDFLARE_TYPES_BOOTSTRAP_FILE,
+	renderCloudflareBootstrapTypes
+} from '../cloudflare-worker-types.js'
+import {
+	AUTH_SERVICE,
+	honoPackageIdentity,
+	honoServiceName,
+	honoServicePath,
+	nodeDevelopmentOrigin,
+	USERS_SERVICE
+} from '../hono-topology.js'
+import { createUsersOpenApiFragment, stringifyOpenApi } from '../openapi-contract.js'
 
-const COMPATIBILITY_DATE = '2026-07-20'
+const PUBLIC_USERS_PREFIX = USERS_SERVICE.publicPrefixes[0]
 
 type Runtime = 'cf-workers' | 'node'
 
@@ -10,8 +25,8 @@ function deriveRuntime(deploy: GvKitConfig['choices']['deploy']): Runtime {
 }
 
 /**
- * Emit the `apps/api/users/` service. Reaches auth state only via the
- * `/internal/session` endpoint on the auth service.
+ * Emit the private `services/users/` Worker. It reaches auth state only through
+ * the deploy-aware middleware and the auth service's `/internal/session` endpoint.
  */
 export function generateUsersService(cfg: GvKitConfig): FileEntry[] {
 	const project = cfg.choices.name
@@ -19,73 +34,94 @@ export function generateUsersService(cfg: GvKitConfig): FileEntry[] {
 	const runtime = deriveRuntime(cfg.choices.deploy)
 	const hasAuth = cfg.choices.auth.length > 0
 
-	const envDeclPath = 'apps/api/users/env.d.ts'
-
 	const entries: FileEntry[] = [
 		{
-			path: 'apps/api/users/package.json',
+			path: honoServicePath(USERS_SERVICE, 'package.json'),
 			content: pkgJson({ project, runtime, usesSqlite })
 		},
 		{
-			path: 'apps/api/users/tsconfig.json',
+			path: honoServicePath(USERS_SERVICE, 'tsconfig.json'),
 			content: tsconfig(runtime)
 		},
 		{
-			path: envDeclPath,
-			content: envDts({ runtime, usesSqlite })
-		},
-		{
-			path: 'apps/api/users/src/routes/me/schema.ts',
+			path: honoServicePath(USERS_SERVICE, 'src/routes/me/schema.ts'),
 			content: meSchemaTs(hasAuth)
 		},
 		{
-			path: 'apps/api/users/src/routes/me/route.ts',
+			path: honoServicePath(USERS_SERVICE, 'src/routes/me/route.ts'),
 			content: meRouteTs()
 		},
 		{
-			path: 'apps/api/users/src/routes/me/handler.ts',
+			path: honoServicePath(USERS_SERVICE, 'src/routes/me/handler.ts'),
 			content: meHandlerTs({ hasAuth, runtime, usesSqlite })
 		},
 		{
-			path: 'apps/api/users/src/routes/me/index.ts',
+			path: honoServicePath(USERS_SERVICE, 'src/routes/me/index.ts'),
 			content: meIndexTs()
 		},
 		{
-			path: 'apps/api/users/src/openapi.ts',
+			path: honoServicePath(USERS_SERVICE, 'src/openapi.ts'),
 			content: openapiTs(project)
 		},
 		{
-			path: 'apps/api/users/openapi.json',
-			content: usersOpenApiJson(project)
+			path: honoServicePath(USERS_SERVICE, 'openapi.json'),
+			content: stringifyOpenApi(createUsersOpenApiFragment({ project, hasAuth }).document)
 		},
 		{
-			path: 'apps/api/users/src/app.ts',
+			path: honoServicePath(USERS_SERVICE, 'src/app.ts'),
 			content: appTs()
 		},
 		{
-			path: 'apps/api/users/src/index.ts',
+			path: honoServicePath(USERS_SERVICE, 'src/index.ts'),
 			content: indexTs(runtime)
 		},
 		{
-			path: 'apps/api/users/README.md',
+			path: honoServicePath(USERS_SERVICE, 'README.md'),
 			content: readme(project, runtime)
 		}
 	]
 
 	if (runtime === 'cf-workers') {
-		entries.push({
-			path: 'apps/api/users/wrangler.jsonc',
-			content: wranglerJsonc({ project, usesSqlite })
-		})
+		const wrangler = wranglerJsonc({ project, usesSqlite })
+		entries.push(
+			{
+				path: honoServicePath(USERS_SERVICE, 'wrangler.jsonc'),
+				content: wrangler
+			},
+			{
+				path: honoServicePath(USERS_SERVICE, CLOUDFLARE_TYPES_BOOTSTRAP_FILE),
+				content: renderCloudflareBootstrapTypes(wrangler)
+			}
+		)
+	} else {
+		entries.push(
+			{
+				path: honoServicePath(USERS_SERVICE, 'env.d.ts'),
+				content: envDts({ usesSqlite })
+			},
+			{
+				path: honoServicePath(USERS_SERVICE, 'tsup.config.ts'),
+				content: tsupConfig(usesSqlite)
+			}
+		)
 	}
 
 	return entries
 }
 
+function tsupConfig(usesSqlite: boolean): string {
+	return `import { defineConfig } from 'tsup'
+
+export default defineConfig({
+	noExternal: [/^@repo\\//]${usesSqlite ? ",\n\texternal: ['@libsql/client']" : ''}
+})
+`
+}
+
 function pkgJson({
 	project,
 	runtime,
-	usesSqlite: _usesSqlite
+	usesSqlite
 }: {
 	project: string
 	runtime: Runtime
@@ -98,6 +134,8 @@ function pkgJson({
 		hono: '^4.6.0',
 		zod: '^4.3.0'
 	}
+	if (runtime === 'node' && usesSqlite) dependencies['@libsql/client'] = '^0.14.0'
+
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
 		typescript: '~5.9.0'
@@ -108,17 +146,18 @@ function pkgJson({
 	}
 
 	if (runtime === 'cf-workers') {
-		devDependencies.wrangler = '^4.0.0'
-		devDependencies['@cloudflare/workers-types'] = '^4.20251101.0'
+		devDependencies.wrangler = '^4.125.0'
+		devDependencies['@cloudflare/workers-types'] = '^5.20260825.1'
 		devDependencies['@types/node'] = '^24.0.0'
-		scripts['cf-typegen'] = 'wrangler types'
+		scripts['cf-typegen'] = CLOUDFLARE_TYPEGEN_SCRIPT
 		scripts.dev = 'pnpm cf-typegen && wrangler dev'
-		scripts.build = 'pnpm cf-typegen && wrangler deploy --dry-run --outdir=dist'
+		scripts.build = 'wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
-		scripts['deploy:staging'] =
-			`pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --config "\${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --name ${project}-users-$STAGING_ALIAS`
-		scripts.typecheck = 'pnpm cf-typegen && tsc --noEmit'
+		scripts['deploy:staging'] = usesSqlite
+			? 'pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}"'
+			: 'pnpm cf-typegen && test -n "$STAGING_ALIAS" && test -n "$STAGING_SECRETS_FILE" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --secrets-file "$STAGING_SECRETS_FILE"'
+		scripts.typecheck = 'tsc --noEmit'
 	} else {
 		dependencies['@hono/node-server'] = '^1.13.0'
 		devDependencies.tsup = '^8.3.0'
@@ -132,7 +171,7 @@ function pkgJson({
 	return (
 		JSON.stringify(
 			{
-				name: `@${project}/users-worker`,
+				name: honoPackageIdentity(project, USERS_SERVICE),
 				version: '0.0.0',
 				private: true,
 				type: 'module',
@@ -179,55 +218,38 @@ function wranglerJsonc({ project, usesSqlite }: { project: string; usesSqlite: b
 		}
 	]`
 		: `,
-	"vars": {}`
+	"secrets": { "required": ["DATABASE_URL"] }`
 
 	return `{
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "${project}-users",
+	"name": "${honoServiceName(project, USERS_SERVICE)}",
 	"main": "src/index.ts",
-	"compatibility_date": "${COMPATIBILITY_DATE}",
+	"tsconfig": "tsconfig.json",
+	"compatibility_date": "${HONO_WORKERS_COMPAT_DATE}",
 	"compatibility_flags": ["nodejs_compat"],
-	"routes": [
-		{ "pattern": "api.<domain>", "custom_domain": true }
-	],
+	"workers_dev": false,
+	"preview_urls": false,
 	"dev": {
-		"ip": "127.0.0.1",
-		"port": 8788,
-		"host": "localhost",
-		"inspector_port": 9230
+		"ip": "${USERS_SERVICE.development.ip}",
+		"port": ${USERS_SERVICE.development.port},
+		"host": "${USERS_SERVICE.development.hostname}",
+		"inspector_port": ${USERS_SERVICE.development.inspectorPort}
 	},
 	"services": [
-		{ "binding": "AUTH", "service": "${project}-auth" }
+		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }
 	],
 	"observability": { "enabled": true }${dbBlock}
 }
 `
 }
 
-function envDts({ runtime, usesSqlite }: { runtime: Runtime; usesSqlite: boolean }): string {
-	if (runtime === 'cf-workers') {
-		const dbBinding = usesSqlite
-			? '\t\tDB: D1Database'
-			: '\t\tDATABASE_URL: string\n\t\tHYPERDRIVE?: Hyperdrive'
-
-		return `// Hand-edited Env declaration; merges with wrangler-generated worker-configuration.d.ts.
-declare global {
-	interface Env {
-		AUTH: Fetcher
-${dbBinding}
-	}
-}
-
-export {}
-`
-	}
-
+function envDts({ usesSqlite }: { usesSqlite: boolean }): string {
 	const nodeDb = usesSqlite ? '\t\tSQLITE_PATH?: string' : '\t\tDATABASE_URL?: string'
 
 	return `// Hand-edited Env declaration; merges with wrangler-generated worker-configuration.d.ts.
 declare global {
 	interface Env {
-		AUTH_URL: string
+		${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string
 ${nodeDb}
 	}
 }
@@ -278,7 +300,7 @@ import { UserResponse } from './schema.js'
 export const meRoute = createRoute({
 	method: 'get',
 	path: '/me',
-	operationId: 'getUsersMe',
+	operationId: 'usersGetMe',
 	tags: ['users'],
 	summary: 'Return the authenticated user',
 	responses: {
@@ -324,7 +346,7 @@ export const meHandler: RouteHandler<
 		runtime === 'cf-workers'
 			? usesSqlite
 				? 'createDb({ DB: c.env.DB })'
-				: 'createDb({ HYPERDRIVE: c.env.HYPERDRIVE, DATABASE_URL: c.env.DATABASE_URL })'
+				: 'createDb({ DATABASE_URL: c.env.DATABASE_URL })'
 			: usesSqlite
 				? `createDb({ url: process.env.SQLITE_PATH ?? 'file:./local.db' })`
 				: `createDb({ DATABASE_URL: process.env.DATABASE_URL ?? '' })`
@@ -369,103 +391,8 @@ import type { Env as HonoEnv } from 'hono'
 export function mountOpenApi<E extends HonoEnv>(app: OpenAPIHono<E>): void {
 	app.doc('/openapi.json', {
 		openapi: '3.0.0',
-		info: { title: '${project}-users', version: '0.0.0' }
+		info: { title: '${honoServiceName(project, USERS_SERVICE)}', version: '0.0.0' }
 	})
-}
-`
-}
-
-function usersOpenApiJson(project: string): string {
-	return `{
-  "openapi": "3.0.0",
-  "info": {
-    "title": "${project}-users",
-    "version": "0.0.0",
-    "description": "Example spec so codegen works out of the box. Regenerate from the live service when routes change."
-  },
-  "components": {
-    "schemas": {
-      "User": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "email": {
-            "type": "string",
-            "format": "email"
-          },
-          "emailVerified": {
-            "type": "boolean"
-          },
-          "image": {
-            "type": "string",
-            "nullable": true
-          },
-          "createdAt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "string",
-                "format": "date-time"
-              }
-            ]
-          },
-          "updatedAt": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "string",
-                "format": "date-time"
-              }
-            ]
-          }
-        },
-        "required": [
-          "id",
-          "name",
-          "email",
-          "emailVerified",
-          "createdAt",
-          "updatedAt"
-        ]
-      }
-    },
-    "parameters": {}
-  },
-  "paths": {
-    "/api/me": {
-      "get": {
-        "operationId": "getUsersMe",
-        "tags": [
-          "users"
-        ],
-        "summary": "Return the authenticated user",
-        "responses": {
-          "200": {
-            "description": "Authenticated user",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/User"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "No active session"
-          }
-        }
-      }
-    }
-  }
 }
 `
 }
@@ -488,10 +415,10 @@ app.use('*', errorHandler())
 
 app.get('/healthz', (c) => c.text('ok'))
 
-// /api/* requires a valid session.
-app.use('/api/*', requireAuth)
+// ${PUBLIC_USERS_PREFIX}/* requires a valid session.
+app.use('${PUBLIC_USERS_PREFIX}/*', requireAuth)
 
-app.route('/api', meRouter)
+app.route('${PUBLIC_USERS_PREFIX}', meRouter)
 
 mountOpenApi(app)
 `
@@ -511,9 +438,17 @@ export default {
 
 import { app } from './app.js'
 
-const port = Number(process.env.PORT ?? 8788)
-serve({ fetch: app.fetch, port })
-console.log(\`users listening on http://127.0.0.1:\${port}\`)
+const authUrl = process.env.${AUTH_SERVICE.transport.node.targetEnvironmentVariable} ?? '${nodeDevelopmentOrigin(AUTH_SERVICE)}'
+const hostname = process.env.HOST ?? '${USERS_SERVICE.development.ip}'
+const port = Number(process.env.PORT ?? ${USERS_SERVICE.development.port})
+serve({
+	fetch(request) {
+		return app.fetch(request, { ${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: authUrl })
+	},
+	port,
+	hostname
+})
+console.log(\`${USERS_SERVICE.identity} listening on http://\${hostname}:\${port}\`)
 `
 }
 
@@ -523,13 +458,13 @@ function readme(project: string, runtime: Runtime): string {
 			? `Session validation is delegated to the auth Worker via:
 
 \`\`\`
-services: [{ binding: "AUTH", service: "${project}-auth" }]
+services: [{ binding: "${AUTH_SERVICE.internalTarget}", service: "${honoServiceName(project, AUTH_SERVICE)}" }]
 \`\`\`
 
 The middleware in \`@repo/backend/middleware/auth\` calls \`/internal/session\`
 on that binding. **Do not extract auth state into this service.**`
 			: `Session validation is delegated to the auth service via HTTP using the
-\`AUTH_URL\` environment variable (defaults to \`http://127.0.0.1:8787\` in
+\`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` environment variable (defaults to \`${nodeDevelopmentOrigin(AUTH_SERVICE)}\` in
 dev). The middleware in \`@repo/backend/middleware/auth\` calls
 \`/internal/session\` on that URL. **Do not extract auth state into this
 service.**`
@@ -543,10 +478,10 @@ service.**`
 cd ../auth && pnpm dev
 
 # Terminal 2
-AUTH_URL=http://localhost:8787 pnpm dev
+${AUTH_SERVICE.transport.node.targetEnvironmentVariable}=http://localhost:${AUTH_SERVICE.development.port} pnpm dev
 \`\`\`
 
-In production, the \`AUTH\` service binding is used and \`AUTH_URL\` is unset.`
+In production, the \`${AUTH_SERVICE.internalTarget}\` service binding is used and \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` is unset.`
 			: `## Local dev
 
 \`\`\`bash
@@ -557,12 +492,14 @@ cd ../auth && pnpm dev
 pnpm dev
 \`\`\`
 
-The server listens on \`http://127.0.0.1:\${PORT ?? 8788}\` and reaches the
-auth service via \`AUTH_URL\` (defaults to \`http://127.0.0.1:8787\`).`
+The server listens on \`http://127.0.0.1:\${PORT ?? ${USERS_SERVICE.development.port}}\` and reaches the
+auth service via \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` (defaults to \`${nodeDevelopmentOrigin(AUTH_SERVICE)}\`).`
 
-	return `# ${project}-users
+	return `# ${honoServiceName(project, USERS_SERVICE)}
 
-Application service for user-facing resources. **Does not own auth state.**
+This is a private service for user-facing resources. **Does not own auth state.**
+It is reachable externally only through the gateway. Do not add a direct route, public hostname,
+or browser-facing service URL.
 
 ## Boundary
 
@@ -576,11 +513,14 @@ ${bindingDoc}
 
 ${dev}
 
-## Routes
+## Routes and OpenAPI ownership
 
-| Route          | Auth     | Description                  |
-|----------------|----------|------------------------------|
-| \`GET /api/me\`  | required | Returns the current session  |
-| \`GET /openapi.json\` | public | OpenAPI spec for clients     |
+| Route | Reachability | Description |
+| --- | --- | --- |
+| \`GET ${PUBLIC_USERS_PREFIX}/me\` | gateway-forwarded | Returns the current session |
+| \`GET /openapi.json\` | private diagnostics | Runtime view of the service contract |
+
+The checked \`openapi.json\` file is a composition input owned by this service. The gateway
+composes it into \`apps/api/openapi.json\`, which is the only document used for the public client.
 `
 }

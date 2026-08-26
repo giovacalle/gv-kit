@@ -65,15 +65,17 @@ same stable matrix in CI or local parallel runs. Cloudflare rows add marketing
 and web Wrangler dry-runs; Docker rows validate `docker compose config` without
 building images or starting containers.
 
-## Boundary policy
+## Gateway and service boundary policy
 
-`apps/api/users` (and any future non-auth service) MUST NOT:
+`apps/api/` is the public gateway. `services/users/` (and any future non-auth service) MUST NOT:
 
 - import `@repo/backend/auth`
 - read `BETTER_AUTH_SECRET` or OAuth secrets
 - query the auth tables directly
 
-Session validation goes through `/internal/session` only — CF service binding when on cf-workers, HTTP fetch via `AUTH_URL` otherwise. The pattern is enforced by `tests/contracts/users-bindings.test.ts`; new generators or templates that violate it will fail CI.
+Services own deterministic OpenAPI fragments; the gateway composes them into `apps/api/openapi.json`, the sole input for the flat `packages/openapi-client` export. Browser calls use same-origin `/api/*`, and Cloudflare web SSR binds only to `GATEWAY`.
+
+Session validation goes through `/internal/session` only. The deploy-aware `@repo/backend/middleware/auth` uses the direct `AUTH` Service Binding on Cloudflare and private `AUTH_URL` transport otherwise. The pattern is enforced by `tests/contracts/users-bindings.test.ts`; new generators or templates that violate it will fail CI.
 
 ## Generator conventions
 
@@ -84,6 +86,8 @@ Wrangler config is always `wrangler.jsonc` (never `.toml`). Tailwind 4 is `@them
 Marketing templates are a separate first-class tree under `fixtures/templates/marketing/`. Run `bun run bundle:templates` after editing any template tree and commit the matching `src/generated/*-templates.ts` output. Astro config must export a plain object, and browser-only monitoring belongs in an Astro client script rather than frontmatter.
 
 ## Release
+
+Generated-output breaks require a `major` changeset and a migration note under `docs/migrations/`. The current Hono topology migration is documented in [`docs/migrations/hono-api-gateway.md`](./docs/migrations/hono-api-gateway.md). Do not ship an automatic source rewrite for generated repositories.
 
 ```bash
 bun changeset add              # describe the change

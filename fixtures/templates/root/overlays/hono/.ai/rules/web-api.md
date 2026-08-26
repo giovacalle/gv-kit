@@ -1,92 +1,72 @@
-# API Integration
+# API integration
 
-How `apps/web` talks to backend services under `apps/api/<service>/`.
+How `apps/web` uses the public gateway at `apps/api/`. Private services live under `services/` and are not web dependencies.
 
-## Auth is a special case
+<!--@gvkit:if apiClientHeyApi-->
+## One public client
 
-The auth service has its own client SDK (`better-auth`). Use `authClient` from `$lib/auth/client.ts` — see `auth-flow.md`. Do NOT write a fetch wrapper for `apps/api/auth`. The rest of this rule applies to **non-auth** services (users, billing, etc.).
+Use the flat `@repo/openapi-client` package for domain API operations. It is generated from the composed gateway contract at `apps/api/openapi.json`. Do not create per-service client packages or fetch wrappers.
 
-## The boundary
-
-`apps/web` is a SvelteKit Worker. Backend services are independent Hono Workers. On Cloudflare, auth is exposed only through the web app's same-origin `/api/auth/*` façade, which forwards the original request through the `AUTH` Service Binding and returns the response unchanged. Non-auth services use the transport declared for that service; never expose an internal Worker merely to avoid a binding.
-
-## Typed fetch wrapper
-
-One file per upstream service, ~20–40 LOC each. Lives at `src/lib/api/<service>.ts`.
+The browser client keeps an empty base URL, so every `/api/*` request uses the web origin's same-origin gateway alias:
 
 ```typescript
-// src/lib/api/users.ts
-import { PUBLIC_USERS_URL } from '$env/static/public';
+// src/routes/+layout.ts
+import { client } from '@repo/openapi-client';
 
-export async function usersFetch(
-	path: string,
-	init: RequestInit & { fetch?: typeof fetch } = {}
-): Promise<Response> {
-	const { fetch: f = fetch, ...rest } = init;
-	return f(`${PUBLIC_USERS_URL}${path}`, {
-		...rest,
-		credentials: 'include',
-		headers: {
-			'content-type': 'application/json',
-			...(rest.headers ?? {})
-		}
-	});
-}
+client.setConfig({
+	baseUrl: '',
+	credentials: 'include'
+});
 ```
 
-Request the typed JSON via a thin helper at the call site, not inside the wrapper — keep the wrapper transport-only.
+Browser components import domain-prefixed operations from the package root.
+<!--@gvkit:else-->
+## Public contract without a generated client
 
-## Use `event.fetch` on the server, NOT global `fetch`
+The gateway still composes `apps/api/openapi.json`, but this workspace does not emit a generated API client package, client scripts, imports, or exports. Browser code calls same-origin `/api/*` paths directly. Do not configure a public URL for each private service.
+<!--@gvkit:endif-->
 
-In `+page.server.ts`, `+layout.server.ts`, `+server.ts`, hooks, and any server module called from one of those, use the `fetch` parameter from the SvelteKit event. SvelteKit's `event.fetch` integrates with same-origin routing, caching, and deduplication.
+## Server requests use the gateway transport
+
+Use the request-scoped `fetch` from SvelteKit loads, actions, hooks, and server routes.
+<!--@gvkit:if apiClientHeyApi-->
+Pass it to the flat client with the incoming web origin:
 
 ```typescript
 // src/routes/users/+page.server.ts
-import { usersFetch } from '$lib/api/users';
+import { usersGetMe } from '@repo/openapi-client';
 
-export const load = async ({ fetch, locals }) => {
-	if (!locals.user) throw redirect(303, '/login');
-	const res = await usersFetch('/api/users/me', { fetch });
-	if (!res.ok) throwAppError('INTERNAL_ERROR', 'Failed to load profile');
-	return { profile: await res.json() };
+export const load = async ({ fetch, url }) => {
+	const { data } = await usersGetMe({ baseUrl: url.origin, fetch });
+	return { profile: data ?? null };
 };
 ```
+<!--@gvkit:else-->
+Call the public gateway path with `event.fetch`. Do not add a service-specific client wrapper.
+<!--@gvkit:endif-->
 
-The helper accepts `fetch` and forwards it. Never call the global `fetch` from server code.
+For same-origin `/api/*` requests, `handleFetch` in `hooks.server.ts` changes only the transport. Cloudflare SSR calls the gateway through the `GATEWAY` Service Binding. Node and Docker SSR use the private `GATEWAY_URL`. Neither path calls auth or a domain service directly.
 
-## Same-origin auth façade
+Preserve method, path, query, request headers, cookies, body streams, redirects, status, and response headers when changing this transport.
 
-The browser and SSR code call `/api/auth/*` on the web origin. The catch-all SvelteKit endpoint forwards the request over the `AUTH` Service Binding. Preserve method, body, query, `Cookie`, `Origin`, and the response's `Set-Cookie`; do not reconstruct auth payloads or publish the auth Worker on another hostname.
+## Auth uses Better Auth
 
-## Session loading
+Use `authClient` from `$lib/auth/client.ts` and keep its base URL unset. Browser auth calls use the same-origin `/api/auth/*` gateway alias. Session loading in `$lib/server/load-session.ts` uses `event.fetch`, so SSR follows the same private gateway transport as other API calls.
 
-Auth-specific: handled in `hooks.server.ts` by `$lib/server/load-session.ts`. See `auth-flow.md`. Don't write a parallel mechanism in `lib/api/`.
-
-## Client-side data fetches
-
-For SPA-style fetches AFTER hydration (live data, polling, mutations not via form actions), call the typed wrapper with the page's `fetch`:
-
-```svelte
-<script lang="ts">
-	import { usersFetch } from '$lib/api/users';
-	import { fromPromise } from '$lib/utils/result';
-
-	async function refresh() {
-		const r = await fromPromise(usersFetch('/api/users/me').then((res) => res.json()));
-		if (r.isErr()) toast.error(r.error.message);
-	}
-</script>
-```
-
-Wrap the call in `Result<T, AppError>` (see `core-errors.md`). No `try/catch` for flow control.
+Do not create an auth fetch wrapper or SvelteKit auth facade.
 
 ## Anti-patterns
 
 | Don't | Do |
 |---|---|
-| Call global `fetch(...)` in `+*.server.ts` | Use `event.fetch` and pass it through wrappers |
-| Hardcode upstream URLs | Read from `$env/static/public` (`PUBLIC_*_URL`) |
-| Public auth Worker hostname | Same-origin web façade over the `AUTH` Service Binding |
-| Inline a 40-line fetch in a route | One thin wrapper per service in `src/lib/api/` |
-| Write a `lib/api/auth.ts` fetch wrapper | Use `authClient` from `$lib/auth/client` (better-auth's SDK) |
-| `try/catch` to convert errors | `fromPromise` from `$lib/utils/result` |
+<!--@gvkit:if apiClientHeyApi-->
+| Configure a browser URL per private service | Use the flat gateway client with `baseUrl: ''` |
+| Add `src/lib/api/<service>.ts` wrappers | Import domain-prefixed operations from `@repo/openapi-client` |
+| Call global `fetch` in `+*.server.ts` | Pass SvelteKit's request-scoped `fetch` to the flat client |
+<!--@gvkit:else-->
+| Configure a browser URL per private service | Call the same-origin gateway path |
+| Add `src/lib/api/<service>.ts` wrappers | Use request-scoped `fetch` at the consuming boundary |
+<!--@gvkit:endif-->
+| Bind the web Worker to a private domain service | Bind web only to `GATEWAY` for SSR |
+| Write a `lib/api/auth.ts` wrapper | Use `authClient` from `$lib/auth/client` |
+| Add a SvelteKit `/api/*` proxy | Keep browser ingress on the more-specific Cloudflare gateway route |

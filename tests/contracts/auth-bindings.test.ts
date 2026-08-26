@@ -23,7 +23,7 @@ describe('auth-worker bindings', () => {
 		if (isCf) {
 			test(`${file} (cf-workers) declares no service bindings and exact required secrets`, () => {
 				const entries = runGenerators(cfg)
-				const wrangler = entries.find((e) => e.path === 'apps/api/auth/wrangler.jsonc')
+				const wrangler = entries.find((e) => e.path === 'services/auth/wrangler.jsonc')
 				expect(wrangler).toBeDefined()
 
 				const parsed = parseJsonc<{
@@ -32,6 +32,7 @@ describe('auth-worker bindings', () => {
 				}>(wrangler!.content)
 				expect(parsed.services ?? []).toEqual([])
 				const expected = ['BETTER_AUTH_SECRET']
+				if (cfg.choices.db === 'postgres') expected.push('DATABASE_URL')
 				if (cfg.choices.auth.includes('google')) {
 					expected.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 				}
@@ -44,25 +45,29 @@ describe('auth-worker bindings', () => {
 				}
 				expect(parsed.secrets?.required).toEqual(expected)
 
-				const devVars = entries.find((e) => e.path === 'apps/api/auth/.dev.vars')
+				const devVars = entries.find((e) => e.path === 'services/auth/.dev.vars')
 				expect(devVars).toBeDefined()
 				const localNames = devVars!.content
 					.split('\n')
 					.filter((line) => line && !line.startsWith('#'))
 					.map((line) => line.slice(0, line.indexOf('=')))
-				expect(localNames).toEqual(expected)
+				expect(localNames).toEqual([
+					'BETTER_AUTH_ALLOWED_HOSTS',
+					'AUTH_CORS_ORIGINS',
+					...expected
+				])
 				expect(devVars!.content).toContain('local-only')
 			})
 		} else {
-			test(`${file} (non-cf) does NOT emit apps/api/auth/wrangler.jsonc`, () => {
+			test(`${file} (non-cf) does NOT emit services/auth/wrangler.jsonc`, () => {
 				const entries = runGenerators(cfg)
-				const wrangler = entries.find((e) => e.path === 'apps/api/auth/wrangler.jsonc')
+				const wrangler = entries.find((e) => e.path === 'services/auth/wrangler.jsonc')
 				expect(wrangler).toBeUndefined()
 			})
 
 			test(`${file} (non-cf) auth package depends on @hono/node-server and reads BETTER_AUTH_SECRET from process.env`, () => {
 				const entries = runGenerators(cfg)
-				const pkg = entries.find((e) => e.path === 'apps/api/auth/package.json')
+				const pkg = entries.find((e) => e.path === 'services/auth/package.json')
 				expect(pkg).toBeDefined()
 				const parsed = JSON.parse(pkg!.content) as {
 					dependencies: Record<string, string>
@@ -73,7 +78,7 @@ describe('auth-worker bindings', () => {
 				// libsql swap: `@types/bun` is no longer added when usesSqlite.
 				expect(parsed.devDependencies['@types/bun']).toBeUndefined()
 
-				const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')
+				const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')
 				expect(authTs).toBeDefined()
 				expect(authTs!.content).toContain('process.env.BETTER_AUTH_SECRET')
 			})
@@ -85,13 +90,13 @@ describe('auth-worker generator (post-rewrite)', () => {
 	for (const { file, cfg } of honoFixtures) {
 		test(`${file} allows the generated CAPTCHA request header`, () => {
 			const entries = runGenerators(cfg)
-			const app = entries.find((e) => e.path === 'apps/api/auth/src/app.ts')
+			const app = entries.find((e) => e.path === 'services/auth/src/app.ts')
 			expect(app?.content).toContain("'x-captcha-response'")
 		})
 
 		test(`${file} auth.ts uses drizzleAdapter and skips forbidden helpers`, () => {
 			const entries = runGenerators(cfg)
-			const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')
+			const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')
 			expect(authTs).toBeDefined()
 			expect(authTs!.content).toContain('database: drizzleAdapter(')
 			expect(authTs!.content).not.toContain('databaseHooks(')
@@ -101,11 +106,11 @@ describe('auth-worker generator (post-rewrite)', () => {
 		if (cfg.choices.auth.includes('emailOTP')) {
 			test(`${file} (emailOTP) wires emailOTP plugin and @repo/mailer`, () => {
 				const entries = runGenerators(cfg)
-				const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')!
+				const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')!
 				expect(authTs.content).toContain('emailOTP({')
 				expect(authTs.content).toContain('sendVerificationOTP')
 
-				const pkg = entries.find((e) => e.path === 'apps/api/auth/package.json')!
+				const pkg = entries.find((e) => e.path === 'services/auth/package.json')!
 				const parsed = JSON.parse(pkg.content) as { dependencies: Record<string, string> }
 				expect(parsed.dependencies['@repo/mailer']).toBeDefined()
 			})
@@ -114,7 +119,7 @@ describe('auth-worker generator (post-rewrite)', () => {
 		if (cfg.choices.auth.includes('google')) {
 			test(`${file} (google) declares env-gated socialProviders`, () => {
 				const entries = runGenerators(cfg)
-				const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')!
+				const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')!
 				expect(authTs.content).toContain('socialProviders')
 				expect(authTs.content).toContain('GOOGLE_CLIENT_ID')
 				expect(authTs.content).toContain('GOOGLE_CLIENT_SECRET')

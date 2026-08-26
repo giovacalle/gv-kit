@@ -1,6 +1,12 @@
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
 import type { GvKitConfig } from '../schema/config.js'
+import {
+	AUTH_SERVICE,
+	honoServiceName,
+	nodeDevelopmentOrigin,
+	USERS_SERVICE
+} from './hono-topology.js'
 
 /**
  * Emits Claude-specific artifacts: `CLAUDE.md`, `.claude/settings.json`,
@@ -53,7 +59,7 @@ function renderStackSummary(cfg: GvKitConfig): string {
 	if (cfg.choices.marketing === 'astro')
 		lines.push('- Marketing: Astro static site (`apps/marketing`)')
 	if (cfg.choices.backend === 'hono')
-		lines.push('- Backend: Hono workers under `apps/api/<service>/`')
+		lines.push('- Backend: Hono gateway (`apps/api`) with private workers under `services/`')
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
 	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
 	if (cfg.choices.auth.length > 0)
@@ -76,8 +82,10 @@ function renderLayoutTree(cfg: GvKitConfig): string {
 	if (cfg.choices.marketing === 'astro')
 		lines.push('- `apps/marketing/` — static Astro public site')
 	lines.push('- `apps/web/` — SvelteKit app')
-	if (cfg.choices.backend === 'hono')
-		lines.push('- `apps/api/<service>/` — independently deployable Hono workers')
+	if (cfg.choices.backend === 'hono') {
+		lines.push('- `apps/api/` — public Hono API gateway')
+		lines.push('- `services/<service>/` — independently deployable private Hono workers')
+	}
 	lines.push('- `packages/db/` — Drizzle schema + client factory')
 	lines.push('- `packages/backend/` — shared backend helpers (logger, error helpers, middleware)')
 	if (cfg.choices.i18n === 'paraglide')
@@ -85,7 +93,7 @@ function renderLayoutTree(cfg: GvKitConfig): string {
 			'- `packages/i18n/` — Paraglide messages + compiled runtime (`@repo/i18n/messages`, `@repo/i18n/runtime`, `@repo/i18n/server`)'
 		)
 	if (cfg.choices.apiClient === 'hey-api')
-		lines.push('- `packages/openapi-client/` — generated TypeScript clients per service')
+		lines.push('- `packages/openapi-client/` — flat client generated from the gateway contract')
 	return lines.join('\n')
 }
 
@@ -96,7 +104,7 @@ function renderLayoutTree(cfg: GvKitConfig): string {
 function renderClaudeMd(cfg: GvKitConfig): string {
 	const specialists: string[] = []
 	if (cfg.choices.backend === 'hono')
-		specialists.push('- `service-architect` — scaffolds a new `apps/api/<svc>/` Hono Worker')
+		specialists.push('- `service-architect` — scaffolds a new private `services/<svc>/` Hono Worker')
 	if (cfg.choices.marketing === 'astro')
 		specialists.push('- `astro-marketer` — edits the static public site within its app boundary')
 
@@ -229,7 +237,7 @@ function renderClaudeSettings(): string {
 				'Read(./apps/web/.dev.vars)',
 				'Read(./apps/marketing/.env)',
 				'Read(./apps/marketing/.env.*)',
-				'Read(./apps/api/**/.dev.vars)'
+				'Read(./services/**/.dev.vars)'
 			]
 		}
 	}
@@ -264,91 +272,112 @@ function renderServiceArchitectAgent(cfg: GvKitConfig): string {
 	const isCfWorkers = cfg.choices.deploy === 'cf-workers'
 	const project = cfg.choices.name
 
-	return `---
-name: service-architect
-description: Scaffolds a new \`apps/api/<svc>/\` Hono Worker with its own wrangler.jsonc, bindings, and Env. Use when adding a NEW domain service. Strict on the service-boundary policy — refuses cross-service shortcuts.
-tools: Read, Glob, Grep, Bash, Edit, Write
----
+	const runtimeFiles = isCfWorkers
+		? `   - \`wrangler.jsonc\` — the only source for bindings, non-secret environment values, and required secret names. **Never \`wrangler.toml\`.**
+   - \`worker-configuration.bootstrap.d.ts\` — clean-install bindings derived from the config. \`pnpm cf-typegen\` creates Wrangler's \`worker-configuration.d.ts\` and removes the bootstrap; never hand-edit either declaration or create a separate \`env.d.ts\`.`
+		: `   - \`env.d.ts\` — runtime environment declarations for the Node entry.`
 
-# service-architect
+	const authTransport = isCfWorkers
+		? `   - Add a service binding in \`wrangler.jsonc\`: \`{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }\`.
+   - Run \`pnpm --filter @repo/<svc> cf-typegen\` so the generated \`Env\` includes the binding.
+   - Call it via \`env.${AUTH_SERVICE.internalTarget}.fetch(new Request('https://internal/internal/session', { headers: { cookie } }))\`.`
+		: `   - Add \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string\` to \`Env\` in \`env.d.ts\` (default \`${nodeDevelopmentOrigin(AUTH_SERVICE)}\` in dev).
+   - Call \`fetch(\\\`\${env.${AUTH_SERVICE.transport.node.targetEnvironmentVariable}}/internal/session\\\`, { headers: { cookie } })\`.`
 
-You scaffold a NEW service under \`apps/api/<svc>/\`. Each service is its own deployable Hono Worker with its own \`wrangler.jsonc\`, its own bindings, and its own \`Env\`.
+	const cloudflareConfig = isCfWorkers
+		? `## wrangler.jsonc shape
 
-## Mandate
-
-When asked to add service \`<svc>\` (e.g. \`billing\`, \`notifications\`, \`assets\`):
-
-1. Create \`apps/api/<svc>/\` with:
-   - \`package.json\` — \`@repo/<svc>\` (private workspace package).
-   - \`wrangler.jsonc\` — \`name: "${project}-<svc>"\`, explicit bindings only. **Never \`wrangler.toml\`.**
-   - \`env.d.ts\` — hand-edited declaration that augments the wrangler-emitted \`worker-configuration.d.ts\`.
-   - \`tsconfig.json\` — extends the workspace base.
-   - \`src/index.ts\` — runtime entry. CF: \`export default { fetch: app.fetch }\`. Node: \`serve({ fetch: app.fetch, port })\`.
-   - \`src/app.ts\` — Hono app wiring (routes, middleware).
-   - \`src/routes/\` — one file per resource.
-
-2. DB access via \`createDb(env)\` from \`@repo/db\`. No raw drivers.
-3. Errors via \`errors.*\` from \`@repo/backend/helpers\` (\`errors.notFound\`, \`errors.badRequest\`, …). Catch \`HttpError\` once at the boundary.
-4. If the service needs the current session, consume the auth boundary:
-${
-	isCfWorkers
-		? `   - Add a service binding in \`wrangler.jsonc\`: \`{ "binding": "AUTH", "service": "${project}-auth" }\`.
-   - Add \`AUTH: Fetcher\` to \`Env\` in \`env.d.ts\`.
-   - Call it via \`env.AUTH.fetch(new Request('https://internal/internal/session', { headers: { cookie } }))\`.`
-		: `   - Add \`AUTH_URL: string\` to \`Env\` in \`env.d.ts\` (default \`http://127.0.0.1:8787\` in dev).
-   - Call \`fetch(\\\`\${env.AUTH_URL}/internal/session\\\`, { headers: { cookie } })\`.`
-}
-   - Or use the existing middleware: \`@repo/backend/middleware/auth\` (it does exactly this against the binding/URL).
-
-## Hard constraints (REFUSE)
-
-- **REFUSE \`wrangler.toml\`.** \`wrangler.jsonc\` only.
-- **REFUSE to import \`@repo/backend/auth\` from any service other than \`apps/api/auth/\`.** That import path is reserved for the auth Worker's own bootstrap.
-- **REFUSE to add cross-service domain logic to \`packages/backend/\`.** That package is for horizontal helpers only (logger, error helpers, generic middleware). Auth state, billing state, RBAC live with their owning service.
-- **REFUSE to query \`user\`, \`session\`, \`account\`, \`verification\` from a non-auth service.** Read session via the auth boundary.
-- **REFUSE to extract a shared service-client SDK** (\`packages/<svc>-client/\`). Each consumer keeps its own ~10 LOC inline client. Duplication is the feature.
-- **REFUSE to share a \`Fetcher\`/\`Env\` between services.** Each \`apps/api/<svc>/\` declares its own.
-
-## wrangler.jsonc shape
+Keep private services triggerless. Do not add \`route\` or \`routes\`. Declare every binding, non-secret value, and required secret name here so \`wrangler types\` can generate \`Env\`.
 
 \`\`\`jsonc
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "${project}-<svc>",
 	"main": "src/index.ts",
-	"compatibility_date": "2026-07-20",
+	"tsconfig": "tsconfig.json",
+	"compatibility_date": "2026-08-24",
 	"compatibility_flags": ["nodejs_compat"],
-	"dev": { "ip": "127.0.0.1", "port": 8789, "host": "localhost", "inspector_port": 9231 },
+	"workers_dev": false,
+	"preview_urls": false,
 	"services": [
-		{ "binding": "AUTH", "service": "${project}-auth" }
+		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }
 	],
+	"vars": { "NON_SECRET_SETTING": "<value>" },
+	"secrets": { "required": ["<SECRET_NAME>"] },
+	"dev": { "ip": "127.0.0.1", "port": 8789, "host": "localhost", "inspector_port": 9231 },
 	"observability": { "enabled": true }
 	// + d1_databases / kv_namespaces / r2_buckets as needed
 }
 \`\`\`
 
-Pick a UNIQUE \`dev.port\` and \`inspector_port\` per service (auth uses 8787/9229; users 8788/9230).
+Remove the sample \`services\`, \`vars\`, or \`secrets\` entries when the service does not need them. Set secret values with \`wrangler secret put\`, never in source or config.
 
-## env.d.ts shape
+Pick a UNIQUE \`dev.port\` and \`inspector_port\` per service (${AUTH_SERVICE.identity} uses ${AUTH_SERVICE.development.port}/${AUTH_SERVICE.development.inspectorPort}; ${USERS_SERVICE.identity} ${USERS_SERVICE.development.port}/${USERS_SERVICE.development.inspectorPort}).
+`
+		: `## env.d.ts shape
 
 \`\`\`ts
 declare global {
 	interface Env {
-${isCfWorkers ? '\t\tAUTH: Fetcher\n\t\tDB: D1Database // or DATABASE_URL: string for Neon Postgres' : '\t\tAUTH_URL: string\n\t\tDATABASE_URL?: string'}
+		${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string
+		DATABASE_URL?: string
 	}
 }
 
 export {}
 \`\`\`
+`
 
+	return `---
+name: service-architect
+description: Scaffolds a new private \`services/<svc>/\` Hono Worker. Use when adding a NEW domain service. Strict on the service-boundary policy and refuses cross-service shortcuts.
+tools: Read, Glob, Grep, Bash, Edit, Write
+---
+
+# service-architect
+
+You scaffold a NEW private service under \`services/<svc>/\`. Each service is independently deployable. The public gateway stays at \`apps/api/\` and owns every external API route.
+
+## Mandate
+
+When asked to add service \`<svc>\` (e.g. \`billing\`, \`notifications\`, \`assets\`):
+
+1. Create \`services/<svc>/\` with:
+   - \`package.json\` — \`@repo/<svc>\` (private workspace package).${isCfWorkers ? ' Copy the existing `cf-typegen` bootstrap-replacement script and run it after config changes or before deploy.' : ''}
+${runtimeFiles}
+   - \`tsconfig.json\` — extends the workspace base.
+   - \`src/index.ts\` — runtime entry. ${isCfWorkers ? 'Use `export default { fetch: app.fetch }`.' : 'Use `serve({ fetch: app.fetch, port })`.'}
+   - \`src/app.ts\` — Hono app wiring (routes, middleware).
+   - \`src/routes/\` — one file per resource.
+
+2. DB access via \`createDb(env)\` from \`@repo/db\`. No raw drivers.
+3. Errors via \`errors.*\` from \`@repo/backend/helpers\` (\`errors.notFound\`, \`errors.badRequest\`, …). Catch \`HttpError\` once at the boundary.
+4. If the service needs the current session, consume the auth boundary:
+${authTransport}
+   - Or use the existing middleware: \`@repo/backend/middleware/auth\` (it does exactly this against the binding/URL).
+
+## Hard constraints (REFUSE)
+
+- **REFUSE to add a public route to a private service.** The gateway owns public API ingress.
+- **REFUSE to import or mount a private service application in the gateway.** Update the explicit prefix-to-target map and transport instead.
+- **REFUSE internal calls through the gateway.** Private services call one another through direct bindings or private URLs.
+- **REFUSE credentialed wildcard CORS.** Use an explicit origin allowlist and reject unknown origins.
+${isCfWorkers ? '- **REFUSE `wrangler.toml`, public private-service triggers, and hand-written Cloudflare `Env` declarations.** Keep `workers_dev: false`, `preview_urls: false`, no routes, and use `wrangler.jsonc` plus `pnpm cf-typegen` as the source of truth.' : ''}
+- **REFUSE to import \`@repo/backend/auth\` from any service other than \`${AUTH_SERVICE.workspacePath}/\`.** That import path is reserved for the auth Worker's own bootstrap.
+- **REFUSE to add cross-service domain logic to \`packages/backend/\`.** That package is for horizontal helpers only (logger, error helpers, generic middleware). Auth state, billing state, RBAC live with their owning service.
+- **REFUSE to query \`user\`, \`session\`, \`account\`, \`verification\` from a non-auth service.** Read session via the auth boundary.
+- **REFUSE to extract a shared service-client SDK** (\`packages/<svc>-client/\`). Use existing deploy-aware middleware for the auth boundary; add a service-local private transport only for a different boundary that needs one.
+- **REFUSE to share binding or environment declarations between services.** Each \`services/<svc>/\` owns its runtime configuration.
+
+${cloudflareConfig}
 ## Process
 
-1. Pick \`<svc>\`. Confirm what it owns and which boundaries it consumes.
+1. Pick \`<svc>\`. Confirm what it owns, its public prefixes at the gateway, and which private boundaries it consumes.
 2. Scaffold the file tree.
-3. Pick unique \`dev.port\` / \`inspector_port\` (verify against existing services).
-4. ${isCfWorkers ? 'Run `pnpm --filter @repo/<svc> cf-typegen` to generate `worker-configuration.d.ts`.' : 'Verify `env.d.ts` types against the runtime entry.'}
+3. ${isCfWorkers ? 'Pick unique `dev.port` and `inspector_port`, then run `pnpm --filter @repo/<svc> cf-typegen`.' : 'Verify `env.d.ts` types against the runtime entry.'}
+4. Update the gateway's explicit prefix map and OpenAPI composition inputs for public operations.
 5. Run \`pnpm typecheck\` and \`pnpm lint\` from the repo root.
-6. Report: paths created, ports assigned, bindings declared.
+6. Report paths created, ports assigned, and bindings declared.
 `
 }
 

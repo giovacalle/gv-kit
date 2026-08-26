@@ -1,16 +1,16 @@
 .commitlintrc.json  1a921be1aa693bb1
-.dockerignore  d16cdb1adac10a8a
+.dockerignore  c719c73f953f61e8
 .env.example  c54d706cae94dacf
-.gitignore  a25779a56f76a8b9
+.gitignore  6ebdabe6e1116615
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
-Dockerfile  a9438afd325c5b92
+Dockerfile  a0e019ce2f61ed72
 LICENSE  508a77d2e7b51d98
 README.md  6245600cafc0364d
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  ff6c8e1d3b8247a9
+apps/web/CLAUDE.md  adca9b04de9d5393
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  6d52b459b00bb248
 apps/web/prettier.config.js  76a534fdcb4541a5
@@ -28,7 +28,7 @@ apps/web/src/lib/utils/result.ts  9f382c0e532c4c24
 apps/web/src/routes/+error.svelte  36ed66be600c8d3e
 apps/web/src/routes/+layout.server.ts  e9c0a04fd4f201df
 apps/web/src/routes/+layout.svelte  ff03d882d9594c67
-apps/web/src/routes/+page.svelte  00e0db500d569696
+apps/web/src/routes/+page.svelte  4d909ad985de41b7
 apps/web/src/routes/healthz/+server.ts  304fd1274599ff2b
 apps/web/src/routes/robots.txt/+server.ts  66aea35efb4ee1b1
 apps/web/src/routes/sitemap.xml/+server.ts  2e783c699ce31baf
@@ -36,7 +36,7 @@ apps/web/static/favicon.svg  0b4b302394834bcd
 apps/web/svelte.config.js  5c32ff96e10d06c8
 apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  669d0b2cc2b254e0
-docker-compose.yml  28d2582ea750ed60
+docker-compose.yml  a1b77519df7c48a7
 eslint.config.js  cfd85b071f7c820c
 gv-kit.config.jsonc  da1974e50b47759b
 package.json  647935ac86fe81fa
@@ -45,7 +45,7 @@ packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
 packages/backend/tsconfig.json  8b32452841b0fe8e
 packages/db/README.md  d3a3b131fc2b84c8
-packages/db/drizzle.config.ts  a0c540ca51839bc4
+packages/db/drizzle.config.ts  e4f7a9364c09743b
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  ecf29b6a20b6c71a
 packages/db/src/client.ts  e335c72cca40e4af
@@ -189,4 +189,4 @@ packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e
 prettier.config.js  76a534fdcb4541a5
 tsconfig.json  30916d65cceb0f5a
-turbo.json  a71501a3945d1141
+turbo.json  0dcd2560fd4aa333

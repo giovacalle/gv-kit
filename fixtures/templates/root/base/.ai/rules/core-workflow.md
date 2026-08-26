@@ -9,7 +9,7 @@ This project ships four agnostic core agents covering the lifecycle of any chang
 | `polish` | After the feature works, before review | Edit + Write |
 | `review` | Before commit / merge | Read-only |
 
-Specialist agents are added when the chosen stack creates a domain that needs one (e.g. `service-architect` when the backend is split into Hono Workers under `apps/api/`).
+Specialist agents are added when the chosen stack creates a domain that needs one (e.g. `service-architect` for private Hono Workers under `services/<service>/`; `apps/api/` remains the public gateway).
 
 ## Typical flow
 

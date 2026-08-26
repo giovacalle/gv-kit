@@ -12,11 +12,24 @@ SvelteKit web app deployed to Cloudflare Workers.
 - **Dates**: `@internationalized/date` only
 - **Tooling**: `pnpm` package manager, Node 24, Prettier, ESLint, TypeScript strict
 
-## Bindings
+## API gateway and bindings
 
-This app does not declare its own backend bindings. Auth, billing, and any other backend service live under `apps/api/<service>/` and own their `wrangler.jsonc`. The web app talks to them over public HTTP.
+<!--@gvkit:if honoGateway-->
+`apps/api/` is the public API gateway. Private backend workers live under `services/<service>/` and never become direct web dependencies. Browser calls use same-origin `/api/*` paths.
 
-The web `wrangler.jsonc` only configures the static asset Worker for SvelteKit.
+<!--@gvkit:if apiClientHeyApi-->
+The flat `@repo/openapi-client` package consumes the composed gateway contract. Server loads and actions pass SvelteKit's request-scoped `fetch` to that client.
+<!--@gvkit:else-->
+This workspace has no generated API client package. Server loads and actions use SvelteKit's request-scoped `fetch` for gateway requests.
+<!--@gvkit:endif-->
+<!--@gvkit:if honoGatewayCfWorkers-->
+The web Worker's only backend Service Binding is `GATEWAY`. `handleFetch` sends same-origin SSR API requests through that binding. Do not bind web directly to auth, users, or another private service.
+<!--@gvkit:else-->
+`handleFetch` sends same-origin SSR API requests to the private `GATEWAY_URL`. Do not call auth, users, or another private service directly.
+<!--@gvkit:endif-->
+<!--@gvkit:else-->
+This app owns its server endpoints. Its deployment configuration declares only the bindings those endpoints use.
+<!--@gvkit:endif-->
 
 ## Commands
 
@@ -24,11 +37,11 @@ The web `wrangler.jsonc` only configures the static asset Worker for SvelteKit.
 pnpm install                 # install workspace deps
 pnpm dev                     # vite dev on http://localhost:5173
 pnpm build                   # SvelteKit + Cloudflare adapter build
-pnpm typecheck               # wrangler types + svelte-check (zero errors gate)
+pnpm typecheck               # validate committed binding types + svelte-check
 pnpm lint                    # prettier --check + eslint
 pnpm format                  # prettier --write
 pnpm deploy                  # wrangler deploy (production)
-wrangler types               # regenerate worker-configuration.d.ts after wrangler.jsonc edits
+pnpm cf-typegen              # replace bootstrap types with Wrangler output after config edits
 wrangler tail                # live logs from production
 ```
 

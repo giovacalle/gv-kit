@@ -17,11 +17,12 @@ A Turborepo monorepo with:
 
 - **`apps/marketing`** — static-first Astro marketing site at the apex (recommended project shape)
 - **`apps/web`** — SvelteKit (Svelte 5 runes, Tailwind 4) on your chosen runtime
-- **`apps/api/auth`** + **`apps/api/users`** — independent Hono Workers (services container) when `backend=hono`
+- **`apps/api`** — public Hono API gateway when `backend=hono`
+- **`services/auth`** + **`services/users`** — independently deployable private Hono Workers
 - **`packages/backend`** — primitives only: `core`, `auth` factory, `helpers`, plus `middleware` for hono mode
 - **`packages/db`** — Drizzle (Postgres or SQLite, deploy-aware driver)
 - **`packages/i18n`** — Paraglide v2 (optional)
-- **`packages/openapi-client`** — Hey API per-service codegen + TanStack Query (optional)
+- **`packages/openapi-client`** — one flat Hey API client generated from the composed gateway contract + TanStack Query (optional)
 - **`packages/mailer`** — Resend or Notifuse adapter (optional)
 - **`.claude/`** + **`AGENTS.md`** — AI tooling, multi-select between Claude / Codex / Opencode
 
@@ -32,7 +33,7 @@ A Turborepo monorepo with:
 | `name` | kebab-case | (required) |
 | `frontend` | `sveltekit` | sveltekit |
 | `marketing` | `astro` (separate marketing + app) / `inside-web` (integrated) | astro |
-| `backend` | `hono` (services container) / `inside-frontend` (one Worker) | hono |
+| `backend` | `hono` (public gateway + private services) / `inside-frontend` (one Worker) | hono |
 | `i18n` | `paraglide` / `skip` | skip |
 | `monitoring` | multi: `umami`, `posthog` | [] |
 | `db` | `postgres` / `sqlite` | sqlite |
@@ -92,19 +93,34 @@ The `marketing=inside-web` shape retains the previous single-SvelteKit topology,
 
 Astro remains static-first on both supported deploy targets: Workers Static Assets serves `dist/` directly, while Docker serves the same output from an unprivileged nginx runtime. Local defaults are marketing on `http://localhost:4321` and the app on `http://localhost:5173` (or `:3000` under Compose).
 
-### Service boundary (when `backend=hono`)
+### Gateway and service boundary (when `backend=hono`)
 
-`apps/api/auth` is the **only** Worker that:
+`apps/api/` is the only public Hono API application. Both ingress paths reach it without changing paths:
+
+- the web origin's same-origin `/api/*` alias for browser traffic
+- the canonical API origin for integrations and independent clients
+
+Better Auth stays at `/api/auth/*`. Domain routes are versioned under `/api/v1/*`. Gateway liveness and the composed runtime contract stay at `/api/healthz` and `/api/openapi.json`.
+
+SvelteKit SSR uses a request-scoped gateway transport. Cloudflare uses the web Worker's `GATEWAY` Service Binding. Node and Docker use private `GATEWAY_URL`. SSR never calls auth or a domain service directly.
+
+`services/auth/` is the **only** Worker that:
 - holds `BETTER_AUTH_SECRET` and OAuth secrets
 - imports `@repo/backend/auth`
-- exposes `/api/auth/*` (public) and `/internal/session` (binding-only RPC)
+- owns `/api/auth/*` and the private `/internal/session` endpoint
 
-`apps/api/users` and any future service:
-- declare a CF service binding to `<project>-auth`
-- call `/internal/session` via inline ~10 LOC `auth-client.ts`
-- never read auth secrets, never query the auth tables
+`services/users/` and any future domain service:
+- have no public production route
+- declare only required private bindings, such as `AUTH` for session resolution
+- use the deploy-aware `@repo/backend/middleware/auth` transport for `/internal/session`
+- never read auth secrets or query auth tables
+- own deterministic OpenAPI fragments consumed by gateway composition
 
-This is a hard boundary — no `service-client` factory in `packages/backend`, no `auth/types` subpath, no shared SDK package.
+Each domain service owns a deterministic OpenAPI fragment. The gateway composes those fragments into `apps/api/openapi.json`, the only Hey API input. Browser domain calls import flat operations from `@repo/openapi-client` and use same-origin `/api/*`. Better Auth keeps its own client.
+
+Private services call one another directly through Service Bindings or private URLs. They never route internal calls back through the gateway. Cloudflare private services have no route, workers.dev hostname, or production preview URL. Docker private services have no host ports. Local direct ports are loopback-only debugging tools.
+
+Deployments run database migration, private services, gateway, then web. Preview bindings and data resources share one preview alias and never target production.
 
 ### Inside-frontend mode
 
@@ -120,6 +136,10 @@ bun run snap              # regenerate snapshots (UPDATE_SNAPSHOTS=1)
 bun run typecheck         # tsc --noEmit
 bun run lint              # eslint
 ```
+
+## Hono migration
+
+Existing generated Hono repositories require manual changes for this breaking topology. See [the Hono API gateway migration guide](./docs/migrations/hono-api-gateway.md). No automatic source migration is provided.
 
 ## Contributing
 

@@ -46,4 +46,4 @@ Read before changing core paths.
 - **Snapshots are intentional.** When you change a generator, run `bun run snap` and *read* the diff before committing — the diff IS the change.
 - **Single-line if + throw, no braces.** Project style. Multi-line bodies use braces.
 - **Wrangler config is `wrangler.jsonc`, never `.toml`.**
-- **Apps under `apps/api/<service>/` are independently deployable Hono workers.** Do not extract a shared SDK package between them — keep ~10 LOC `fetch` clients per consumer.
+- **`apps/api/` is the only public Hono API application; private Workers live under `services/<service>/`.** The web `/api/*` alias and canonical API origin reach the same gateway. Keep domain routes under `/api/v1/*`, Cloudflare web SSR on the `GATEWAY` Service Binding, and public domain operations in the flat `@repo/openapi-client`. Private session resolution uses the deploy-aware `@repo/backend/middleware/auth` transport with an explicit `AUTH` binding or private URL. Never import service apps into the gateway or hairpin internal calls through it.

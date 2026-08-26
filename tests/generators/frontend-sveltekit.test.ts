@@ -175,11 +175,18 @@ describe('generateFrontendSveltekit — fence stripping', () => {
 		expect(offHooks.content).not.toContain('attachUser')
 	})
 
-	test('lib/auth/client.ts uses PUBLIC_AUTH_URL only when auth is on', () => {
+	test('Hono auth uses the same-origin client while integrated auth keeps PUBLIC_AUTH_URL', () => {
 		const off = generateFrontendSveltekit(makeCfg({ auth: [], email: 'skip' }))
-		const on = generateFrontendSveltekit(makeCfg({ auth: ['emailOTP'], email: 'resend' }))
-		const onClient = findEntry(on, 'apps/web/src/lib/auth/client.ts')!
-		expect(onClient.content).toContain('PUBLIC_AUTH_URL')
+		const hono = generateFrontendSveltekit(makeCfg({ auth: ['emailOTP'], email: 'resend' }))
+		const integrated = generateFrontendSveltekit(
+			makeCfg({ backend: 'inside-frontend', auth: ['emailOTP'], email: 'resend' })
+		)
+		expect(findEntry(hono, 'apps/web/src/lib/auth/client.ts')!.content).not.toContain(
+			'PUBLIC_AUTH_URL'
+		)
+		expect(findEntry(integrated, 'apps/web/src/lib/auth/client.ts')!.content).toContain(
+			'PUBLIC_AUTH_URL'
+		)
 		expect(findEntry(off, 'apps/web/src/lib/auth/client.ts')).toBeUndefined()
 	})
 
@@ -280,7 +287,7 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 		expect(wrangler.content).not.toContain('auth.api.')
 	})
 
-	test('Hono auth uses an AUTH service binding without exposing its secret to web', () => {
+	test('Hono auth binds web SSR only to the gateway and emits no auth facade', () => {
 		const honoAuth = generateFrontendSveltekit(
 			makeCfg({
 				deploy: 'cf-workers',
@@ -290,19 +297,17 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 			})
 		)
 		const wrangler = findEntry(honoAuth, 'apps/web/wrangler.jsonc')!.content
-		expect(wrangler).toContain('"binding": "AUTH"')
-		expect(wrangler).toContain('"service": "demo-auth"')
+		expect(wrangler).toContain('"binding": "GATEWAY"')
+		expect(wrangler).toContain('"service": "demo-api"')
+		expect(wrangler).not.toContain('"binding": "AUTH"')
 		expect(wrangler).not.toContain('BETTER_AUTH_SECRET')
-		const proxy = findEntry(
-			honoAuth,
-			'apps/web/src/routes/api/auth/[...path]/+server.ts'
-		)
-		expect(proxy).toBeDefined()
-		expect(proxy!.content).toContain('auth.fetch(request)')
+		expect(
+			findEntry(honoAuth, 'apps/web/src/routes/api/auth/[...path]/+server.ts')
+		).toBeUndefined()
 		const session = findEntry(honoAuth, 'apps/web/src/lib/server/load-session.ts')!
 		expect(session.content).toContain("event.fetch('/api/auth/get-session'")
 		const env = findEntry(honoAuth, 'apps/web/.env.example')!
-		expect(env.content).toContain('PUBLIC_AUTH_URL=http://localhost:5173')
+		expect(env.content).not.toContain('PUBLIC_AUTH_URL')
 	})
 })
 
@@ -379,10 +384,22 @@ describe('generateFrontendSveltekit — hey-api / TanStack Query overlay', () =>
 			'apps/web/src/routes/+layout.ts'
 		)!
 		expect(layout.content).toContain('new QueryClient')
-		expect(layout.content).toContain('@repo/openapi-client/users')
-		expect(layout.content).toContain('PUBLIC_USERS_URL')
+		expect(layout.content).toContain("from '@repo/openapi-client'")
+		expect(layout.content).not.toContain('@repo/openapi-client/users')
+		expect(layout.content).toContain("baseUrl: ''")
+		expect(layout.content).not.toContain('PUBLIC_USERS_URL')
 		// must spread parent (server) data so user/locale survive the universal load
 		expect(layout.content).toContain('...data')
+	})
+
+	test('SSR uses the same root operation with the request-scoped fetch transport', () => {
+		const serverLoad = findEntry(
+			generateFrontendSveltekit(makeCfg({ apiClient: 'hey-api' })),
+			'apps/web/src/routes/users/+page.server.ts'
+		)!
+		expect(serverLoad.content).toContain("usersGetMe } from '@repo/openapi-client'")
+		expect(serverLoad.content).toContain('usersGetMe({ baseUrl: url.origin, fetch })')
+		expect(serverLoad.content).not.toContain('@repo/openapi-client/users')
 	})
 
 	test('root +layout.svelte wraps children in QueryClientProvider only with hey-api', () => {

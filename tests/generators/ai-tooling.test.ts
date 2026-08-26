@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { generateAiTooling } from '../../src/generators/ai-tooling.js'
+import { runGenerators } from '../../src/generators/index.js'
 import type { GvKitConfig } from '../../src/schema/config.js'
 
 function makeCfg(
@@ -175,6 +176,82 @@ describe('generateAiTooling — Astro marketing guidance', () => {
 	})
 })
 
+describe('generated Hono gateway guidance', () => {
+	for (const selected of ['claude', 'codex', 'opencode'] as const) {
+		test(`${selected} guidance and permissions preserve the gateway topology`, () => {
+			const entries = runGenerators(makeCfg([selected]))
+			const coreRule = content(entries, '.ai/rules/core-stack.md')
+			const backendRule = content(entries, '.ai/rules/api-backend.md')
+			const webRule = content(entries, '.ai/rules/web-svelte.md')
+			const webInstructions = content(entries, 'apps/web/CLAUDE.md')
+			const guidance = entries
+				.filter(
+					(entry) =>
+						entry.path.endsWith('.md') &&
+						(entry.path === 'AGENTS.md' ||
+							entry.path === 'CLAUDE.md' ||
+							entry.path === 'apps/web/CLAUDE.md' ||
+							entry.path.startsWith('.ai/rules/') ||
+							entry.path.startsWith('.claude/agents/') ||
+							entry.path.startsWith('.opencode/agents/'))
+				)
+				.map((entry) => entry.content)
+				.join('\n')
+
+			expect(coreRule).toContain('`apps/api/` is the public Hono API gateway')
+			expect(coreRule).toContain('`services/<service>/`')
+			expect(coreRule).toContain('same-origin `/api/*`')
+			expect(coreRule).toContain("web origin's `/api/*` alias")
+			expect(coreRule).toContain('canonical API origin')
+			expect(coreRule).toContain('`/api/auth/*`')
+			expect(coreRule).toContain('`/api/v1/*`')
+			expect(coreRule).toContain('`apps/api/openapi.json`')
+			expect(coreRule).toContain('`GATEWAY` Service Binding')
+			expect(coreRule).toContain('`@repo/backend/middleware/auth` transport')
+			expect(coreRule).toContain('`/internal/session`')
+			expect(coreRule).toContain('`AUTH` binding')
+			expect(coreRule).toContain('must not import or mount a private service application')
+			expect(coreRule).toContain('never hairpin through the gateway')
+			expect(coreRule).toContain('credentialed wildcard CORS')
+			expect(coreRule).toContain('must not gain a public route, workers.dev hostname, or preview URL')
+			expect(coreRule).not.toContain('/src/lib/auth-client.ts')
+			expect(coreRule).not.toContain('Each consumer keeps a local small transport client')
+			expect(backendRule).toContain('public Hono gateway lives at `apps/api/`')
+			expect(backendRule).toContain('private workers live under `services/<service>/`')
+			expect(backendRule).toContain('flat `@repo/openapi-client` package')
+			expect(backendRule).toContain('same-origin `/api/*`')
+			expect(backendRule).toContain("web Worker's `GATEWAY` Service Binding")
+			expect(backendRule).toContain('Never import a service app into the gateway')
+			expect(backendRule).toContain('Never send an internal service call through the gateway')
+			expect(backendRule).toContain('Never combine credentials with a wildcard CORS origin')
+			expect(webRule).toContain('Flat generated client for the public gateway contract')
+			expect(webRule).toContain("web Worker's `GATEWAY` Service Binding")
+			expect(webInstructions).toContain('`apps/api/` is the public API gateway')
+			expect(webInstructions).toContain('only backend Service Binding is `GATEWAY`')
+			expect(guidance).toContain('`@repo/openapi-client`')
+			expect(guidance).not.toContain('apps/api/<service>')
+			expect(guidance).not.toContain('apps/api/<svc>')
+			expect(guidance).not.toContain('SvelteKit calls a service via the appropriate URL/binding')
+			expect(guidance).not.toContain('web app talks to them over public HTTP')
+			expect(guidance).not.toContain('/src/lib/auth-client.ts')
+
+			if (selected === 'claude') {
+				const settings = content(entries, '.claude/settings.json')
+				expect(settings).toContain('Read(./services/**/.dev.vars)')
+				expect(settings).not.toContain('Read(./apps/api/**/.dev.vars)')
+			} else {
+				expect(entries.some((entry) => entry.path === '.claude/settings.json')).toBe(false)
+			}
+
+			if (selected === 'codex') {
+				const agents = content(entries, 'AGENTS.md')
+				expect(agents).toContain('public Hono gateway at `apps/api`')
+				expect(agents).toContain('`services/<service>/`')
+			}
+		})
+	}
+})
+
 describe('generateAiTooling — content gating', () => {
 	test('AGENTS.md does NOT mention .claude/agents when claude is not selected', () => {
 		const entries = generateAiTooling(makeCfg(['codex']))
@@ -252,7 +329,7 @@ describe('generateAiTooling — content gating', () => {
 	test('cf-workers guidance stays aligned with the generated Worker baseline', () => {
 		const entries = generateAiTooling(makeCfg(['codex']))
 		const deployRule = content(entries, '.ai/rules/deploy-cf-workers.md')
-		expect(deployRule).toContain('"compatibility_date": "2026-07-20"')
+		expect(deployRule).toContain('"compatibility_date": "2026-08-24"')
 		expect(deployRule).toContain('"compatibility_flags": ["nodejs_compat"]')
 		expect(deployRule).not.toContain('nodejs_als')
 	})

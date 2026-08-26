@@ -5,6 +5,7 @@ interface WorkflowStep {
 	uses?: string
 	with?: Record<string, string | number>
 	env?: Record<string, string>
+	run?: string
 }
 
 interface Workflow {
@@ -23,6 +24,17 @@ describe('CI scaffold workflow contract', () => {
 		const setupNode = steps.find((step) => step.uses === 'actions/setup-node@v4')
 
 		expect(setupNode?.with?.['node-version']).toBe(24)
+	})
+
+	test('fails scaffold checks when the composed OpenAPI artifact drifts', async () => {
+		const workflow = await readWorkflow()
+		const steps = workflow.jobs['scaffold-matrix']!.steps
+		const openApi = steps.find(
+			(step) => step.name === 'Verify composed OpenAPI and generate flat client'
+		)
+
+		expect(openApi?.run).toContain('pnpm run --if-present openapi:check')
+		expect(openApi?.run).toContain('pnpm run --if-present codegen')
 	})
 
 	test('provides every static public origin required by scaffold typecheck', async () => {

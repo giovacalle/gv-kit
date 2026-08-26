@@ -78,7 +78,7 @@ describe('Astro generated-project verification matrix', () => {
 			const paths = new Set(buildScaffoldPlan(entry.config).map((file) => file.path))
 			expect(paths.has('apps/marketing/package.json')).toBe(true)
 			expect(paths.has('apps/web/package.json')).toBe(true)
-			expect(paths.has('apps/api/auth/package.json')).toBe(
+			expect(paths.has('services/auth/package.json')).toBe(
 				entry.choices.topology !== 'inside-frontend'
 			)
 		}

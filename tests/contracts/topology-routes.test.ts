@@ -25,34 +25,30 @@ function patterns(content: string): string[] {
 
 describe('topology routes (hono + cf-workers)', () => {
 	for (const { file, cfg } of honoCfFixtures) {
-		test(`${file} keeps auth internal and binds it to the web gateway`, () => {
+		test(`${file} keeps services private and gives web a gateway binding`, () => {
 			const entries = runGenerators(cfg)
-			const auth = entries.find((e) => e.path === 'apps/api/auth/wrangler.jsonc')
+			const auth = entries.find((e) => e.path === 'services/auth/wrangler.jsonc')
+			const users = entries.find((e) => e.path === 'services/users/wrangler.jsonc')
 			const web = entries.find((e) => e.path === 'apps/web/wrangler.jsonc')
 			expect(auth).toBeDefined()
+			expect(users).toBeDefined()
 			expect(web).toBeDefined()
 			expect(patterns(auth!.content)).toEqual([])
+			expect(patterns(users!.content)).toEqual([])
 			const parsedWeb = parseJsonc<Wrangler>(web!.content)
-			if (cfg.choices.auth.length === 0) {
-				expect(parsedWeb.services).toBeUndefined()
-			} else {
-				expect(parsedWeb.services).toContainEqual({
-					binding: 'AUTH',
-					service: `${cfg.choices.name}-auth`
-				})
-			}
+			expect(parsedWeb.services).toContainEqual({
+				binding: 'GATEWAY',
+				service: `${cfg.choices.name}-api`
+			})
 		})
 
-		test(`${file} users route is on api.<domain> (not auth.api.)`, () => {
+		test(`${file} gateway binds both private services`, () => {
 			const entries = runGenerators(cfg)
-			const users = entries.find((e) => e.path === 'apps/api/users/wrangler.jsonc')
-			expect(users).toBeDefined()
-			const ps = patterns(users!.content)
-			expect(ps.length).toBeGreaterThan(0)
-			for (const p of ps) {
-				expect(p).toContain('api.')
-				expect(p).not.toContain('auth.api.')
-			}
+			const gateway = entries.find((e) => e.path === 'apps/api/wrangler.jsonc')
+			expect(gateway).toBeDefined()
+			const services = parseJsonc<Wrangler>(gateway!.content).services
+			expect(services).toContainEqual({ binding: 'AUTH', service: `${cfg.choices.name}-auth` })
+			expect(services).toContainEqual({ binding: 'USERS', service: `${cfg.choices.name}-users` })
 		})
 
 		test(`${file} web route matches the selected project shape`, () => {

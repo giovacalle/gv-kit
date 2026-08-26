@@ -1,11 +1,22 @@
 {
 	// SvelteKit + Cloudflare adapter on Workers.
 	// JSONC: comments and trailing $schema are honored by wrangler.
+	/*@gvkit:if honoGateway*/
+	"$schema": "node_modules/wrangler/config-schema.json",
+	/*@gvkit:else*/
 	"$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
+	/*@gvkit:endif*/
 	"name": "__PROJECT__-web",
 	"main": ".svelte-kit/cloudflare/_worker.js",
+	/*@gvkit:if honoGateway*/
+	"tsconfig": "tsconfig.json",
+	/*@gvkit:endif*/
 	"compatibility_date": "__COMPAT_DATE__",
 	"compatibility_flags": ["nodejs_compat"],
+	/*@gvkit:if honoGateway*/
+	"workers_dev": false,
+	"preview_urls": false,
+	/*@gvkit:endif*/
 	// Replace <domain> with the project's apex domain.
 	"routes": [
 		/*@gvkit:if marketingAstro*/
@@ -22,9 +33,9 @@
 	"observability": {
 		"enabled": true
 	}
-	/*@gvkit:if honoAuth*/
+	/*@gvkit:if honoGateway*/
 	,"services": [
-		{ "binding": "AUTH", "service": "__PROJECT__-auth" }
+		{ "binding": "__GATEWAY_TARGET__", "service": "__GATEWAY_SERVICE__" }
 	]
 	/*@gvkit:endif*/
 }

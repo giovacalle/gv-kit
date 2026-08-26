@@ -45,7 +45,7 @@ describe('generateRoot — Astro project shape', () => {
 	test('postinstall prepares selected generated packages before workspace checks', () => {
 		const pkg = JSON.parse(
 			content(generateRoot(makeCfg({ i18n: 'paraglide', apiClient: 'hey-api' })), 'package.json')
-		) as { scripts: { postinstall?: string } }
+		) as { scripts: Record<string, string | undefined> }
 		expect(pkg.scripts.postinstall).toContain(
 			'test ! -f packages/i18n/project.inlang/settings.json ||'
 		)
@@ -53,7 +53,12 @@ describe('generateRoot — Astro project shape', () => {
 		expect(pkg.scripts.postinstall).toContain(
 			'test ! -f packages/openapi-client/openapi-ts.config.ts ||'
 		)
-		expect(pkg.scripts.postinstall).toContain('pnpm --filter @repo/openapi-client codegen')
+		expect(pkg.scripts.postinstall).toContain('pnpm codegen')
+		expect(pkg.scripts.codegen).toBe(
+			'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen'
+		)
+		expect(pkg.scripts['openapi:compose']).toContain('openapi:compose')
+		expect(pkg.scripts['openapi:check']).toContain('openapi:check')
 	})
 
 	test('Turbo forwards complete public origins and selected monitoring to static builds', () => {
@@ -74,31 +79,33 @@ describe('generateRoot — Astro project shape', () => {
 		)
 	})
 
-	test('auth public variables are forwarded to builds and documented without secret values', () => {
+	test('Hono auth documents host and CORS allowlists without a public auth URL', () => {
 		const entries = generateRoot(
 			makeCfg({ marketing: 'inside-web', auth: ['emailOTP'], email: 'resend' })
 		)
 		const turbo = JSON.parse(content(entries, 'turbo.json')) as {
 			tasks: { build: { env?: string[] } }
 		}
-		expect(turbo.tasks.build.env).toEqual([
-			'PUBLIC_AUTH_URL',
-			'PUBLIC_TURNSTILE_SITE_KEY'
-		])
+		expect(turbo.tasks.build.env).toEqual(['PUBLIC_TURNSTILE_SITE_KEY'])
 		const env = content(entries, '.env.example')
-		expect(env).toContain('PUBLIC_AUTH_URL=http://localhost:5173')
+		expect(env).not.toContain('PUBLIC_AUTH_URL')
+		expect(env).toContain('API_PUBLIC_ORIGIN=http://localhost:8786')
+		expect(env).toContain('BETTER_AUTH_ALLOWED_HOSTS=')
+		expect(env).toContain('<domain>,api.<domain>,<preview-web-host>,<preview-api-host>')
+		expect(env).toContain('AUTH_CORS_ORIGINS=')
 		expect(env).toContain('PUBLIC_TURNSTILE_SITE_KEY=')
 		expect(env).toContain('FROM_EMAIL=')
 	})
 
-	test('non-Cloudflare Hono auth variables use the auth-service origin', () => {
+	test('non-Cloudflare Hono auth uses gateway ingress allowlists', () => {
 		const cfg = makeCfg({ deploy: 'docker', auth: ['emailOTP'], email: 'resend' })
 		const env = content(generateRoot(cfg), '.env.example')
 		const compose = content(generateDeploy(cfg), 'docker-compose.yml')
 
-		expect(env).toContain('BETTER_AUTH_URL=http://localhost:8787')
-		expect(env).not.toContain('BETTER_AUTH_URL=http://localhost:5173')
-		expect(compose).toContain('BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8787}')
+		expect(env).not.toContain('BETTER_AUTH_URL=')
+		expect(env).toContain('BETTER_AUTH_ALLOWED_HOSTS=')
+		expect(compose).toContain('BETTER_AUTH_ALLOWED_HOSTS:')
+		expect(compose).toContain('AUTH_CORS_ORIGINS:')
 	})
 
 	test('PostHog example uses the EU ingestion host forwarded by Docker builds', () => {
@@ -117,9 +124,16 @@ describe('generateRoot — Astro project shape', () => {
 		expect(readme).toContain('https://app.example.com')
 	})
 
-	test('Docker examples use the Compose app origin instead of the dev-server port', () => {
+	test('Docker examples distinguish public ingress from private service targets', () => {
 		const entries = generateRoot(makeCfg({ deploy: 'docker' }))
-		expect(content(entries, '.env.example')).toContain('PUBLIC_APP_URL=http://localhost:3000')
+		const env = content(entries, '.env.example')
+		expect(env).toContain('PUBLIC_APP_URL=http://localhost:3000')
+		expect(env).toContain('# Browser API alias: http://localhost:3000/api/*')
+		expect(env).toContain('API_PUBLIC_ORIGIN=http://localhost:8786')
+		expect(env).toContain('GATEWAY_URL=http://127.0.0.1:8786')
+		expect(env).toContain('AUTH_URL=http://127.0.0.1:8787')
+		expect(env).toContain('USERS_URL=http://127.0.0.1:8788')
+		expect(env).not.toMatch(/^PUBLIC_(?:API|AUTH|USERS)_URL=/m)
 		expect(content(entries, 'README.md')).toContain('PUBLIC_APP_URL=http://localhost:3000')
 	})
 

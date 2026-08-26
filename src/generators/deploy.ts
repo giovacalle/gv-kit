@@ -1,5 +1,13 @@
 import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
+import {
+	AUTH_SERVICE,
+	dockerServiceOrigin,
+	HONO_GATEWAY,
+	honoPackageIdentity,
+	honoServiceName,
+	USERS_SERVICE
+} from './hono-topology.js'
 
 export function generateDeploy(cfg: GvKitConfig): FileEntry[] {
 	switch (cfg.choices.deploy) {
@@ -20,6 +28,8 @@ export function generateDeploy(cfg: GvKitConfig): FileEntry[] {
 /*  cf-workers                                                         */
 /* ------------------------------------------------------------------ */
 
+const WRANGLER_VERSION = '4.125.0'
+
 function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 	const project = cfg.choices.name
 	const db = cfg.choices.db
@@ -32,8 +42,345 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 			path: '.github/workflows/deploy-staging.yml',
 			content: deployStagingWorkflow(project, db, cfg)
 		},
-		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) }
+		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) },
+		{
+			path: 'scripts/cloudflare-preview-name.mjs',
+			content: cloudflarePreviewNameScript()
+		},
+		{
+			path: 'scripts/prepare-cloudflare-preview.mjs',
+			content: prepareCloudflarePreviewScript()
+		},
+		{
+			path: 'scripts/cleanup-cloudflare-preview-workers.sh',
+			content: cleanupCloudflarePreviewWorkersScript()
+		},
+		...(cfg.choices.backend === 'hono'
+			? [
+					{
+						path: 'scripts/write-cloudflare-preview-secrets.mjs',
+						content: writeCloudflarePreviewSecretsScript(cfg, db)
+					}
+				]
+			: []),
+		{
+			path: 'scripts/resolve-cloudflare-deploy-range.sh',
+			content: resolveCloudflareDeployRangeScript()
+		}
 	]
+}
+
+function resolveCloudflareDeployRangeScript(): string {
+	return `#!/bin/sh
+set -eu
+
+zero_sha=0000000000000000000000000000000000000000
+head="\${GITHUB_SHA:-$(git rev-parse HEAD)}"
+base="\${BEFORE_SHA:-}"
+deploy_all=false
+
+if [ -z "$base" ] || [ "$base" = "$zero_sha" ] || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
+	base="$head"
+	deploy_all=true
+fi
+
+{
+	echo "base=$base"
+	echo "head=$head"
+	echo "deploy_all=$deploy_all"
+} >> "$GITHUB_OUTPUT"
+`
+}
+
+function cloudflarePreviewNameScript(): string {
+	return `import { createHash } from 'node:crypto'
+
+const MAX_WORKERS_DEV_NAME_LENGTH = 63
+
+export function cloudflarePreviewName(productionName, alias) {
+	const directName = productionName + '-' + alias
+	if (directName.length <= MAX_WORKERS_DEV_NAME_LENGTH) return directName
+
+	const digest = createHash('sha256').update(productionName).digest('hex').slice(0, 10)
+	const suffix = '-' + digest + '-' + alias
+	const prefix = productionName
+		.slice(0, MAX_WORKERS_DEV_NAME_LENGTH - suffix.length)
+		.replace(/-+$/, '')
+	if (!prefix) throw new Error('Could not derive a preview Worker name for ' + productionName)
+	return prefix + suffix
+}
+
+const [productionName, alias] = process.argv.slice(2)
+if (productionName && alias) console.log(cloudflarePreviewName(productionName, alias))
+`
+}
+
+function cleanupCloudflarePreviewWorkersScript(): string {
+	return `#!/bin/sh
+set -eu
+
+alias="\${1:?preview alias is required}"
+set --
+[ ! -d apps ] || set -- "$@" apps
+[ ! -d services ] || set -- "$@" services
+if [ "$#" -eq 0 ]; then
+	echo "Could not inventory preview Workers: apps and services directories are missing." >&2
+	exit 1
+fi
+
+configs=$(find "$@" -name wrangler.jsonc -print)
+if [ -z "$configs" ]; then
+	echo "Could not inventory preview Workers: no Wrangler configurations found." >&2
+	exit 1
+fi
+
+printf '%s\\n' "$configs" | while read -r config; do
+	base_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$config" | head -n 1)
+	if [ -z "$base_name" ]; then
+		echo "Could not inventory preview Worker from $config: no top-level name found." >&2
+		exit 1
+	fi
+	worker_name=$(node scripts/cloudflare-preview-name.mjs "$base_name" "$alias")
+	deployments=$(npx wrangler@${WRANGLER_VERSION} deployments list --name "$worker_name" --json)
+	deployment_count=$(printf '%s' "$deployments" | jq 'length')
+	if [ "$deployment_count" -eq 0 ]; then
+		echo "Preview Worker $worker_name is missing or already deleted."
+		continue
+	fi
+	echo "Deleting $worker_name"
+	npx wrangler@${WRANGLER_VERSION} delete --name "$worker_name" --force
+done
+`
+}
+
+function prepareCloudflarePreviewScript(): string {
+	return `import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+import { cloudflarePreviewName } from './cloudflare-preview-name.mjs'
+
+function required(name) {
+	const value = process.env[name]
+	if (!value) throw new Error(name + ' is required')
+	return value
+}
+
+function stripJsonc(input) {
+	let output = ''
+	let inString = false
+	let quote = ''
+	let escaped = false
+	let inLineComment = false
+	let inBlockComment = false
+	for (let index = 0; index < input.length; index++) {
+		const character = input[index]
+		const next = input[index + 1]
+		if (inLineComment) {
+			if (character === '\\n') {
+				inLineComment = false
+				output += character
+			}
+			continue
+		}
+		if (inBlockComment) {
+			if (character === '*' && next === '/') {
+				inBlockComment = false
+				index++
+			}
+			continue
+		}
+		if (inString) {
+			output += character
+			if (escaped) escaped = false
+			else if (character === '\\\\') escaped = true
+			else if (character === quote) inString = false
+			continue
+		}
+		if (character === '"' || character === "'") {
+			inString = true
+			quote = character
+			output += character
+			continue
+		}
+		if (character === '/' && next === '/') {
+			inLineComment = true
+			index++
+			continue
+		}
+		if (character === '/' && next === '*') {
+			inBlockComment = true
+			index++
+			continue
+		}
+		output += character
+	}
+	return output
+}
+
+function findWranglerConfigs(directory) {
+	if (!existsSync(directory)) return []
+	const found = []
+	for (const name of readdirSync(directory)) {
+		const candidate = path.join(directory, name)
+		if (statSync(candidate).isDirectory()) found.push(...findWranglerConfigs(candidate))
+		else if (name === 'wrangler.jsonc') found.push(candidate)
+	}
+	return found
+}
+
+const alias = required('STAGING_ALIAS')
+if (!/^[a-z][a-z0-9-]{0,47}$/.test(alias)) {
+	throw new Error('STAGING_ALIAS must start with a lowercase letter and contain only lowercase letters, numbers, and dashes')
+}
+const hasHonoGateway = existsSync('apps/api/wrangler.jsonc') && existsSync('services')
+const localHosts = ['localhost:3000', 'localhost:5173', 'localhost:8786', '127.0.0.1:8786']
+const localOrigins = [
+	'http://localhost:3000',
+	'http://localhost:5173',
+	'http://localhost:8786',
+	'http://127.0.0.1:8786'
+]
+const sources = [...findWranglerConfigs('apps'), ...findWranglerConfigs('services')]
+	.sort()
+	.map((configPath) => {
+		const normalizedPath = configPath.split(path.sep).join('/')
+		const config = JSON.parse(stripJsonc(readFileSync(configPath, 'utf8')))
+		const productionName = config.name
+		if (typeof productionName !== 'string' || productionName.length === 0) {
+			throw new Error(configPath + ' has no Worker name')
+		}
+		return { config, configPath, normalizedPath, productionName }
+	})
+const previewNames = new Map(
+	sources.map(({ productionName }) => [productionName, cloudflarePreviewName(productionName, alias)])
+)
+const gatewayProductionName = sources.find(
+	({ normalizedPath }) => normalizedPath === 'apps/api/wrangler.jsonc'
+)?.productionName
+const webProductionName = sources.find(
+	({ normalizedPath }) => normalizedPath === 'apps/web/wrangler.jsonc'
+)?.productionName
+const marketingProductionName = sources.find(
+	({ normalizedPath }) => normalizedPath === 'apps/marketing/wrangler.jsonc'
+)?.productionName
+const gatewayName = gatewayProductionName ? previewNames.get(gatewayProductionName) : null
+const webName = webProductionName ? previewNames.get(webProductionName) : null
+const marketingName = marketingProductionName ? previewNames.get(marketingProductionName) : null
+if (hasHonoGateway && (!gatewayName || !webName)) {
+	throw new Error('Could not derive public preview Worker names')
+}
+const workersSubdomain = webName ? required('CLOUDFLARE_WORKERS_SUBDOMAIN') : null
+const apiOrigin = gatewayName
+	? new URL('https://' + gatewayName + '.' + workersSubdomain + '.workers.dev')
+	: null
+const webOrigin = webName
+	? new URL('https://' + webName + '.' + workersSubdomain + '.workers.dev')
+	: null
+const marketingOrigin = marketingName
+	? new URL('https://' + marketingName + '.' + workersSubdomain + '.workers.dev')
+	: null
+const inventory = []
+
+for (const { config, configPath, normalizedPath, productionName } of sources) {
+	config.name = previewNames.get(productionName)
+	delete config.route
+	delete config.routes
+
+	const isPrivateService = normalizedPath.startsWith('services/')
+	config.workers_dev = !isPrivateService
+	config.preview_urls = false
+
+	if (process.env.PREVIEW_DB_KIND === 'd1' && Array.isArray(config.d1_databases)) {
+		const databaseName = required('STAGING_D1_DATABASE_NAME')
+		const databaseId = required('STAGING_D1_DATABASE_ID')
+		config.d1_databases = config.d1_databases.map((database) =>
+			database.binding === 'DB'
+				? { ...database, database_name: databaseName, database_id: databaseId }
+				: database
+		)
+	}
+
+	if (normalizedPath === 'apps/api/wrangler.jsonc' && apiOrigin) {
+		config.vars = { ...(config.vars ?? {}), API_PUBLIC_ORIGIN: apiOrigin.origin }
+	}
+	if (normalizedPath === 'services/auth/wrangler.jsonc' && apiOrigin && webOrigin) {
+		config.vars = {
+			...(config.vars ?? {}),
+			BETTER_AUTH_ALLOWED_HOSTS: [webOrigin.host, apiOrigin.host, ...localHosts].join(','),
+			AUTH_CORS_ORIGINS: [webOrigin.origin, apiOrigin.origin, ...localOrigins].join(',')
+		}
+	}
+	if (Array.isArray(config.services)) {
+		config.services = config.services.map((service) => ({
+			...service,
+			service:
+				previewNames.get(service.service) ?? cloudflarePreviewName(service.service, alias)
+		}))
+	}
+
+	const outputPath = path.join(path.dirname(configPath), 'wrangler.staging.jsonc')
+	writeFileSync(outputPath, JSON.stringify(config, null, 2) + '\\n')
+	inventory.push({
+		config: normalizedPath,
+		name: config.name,
+		public: config.workers_dev,
+		services: config.services ?? [],
+		databases: config.d1_databases ?? []
+	})
+}
+
+if (inventory.length === 0) throw new Error('No Wrangler configurations found')
+if (process.env.GITHUB_OUTPUT && webOrigin) {
+	appendFileSync(
+		process.env.GITHUB_OUTPUT,
+		(apiOrigin ? 'api_worker_name=' + gatewayName + '\\napi_origin=' + apiOrigin.origin + '\\n' : '') +
+		'web_worker_name=' + webName + '\\n' +
+		'web_origin=' + webOrigin.origin + '\\n' +
+		(marketingOrigin
+			? 'marketing_worker_name=' + marketingName + '\\nmarketing_origin=' + marketingOrigin.origin + '\\n'
+			: '')
+	)
+}
+console.log(JSON.stringify({
+	alias,
+	apiOrigin: apiOrigin?.origin ?? null,
+	webOrigin: webOrigin?.origin ?? null,
+	marketingOrigin: marketingOrigin?.origin ?? null,
+	workers: inventory
+}, null, 2))
+`
+}
+
+function writeCloudflarePreviewSecretsScript(
+	cfg: GvKitConfig,
+	db: GvKitConfig['choices']['db']
+): string {
+	const authSources = previewAuthSecretKeys(cfg).map((key) => [key, key])
+	if (db === 'postgres') authSources.push(['DATABASE_URL', 'STAGING_DATABASE_URL'])
+	const usersSources = db === 'postgres' ? [['DATABASE_URL', 'STAGING_DATABASE_URL']] : []
+	return `import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
+import path from 'node:path'
+
+const outputDirectory = process.argv[2]
+if (!outputDirectory) throw new Error('An output directory is required')
+mkdirSync(outputDirectory, { recursive: true, mode: 0o700 })
+chmodSync(outputDirectory, 0o700)
+
+function writeSecrets(fileName, sources) {
+	if (sources.length === 0) return
+	const secrets = {}
+	for (const [secretName, environmentName] of sources) {
+		const value = process.env[environmentName]
+		if (!value) throw new Error(environmentName + ' is required')
+		secrets[secretName] = value
+	}
+	const filePath = path.join(outputDirectory, fileName)
+	writeFileSync(filePath, JSON.stringify(secrets) + '\\n', { encoding: 'utf8', mode: 0o600 })
+	chmodSync(filePath, 0o600)
+}
+
+writeSecrets('auth.json', ${JSON.stringify(authSources)})
+writeSecrets('users.json', ${JSON.stringify(usersSources)})
+`
 }
 
 function marketingMonitoringEnvKeys(cfg: GvKitConfig): string[] {
@@ -53,7 +400,9 @@ function marketingPublicEnvKeys(cfg: GvKitConfig): string[] {
 		cfg.choices.marketing === 'astro'
 			? ['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL', ...marketingMonitoringEnvKeys(cfg)]
 			: []
-	if (cfg.choices.auth.length > 0) keys.push('PUBLIC_AUTH_URL')
+	if (cfg.choices.auth.length > 0 && cfg.choices.backend === 'inside-frontend') {
+		keys.push('PUBLIC_AUTH_URL')
+	}
 	if (cfg.choices.auth.includes('emailOTP')) keys.push('PUBLIC_TURNSTILE_SITE_KEY')
 	return keys
 }
@@ -68,13 +417,77 @@ function workflowVariableEnv(keys: string[]): string {
 	return `\n${keys.map((key) => `          ${key}: \${{ vars.${key} }}`).join('\n')}`
 }
 
+type CloudflareDeployStage = 'production' | 'staging'
+
+function honoDeploymentSteps({
+	cfg,
+	stage,
+	env,
+	phase = 'all'
+}: {
+	cfg: GvKitConfig
+	stage: CloudflareDeployStage
+	env: string
+	phase?: 'all' | 'gateway' | 'private' | 'public'
+}): string {
+	const project = cfg.choices.name
+	const targets = [
+		{
+			label: 'auth',
+			packageName: honoPackageIdentity(project, AUTH_SERVICE),
+			phase: 'private',
+			secretsFile:
+				stage === 'staging' ? '${{ steps.preview_secrets.outputs.auth_file }}' : undefined
+		},
+		{
+			label: 'users',
+			packageName: honoPackageIdentity(project, USERS_SERVICE),
+			phase: 'private',
+			secretsFile:
+				stage === 'staging' && cfg.choices.db === 'postgres'
+					? '${{ steps.preview_secrets.outputs.users_file }}'
+					: undefined
+		},
+		{ label: 'gateway', packageName: honoPackageIdentity(project, HONO_GATEWAY), phase: 'gateway' },
+		...(cfg.choices.marketing === 'astro'
+			? [{ label: 'marketing', packageName: `${project}-marketing`, phase: 'public' }]
+			: []),
+		{ label: 'web', packageName: `${project}-web`, phase: 'public' }
+	].filter((target) => phase === 'all' || target.phase === phase)
+	return targets
+		.map(
+			({ label, packageName, secretsFile }) => `      - name: Deploy ${label} Worker
+        run: |
+          if [ "$DEPLOY_ALL" = "true" ]; then
+            pnpm turbo run build --filter=${packageName}
+            pnpm --filter ${packageName} deploy:${stage}
+          else
+            pnpm turbo run deploy:${stage} --affected --filter=${packageName}
+          fi
+        env:
+${env}${secretsFile ? `\n          STAGING_SECRETS_FILE: ${secretsFile}` : ''}`
+		)
+		.join('\n\n')
+}
+
 function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
 	const publicKeys = marketingPublicEnvKeys(cfg)
 	const publicOriginRequirements = workflowVariableRequirements(publicKeys)
 	const publicOriginEnv = workflowVariableEnv(publicKeys)
-	const publicVariableChecks = publicKeys
-		.map((key) => `          test -n "$${key}"`)
-		.join('\n')
+	const publicVariableChecks = publicKeys.map((key) => `          test -n "$${key}"`).join('\n')
+	const deployEnv = `          DEPLOY_ALL: \${{ github.event_name == 'workflow_dispatch' || steps.scm.outputs.deploy_all == 'true' }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TURBO_SCM_BASE: \${{ steps.scm.outputs.base }}
+          TURBO_SCM_HEAD: \${{ steps.scm.outputs.head }}${publicOriginEnv}`
+	const deploymentSteps =
+		cfg.choices.backend === 'hono'
+			? honoDeploymentSteps({ cfg, stage: 'production', env: deployEnv })
+			: `      - name: Deploy affected Workers
+        run: |
+${publicVariableChecks ? `${publicVariableChecks}\n` : ''}          pnpm turbo run deploy:production --affected
+        env:
+${deployEnv}`
 	return `# Deploy ${project} to production on push to main.
 #
 # Required GitHub Secrets:
@@ -114,25 +527,23 @@ jobs:
 
       - id: scm
         name: Resolve deployment range
-        run: |
-          base="\${{ github.event.before }}"
-          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
-            base="HEAD^1"
-          fi
-          echo "base=$base" >> "$GITHUB_OUTPUT"
-          echo "head=\${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+        run: sh scripts/resolve-cloudflare-deploy-range.sh
+        env:
+          BEFORE_SHA: \${{ github.event.before }}
 
       - id: db_changes
         name: Check DB migration inputs
         run: |
-          if git diff --name-only "\${{ steps.scm.outputs.base }}" "\${{ steps.scm.outputs.head }}" | grep -E '^packages/db/(migrations/|src/schema/|drizzle\\.config\\.ts)'; then
+          if [ "\${{ steps.scm.outputs.deploy_all }}" = "true" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif git diff --name-only "\${{ steps.scm.outputs.base }}" "\${{ steps.scm.outputs.head }}" | grep -E '^packages/db/(migrations/|src/schema/|drizzle\\.config\\.ts)'; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           else
             echo "should_run=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Run production database migrations
-        if: steps.db_changes.outputs.should_run == 'true'
+        if: steps.db_changes.outputs.should_run == 'true' || github.event_name == 'workflow_dispatch'
         run: pnpm --filter @repo/db db:migrate:production
         env:
           DATABASE_URL: \${{ secrets.DATABASE_URL }}
@@ -140,18 +551,61 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
       - name: Skip database migrations
-        if: steps.db_changes.outputs.should_run != 'true'
+        if: steps.db_changes.outputs.should_run != 'true' && github.event_name != 'workflow_dispatch'
         run: echo "No database migration inputs changed."
 
-      - name: Deploy affected Workers
+${
+	publicVariableChecks
+		? `      - name: Validate public deployment variables
         run: |
-${publicVariableChecks ? `${publicVariableChecks}\n` : ''}          pnpm turbo run deploy:production --affected
-        env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          TURBO_SCM_BASE: \${{ steps.scm.outputs.base }}
-          TURBO_SCM_HEAD: \${{ steps.scm.outputs.head }}${publicOriginEnv}
+${publicVariableChecks}
+        env:${publicOriginEnv}
+
 `
+		: ''
+}${deploymentSteps}
+`
+}
+
+function previewAuthSecretKeys(cfg: GvKitConfig): string[] {
+	const keys = ['BETTER_AUTH_SECRET']
+	if (cfg.choices.auth.includes('google')) {
+		keys.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
+	}
+	if (cfg.choices.auth.includes('emailOTP')) {
+		keys.push('TURNSTILE_SECRET_KEY')
+		if (cfg.choices.email === 'resend') keys.push('RESEND_API_KEY', 'FROM_EMAIL')
+		if (cfg.choices.email === 'notifuse') {
+			keys.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
+		}
+	}
+	return keys
+}
+
+function previewPrivateSecretsStep(cfg: GvKitConfig, db: GvKitConfig['choices']['db']): string {
+	const authSecrets = previewAuthSecretKeys(cfg)
+	const env = authSecrets
+		.map((key) => `          ${key}: \${{ secrets.${key} }}`)
+		.concat(
+			db === 'postgres'
+				? [`          STAGING_DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`]
+				: []
+		)
+		.join('\n')
+	const usersOutput =
+		db === 'postgres'
+			? `\n          echo "users_file=$secret_dir/users.json" >> "$GITHUB_OUTPUT"`
+			: ''
+	return `      - id: preview_secrets
+        name: Write private Worker preview secret files
+        run: |
+          set -euo pipefail
+          secret_dir="$RUNNER_TEMP/gv-kit-preview-secrets"
+          umask 077
+          node scripts/write-cloudflare-preview-secrets.mjs "$secret_dir"
+          echo "auth_file=$secret_dir/auth.json" >> "$GITHUB_OUTPUT"${usersOutput}
+        env:
+${env}`
 }
 
 function deployStagingWorkflow(
@@ -161,16 +615,46 @@ function deployStagingWorkflow(
 ): string {
 	const hasMarketing = cfg.choices.marketing === 'astro'
 	const previewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
-	const stagingConfigStep = writeStagingWranglerConfigStep(db)
+	const isHono = cfg.choices.backend === 'hono'
+	const stagingConfigStep = writeStagingWranglerConfigStep({ db })
 	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
-	const publicOriginRequirement = hasMarketing
-		? workflowVariableRequirements(['CLOUDFLARE_WORKERS_SUBDOMAIN', ...monitoringKeys])
+	const requiredVariables = ['CLOUDFLARE_WORKERS_SUBDOMAIN', ...monitoringKeys]
+	const publicOriginRequirement = workflowVariableRequirements(requiredVariables)
+	const authSecretRequirements = isHono
+		? previewAuthSecretKeys(cfg)
+				.map((key) => `#   - ${key}`)
+				.join('\n') + '\n'
 		: ''
 	const monitoringEnv = workflowVariableEnv(monitoringKeys)
 	const publicOriginEnv = hasMarketing
 		? `
-          PUBLIC_MARKETING_URL: https://${project}-marketing-\${{ needs.preview-db.outputs.alias }}.\${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}.workers.dev
-          PUBLIC_APP_URL: https://${project}-web-\${{ needs.preview-db.outputs.alias }}.\${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}.workers.dev${monitoringEnv}`
+          PUBLIC_MARKETING_URL: \${{ steps.preview_config.outputs.marketing_origin }}
+          PUBLIC_APP_URL: \${{ steps.preview_config.outputs.web_origin }}${monitoringEnv}`
+		: ''
+	const deployEnv = `          DEPLOY_ALL: \${{ github.event.action != 'synchronize' }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
+          STAGING_WRANGLER_CONFIG: wrangler.staging.jsonc
+          TURBO_SCM_BASE: \${{ github.event.pull_request.base.sha }}
+          TURBO_SCM_HEAD: \${{ github.event.pull_request.head.sha }}${publicOriginEnv}`
+	const privateDeployments = isHono
+		? honoDeploymentSteps({ cfg, stage: 'staging', env: deployEnv, phase: 'private' })
+		: ''
+	const gatewayDeployment = isHono
+		? honoDeploymentSteps({ cfg, stage: 'staging', env: deployEnv, phase: 'gateway' })
+		: ''
+	const publicDeployments = isHono
+		? honoDeploymentSteps({ cfg, stage: 'staging', env: deployEnv, phase: 'public' })
+		: `      - name: Deploy affected Workers (staging)
+        run: pnpm turbo run deploy:staging --affected
+        env:
+${deployEnv}`
+	const privateSecretsStep = isHono ? `\n\n${previewPrivateSecretsStep(cfg, db)}` : ''
+	const removePrivateSecretsStep = isHono
+		? `      - name: Remove private Worker preview secret files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gv-kit-preview-secrets"`
 		: ''
 	return `# Per-PR staging deploy for ${project}.
 # Staging uses PR-scoped preview database resources and temporary Wrangler configs.
@@ -179,7 +663,7 @@ function deployStagingWorkflow(
 # Required GitHub Secrets:
 #   - CLOUDFLARE_API_TOKEN
 #   - CLOUDFLARE_ACCOUNT_ID
-${db === 'postgres' ? '#   - NEON_API_KEY\n# Required GitHub Variables:\n#   - NEON_PROJECT_ID\n' : ''}${publicOriginRequirement}
+${authSecretRequirements}${db === 'postgres' ? '#   - NEON_API_KEY\n# Required GitHub Variables:\n#   - NEON_PROJECT_ID\n' : ''}${publicOriginRequirement}
 
 name: deploy-staging
 
@@ -231,32 +715,33 @@ ${stagingConfigStep}
         env:
 ${previewMigrationEnv(db)}
 
-      - name: Deploy affected Workers (staging)
-        run: pnpm turbo run deploy:staging --affected
-        env:
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
-          STAGING_WRANGLER_CONFIG: wrangler.staging.jsonc
-          TURBO_SCM_BASE: \${{ github.event.pull_request.base.sha }}
-          TURBO_SCM_HEAD: \${{ github.event.pull_request.head.sha }}${publicOriginEnv}
+${privateSecretsStep}
+
+${privateDeployments}
+
+${removePrivateSecretsStep}
+
+${gatewayDeployment}
+
+${publicDeployments}
 
       - uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: staging-deploy
           message: |
-            🚀 **Staging deployed**
+            **Staging deployed**
 
-            | Worker | URL |
+            | Public endpoint | URL |
             |---|---|
-            | affected packages | \`${project}-<worker>-\${{ needs.preview-db.outputs.alias }}.<your-workers-subdomain>.workers.dev\` |
+            | web | \`\${{ steps.preview_config.outputs.web_origin }}\` |
+            | canonical API | \`\${{ steps.preview_config.outputs.api_origin }}\` |
 
             **Commit**: \`\${{ steps.meta.outputs.short_sha }}\`
             **Updated**: \${{ github.event.pull_request.updated_at }}
 `
 }
 
-function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): string {
+function writeStagingWranglerConfigStep({ db }: { db: GvKitConfig['choices']['db'] }): string {
 	const envLines =
 		db === 'sqlite'
 			? `          PREVIEW_DB_KIND: d1
@@ -264,110 +749,12 @@ function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): strin
           STAGING_D1_DATABASE_ID: \${{ needs.preview-db.outputs.d1_database_id }}`
 			: `          PREVIEW_DB_KIND: neon
           STAGING_DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
-
-	return `      - name: Write temporary staging Wrangler configs
-        run: |
-          node <<'NODE'
-          const fs = require('node:fs')
-          const path = require('node:path')
-          const { execFileSync } = require('node:child_process')
-
-          function stripJsonc(input) {
-            let output = ''
-            let inString = false
-            let quote = ''
-            let escaped = false
-            let inLineComment = false
-            let inBlockComment = false
-            for (let i = 0; i < input.length; i++) {
-              const ch = input[i]
-              const next = input[i + 1]
-              if (inLineComment) {
-                if (ch === '\\n') {
-                  inLineComment = false
-                  output += ch
-                }
-                continue
-              }
-              if (inBlockComment) {
-                if (ch === '*' && next === '/') {
-                  inBlockComment = false
-                  i++
-                }
-                continue
-              }
-              if (inString) {
-                output += ch
-                if (escaped) {
-                  escaped = false
-                } else if (ch === '\\\\') {
-                  escaped = true
-                } else if (ch === quote) {
-                  inString = false
-                }
-                continue
-              }
-              if (ch === '"' || ch === "'") {
-                inString = true
-                quote = ch
-                output += ch
-                continue
-              }
-              if (ch === '/' && next === '/') {
-                inLineComment = true
-                i++
-                continue
-              }
-              if (ch === '/' && next === '*') {
-                inBlockComment = true
-                i++
-                continue
-              }
-              output += ch
-            }
-            return output
-          }
-
-          const configs = execFileSync('find', ['apps', '-name', 'wrangler.jsonc'], {
-            encoding: 'utf8'
-          })
-            .trim()
-            .split('\\n')
-            .filter(Boolean)
-
-          for (const configPath of configs) {
-            const config = JSON.parse(stripJsonc(fs.readFileSync(configPath, 'utf8')))
-            if (process.env.PREVIEW_DB_KIND === 'd1' && Array.isArray(config.d1_databases)) {
-              config.d1_databases = config.d1_databases.map((database) =>
-                database.binding === 'DB'
-                  ? {
-                      ...database,
-                      database_name: process.env.STAGING_D1_DATABASE_NAME,
-                      database_id: process.env.STAGING_D1_DATABASE_ID
-                    }
-                  : database
-              )
-            }
-            if (process.env.PREVIEW_DB_KIND === 'neon') {
-              config.vars = {
-                ...(config.vars ?? {}),
-                DATABASE_URL: process.env.STAGING_DATABASE_URL
-              }
-            }
-            if (Array.isArray(config.services)) {
-              config.services = config.services.map((service) => ({
-                ...service,
-                service: \`\${service.service}-\${process.env.STAGING_ALIAS}\`
-              }))
-            }
-            fs.writeFileSync(
-              path.join(path.dirname(configPath), 'wrangler.staging.jsonc'),
-              JSON.stringify(config, null, 2) + '\\n'
-            )
-          }
-          NODE
+	return `      - id: preview_config
+        name: Write temporary staging Wrangler configs
+        run: node scripts/prepare-cloudflare-preview.mjs
         env:
           STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
+          CLOUDFLARE_WORKERS_SUBDOMAIN: \${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
 ${envLines}`
 }
 
@@ -384,10 +771,11 @@ function previewMigrationEnv(db: GvKitConfig['choices']['db']): string {
 		: `          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
 }
 
-const PREVIEW_ALIAS_SCRIPT = `raw="\${{ github.event.pull_request.head.ref }}"
+const PREVIEW_ALIAS_SCRIPT = `raw="pr-\${{ github.event.pull_request.number || github.run_id }}"
           alias=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g' | cut -c1-48)
-          if [ -z "$alias" ]; then
-            alias="pr-\${{ github.event.pull_request.number }}"
+          if ! printf '%s' "$alias" | grep -Eq '^[a-z][a-z0-9-]{0,47}$'; then
+            echo "Could not derive a safe preview alias" >&2
+            exit 1
           fi
           echo "alias=$alias" >> "$GITHUB_OUTPUT"`
 
@@ -412,10 +800,10 @@ function d1PreviewDbJob(project: string): string {
         run: |
           set -euo pipefail
           db_name="${project}-db-\${{ steps.meta.outputs.alias }}"
-          db_id=$(npx wrangler d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
+          db_id=$(npx wrangler@${WRANGLER_VERSION} d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
           if [ -z "$db_id" ]; then
-            npx wrangler d1 create "$db_name"
-            db_id=$(npx wrangler d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
+            npx wrangler@${WRANGLER_VERSION} d1 create "$db_name"
+            db_id=$(npx wrangler@${WRANGLER_VERSION} d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
           fi
           if [ -z "$db_id" ]; then
             echo "Could not resolve D1 database id for $db_name" >&2
@@ -458,9 +846,9 @@ function neonPreviewDbJob(project: string): string {
 function cleanupStagingWorkflow(project: string, db: GvKitConfig['choices']['db']): string {
 	const previewDbCleanupStep =
 		db === 'sqlite' ? d1PreviewDbCleanupStep(project) : neonPreviewDbCleanupStep(project)
-	return `# Tear down a staging deploy when its PR closes (merged or rejected). Also
-# deletes the remote branch — staging is ephemeral. Worker names are discovered
-# from checked-in wrangler.jsonc files and suffixed with the branch alias.
+	return `# Tear down a staging deploy when its PR closes (merged or rejected).
+# Worker names are discovered from checked-in wrangler.jsonc files and suffixed
+# with the preview alias. Source branches and production Workers are unchanged.
 ${db === 'postgres' ? '# Neon preview branch cleanup uses NEON_API_KEY and NEON_PROJECT_ID.\n' : ''}
 
 name: cleanup-staging
@@ -469,11 +857,15 @@ on:
   pull_request:
     types: [closed]
 
+concurrency:
+  group: staging-\${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: read
       pull-requests: write
     steps:
       - id: checkout_head
@@ -489,6 +881,11 @@ jobs:
         with:
           fetch-depth: 1
           ref: \${{ github.event.pull_request.base.sha }}
+      - name: Require preview inventory checkout
+        if: steps.checkout_head.outcome != 'success' && steps.checkout_base.outcome != 'success'
+        run: |
+          echo "Could not check out PR head or base; preview cleanup cannot inventory resources." >&2
+          exit 1
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
@@ -497,70 +894,35 @@ jobs:
           ${PREVIEW_ALIAS_SCRIPT}
 
       - name: Delete staging Workers
-        if: steps.checkout_head.outcome == 'success' || steps.checkout_base.outcome == 'success'
-        run: |
-          set -euo pipefail
-          find apps -name wrangler.jsonc -print | while read -r config; do
-            base_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$config" | head -n 1)
-            if [ -z "$base_name" ]; then
-              echo "Skipping $config: no top-level name found"
-              continue
-            fi
-            worker_name="$base_name-\${{ steps.branch.outputs.alias }}"
-            echo "Deleting $worker_name"
-            npx wrangler delete --name "$worker_name" --force || true
-          done
+        run: sh scripts/cleanup-cloudflare-preview-workers.sh "\${{ steps.branch.outputs.alias }}"
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-      - name: Skip staging Worker cleanup
-        if: steps.checkout_head.outcome != 'success' && steps.checkout_base.outcome != 'success'
-        run: echo "Could not check out PR head or base; skipping dynamic Worker cleanup."
-
 ${previewDbCleanupStep}
 
-      - name: Delete remote branch
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const ref = context.payload.pull_request.head.ref
-            try {
-              await github.rest.git.deleteRef({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                ref: \`heads/\${ref}\`
-              })
-            } catch (err) {
-              core.warning(\`Could not delete branch \${ref}: \${err.message}\`)
-            }
-
       - uses: marocchino/sticky-pull-request-comment@v2
-        if: always()
         with:
           header: staging-deploy
           message: |
-            🧹 **Staging cleaned up**
+            **Staging cleaned up**
 
-            Workers and branch \`\${{ github.event.pull_request.head.ref }}\` removed.
+            Preview Workers and data resources removed. The source branch was not changed.
 `
 }
 
 function d1PreviewDbCleanupStep(project: string): string {
 	return `      - name: Delete preview D1 database
         run: |
-          set -uo pipefail
+          set -euo pipefail
           db_name="${project}-db-\${{ steps.branch.outputs.alias }}"
-          db_id=$(npx wrangler d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
+          db_id=$(npx wrangler@${WRANGLER_VERSION} d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
           if [ -z "$db_id" ]; then
             echo "Preview D1 database $db_name is missing or already deleted."
             exit 0
           fi
-          if npx wrangler d1 delete "$db_name" --skip-confirmation; then
-            echo "Deleted preview D1 database $db_name."
-          else
-            echo "Could not delete preview D1 database $db_name; continuing cleanup."
-          fi
+          npx wrangler@${WRANGLER_VERSION} d1 delete "$db_name" --skip-confirmation
+          echo "Deleted preview D1 database $db_name."
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
@@ -569,22 +931,19 @@ function d1PreviewDbCleanupStep(project: string): string {
 function neonPreviewDbCleanupStep(project: string): string {
 	return `      - name: Delete preview Neon branch
         run: |
-          set -uo pipefail
+          set -euo pipefail
           branch_name="${project}-db-\${{ steps.branch.outputs.alias }}"
-          branches_json=$(curl -fsS -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches") || {
-              echo "Could not list Neon branches; continuing cleanup."
-              exit 0
-            }
+          if ! branches_json=$(curl -fsS -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches"); then
+            echo "Could not list Neon branches." >&2
+            exit 1
+          fi
           branch_id=$(printf '%s' "$branches_json" | jq -r --arg name "$branch_name" '.branches[]? | select(.name == $name) | .id' | head -n 1)
           if [ -z "$branch_id" ]; then
             echo "Preview Neon branch $branch_name is missing or already deleted."
             exit 0
           fi
-          if curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$branch_id" >/dev/null; then
-            echo "Deleted preview Neon branch $branch_name."
-          else
-            echo "Could not delete preview Neon branch $branch_name; continuing cleanup."
-          fi
+          curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$branch_id" >/dev/null
+          echo "Deleted preview Neon branch $branch_name."
         env:
           NEON_PROJECT_ID: \${{ vars.NEON_PROJECT_ID }}
           NEON_API_KEY: \${{ secrets.NEON_API_KEY }}`
@@ -624,7 +983,8 @@ function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
 	return [
 		{ path: '.dockerignore', content: dockerignore() },
 		{ path: 'Dockerfile', content: dockerfile(opts) },
-		{ path: 'docker-compose.yml', content: dockerCompose(opts) }
+		{ path: 'docker-compose.yml', content: dockerCompose(opts) },
+		...(opts.isHono ? [{ path: 'docker/ingress.conf.template', content: ingressConfig() }] : [])
 	]
 }
 
@@ -633,8 +993,12 @@ function dockerignore(): string {
 
 !apps/
 !apps/**
+!services/
+!services/**
 !packages/
 !packages/**
+!docker/
+!docker/**
 !package.json
 !pnpm-lock.yaml
 !pnpm-workspace.yaml
@@ -661,6 +1025,13 @@ function dockerignore(): string {
 `
 }
 
+function nodeRuntimeTarget(name: 'auth' | 'gateway' | 'users', port: number): string {
+	return `FROM api-runtime AS ${name}-runtime
+ENV PORT=${port}
+EXPOSE ${port}
+`
+}
+
 function dockerfile(opts: DockerOpts): string {
 	const marketingRuntime = opts.hasMarketing
 		? `
@@ -673,25 +1044,33 @@ HEALTHCHECK --interval=5s --timeout=2s --start-period=2s --retries=5 \\
 ENTRYPOINT ["nginx", "-g", "daemon off;"]
 `
 		: ''
-	const publicBuildKeys = opts.hasMarketing
-		? [
-				'PUBLIC_MARKETING_URL',
-				'PUBLIC_APP_URL',
-				...(opts.wantsUmami ? ['PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID'] : []),
-				...(opts.wantsPosthog ? ['PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST'] : [])
-			]
-		: []
+	const publicBuildKeys = [
+		...(opts.hasMarketing
+			? [
+					'PUBLIC_MARKETING_URL',
+					'PUBLIC_APP_URL',
+					...(opts.wantsUmami ? ['PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID'] : []),
+					...(opts.wantsPosthog ? ['PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST'] : [])
+				]
+			: []),
+		...(opts.wantsEmailOTP ? ['PUBLIC_TURNSTILE_SITE_KEY'] : [])
+	]
 	const publicBuildArgs = publicBuildKeys.map((key) => `ARG ${key}`).join('\n')
 	const publicBuildEnv =
 		publicBuildKeys.length > 0
 			? `ENV ${publicBuildKeys.map((key) => `${key}=\${${key}}`).join(' \\\n    ')}`
 			: ''
+	const serviceCopy = opts.isHono ? 'COPY services services\n' : ''
+	const workspaceRoots = opts.isHono ? 'apps packages services' : 'apps packages'
+	const nodeRuntimeTargets = opts.isHono
+		? `${nodeRuntimeTarget('gateway', HONO_GATEWAY.development.port)}\n${nodeRuntimeTarget('auth', AUTH_SERVICE.development.port)}\n${nodeRuntimeTarget('users', USERS_SERVICE.development.port)}`
+		: ''
 
 	return `# syntax=docker/dockerfile:1.7
 #
 # Build any service from the repo root:
 #   docker build --target web-runtime --build-arg TURBO_FILTER=<project>-web -t web .
-#   docker build --target api-runtime --build-arg APP_PATH=apps/api/auth --build-arg TURBO_FILTER=@<project>/auth-worker -t auth .
+#   docker build --target auth-runtime --build-arg TURBO_FILTER=${honoPackageIdentity('<project>', AUTH_SERVICE)} -t ${AUTH_SERVICE.identity} .
 #
 # Compose orchestrates these via \`target:\` and \`args:\`.
 
@@ -714,7 +1093,7 @@ FROM base AS pruner
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
 COPY apps apps
 COPY packages packages
-RUN find apps packages \\( -name 'node_modules' -prune \\) -o \\( -name 'package.json' -print \\) \\
+${serviceCopy}RUN find ${workspaceRoots} \\( -name 'node_modules' -prune \\) -o \\( -name 'package.json' -print \\) \\
     | xargs -I{} sh -c 'mkdir -p "/pruned/$(dirname "{}")" && cp "{}" "/pruned/{}"' \\
  && cp package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json /pruned/
 
@@ -732,6 +1111,11 @@ RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \\
     --mount=type=cache,id=turbo,target=/repo/.turbo \\
     pnpm exec turbo run build --filter=\${TURBO_FILTER}
 
+FROM builder AS deployer
+ARG TURBO_FILTER
+RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \\
+    pnpm --filter="\${TURBO_FILTER}" deploy --legacy --prod --ignore-scripts /prod
+
 FROM node:\${NODE_VERSION}-alpine AS web-runtime
 RUN apk add --no-cache tini wget \\
  && addgroup -S app && adduser -S app -G app
@@ -739,13 +1123,12 @@ ENV NODE_ENV=production \\
     PORT=3000 \\
     HOST=0.0.0.0
 WORKDIR /app
+COPY --from=deployer --chown=app:app /prod ./
 COPY --from=builder --chown=app:app /repo/apps/web/build ./build
-COPY --from=builder --chown=app:app /repo/apps/web/package.json ./package.json
-COPY --from=builder --chown=app:app /repo/node_modules ./node_modules
 USER app
 EXPOSE 3000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=15s --retries=3 \\
-    CMD wget --quiet --tries=1 --spider http://127.0.0.1:3000/healthz || exit 1
+    CMD wget --quiet --tries=1 --output-document=/dev/null http://127.0.0.1:3000/healthz || exit 1
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "build/index.js"]
 
@@ -756,22 +1139,22 @@ ARG APP_PATH
 ENV NODE_ENV=production \\
     HOST=0.0.0.0
 WORKDIR /app
-COPY --from=builder --chown=app:app /repo/\${APP_PATH}/dist ./dist
-COPY --from=builder --chown=app:app /repo/\${APP_PATH}/package.json ./package.json
+COPY --from=deployer --chown=app:app /prod ./
 USER app
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \\
-    CMD wget --quiet --tries=1 --spider http://127.0.0.1:$PORT/healthz || exit 1
+    CMD wget --quiet --tries=1 --output-document=/dev/null http://127.0.0.1:$PORT/healthz || exit 1
 ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]
 
+${nodeRuntimeTargets}
 # One-shot. Compose runs it with \`condition: service_completed_successfully\`
 # so application services wait for migrations before starting.
 FROM deps AS migrate-runtime
+RUN addgroup -S app && adduser -S app -G app
 COPY --from=builder /repo/packages/db ./packages/db
 WORKDIR /repo/packages/db
-USER nobody
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["pnpm", "exec", "drizzle-kit", "migrate"]
+CMD ["sh", "-c", "pnpm exec drizzle-kit migrate && if [ -d /data ]; then chown -R app:app /data; fi"]
 ${marketingRuntime}
 `
 }
@@ -787,8 +1170,10 @@ function dockerCompose(opts: DockerOpts): string {
 	if (opts.isHono) {
 		services.push(authService(opts))
 		services.push(usersService(opts))
+		services.push(gatewayService(opts))
 	}
 	services.push(webService(opts))
+	if (opts.isHono) services.push(ingressService())
 	if (opts.hasMarketing) services.push(marketingService(opts))
 
 	return (
@@ -840,13 +1225,13 @@ function migrateService(opts: DockerOpts): string {
 }
 
 function authService(opts: DockerOpts): string {
-	const env = ['      PORT: "8787"', ...dbEnvLines(opts, '      ')]
+	const env = [`      PORT: "${AUTH_SERVICE.development.port}"`, ...dbEnvLines(opts, '      ')]
 	if (opts.hasAuth) {
 		env.push('      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}')
-		env.push('      BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8787}')
 		env.push(
-			'      BETTER_AUTH_TRUSTED_ORIGINS: ${BETTER_AUTH_TRUSTED_ORIGINS:-http://localhost:3000}'
+			'      BETTER_AUTH_ALLOWED_HOSTS: ${BETTER_AUTH_ALLOWED_HOSTS:-localhost:3000,localhost:8786,127.0.0.1:8786}'
 		)
+		env.push('      AUTH_CORS_ORIGINS: ${AUTH_CORS_ORIGINS:-http://localhost:3000}')
 	}
 	if (opts.wantsGoogle) {
 		env.push('      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}')
@@ -854,8 +1239,14 @@ function authService(opts: DockerOpts): string {
 			'      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET in .env}'
 		)
 	}
+	if (opts.wantsEmailOTP) {
+		env.push(
+			'      TURNSTILE_SECRET_KEY: ${TURNSTILE_SECRET_KEY:?set TURNSTILE_SECRET_KEY in .env}'
+		)
+	}
 	if (opts.wantsEmailOTP && opts.emailProvider === 'resend') {
-		env.push('      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}')
+		env.push('      RESEND_API_KEY: ${RESEND_API_KEY:-}')
+		env.push('      FROM_EMAIL: ${FROM_EMAIL:-}')
 	}
 	if (opts.wantsEmailOTP && opts.emailProvider === 'notifuse') {
 		env.push('      NOTIFUSE_API_KEY: ${NOTIFUSE_API_KEY:?set NOTIFUSE_API_KEY in .env}')
@@ -866,56 +1257,152 @@ function authService(opts: DockerOpts): string {
 	}
 
 	const lines = [
-		'  auth:',
+		`  ${AUTH_SERVICE.transport.docker.serviceName}:`,
 		'    build:',
 		'      context: .',
-		'      target: api-runtime',
+		'      target: auth-runtime',
 		'      args:',
-		'        APP_PATH: apps/api/auth',
-		`        TURBO_FILTER: "@${opts.project}/auth-worker"`,
-		`    image: ${opts.project}-auth:latest`,
+		`        TURBO_FILTER: "${honoPackageIdentity(opts.project, AUTH_SERVICE)}"`,
+		`    image: ${honoServiceName(opts.project, AUTH_SERVICE)}:latest`,
 		'    restart: unless-stopped',
-		'    ports:',
-		'      - "8787:8787"',
 		'    environment:',
 		...env,
 		...volumeMountLines(opts, '    '),
 		...dependsOnDbAndMigrate(opts),
-		...healthcheckLines(8787)
+		...healthcheckLines(AUTH_SERVICE.development.port)
 	]
 	return lines.join('\n')
 }
 
 function usersService(opts: DockerOpts): string {
 	const env = [
-		'      PORT: "8788"',
+		`      PORT: "${USERS_SERVICE.development.port}"`,
 		...dbEnvLines(opts, '      '),
-		'      AUTH_URL: http://auth:8787'
+		`      ${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(AUTH_SERVICE)}`
 	]
 
 	const lines = [
-		'  users:',
+		`  ${USERS_SERVICE.transport.docker.serviceName}:`,
 		'    build:',
 		'      context: .',
-		'      target: api-runtime',
+		'      target: users-runtime',
 		'      args:',
-		'        APP_PATH: apps/api/users',
-		`        TURBO_FILTER: "@${opts.project}/users-worker"`,
-		`    image: ${opts.project}-users:latest`,
+		`        TURBO_FILTER: "${honoPackageIdentity(opts.project, USERS_SERVICE)}"`,
+		`    image: ${honoServiceName(opts.project, USERS_SERVICE)}:latest`,
 		'    restart: unless-stopped',
-		'    ports:',
-		'      - "8788:8788"',
 		'    environment:',
 		...env,
 		...volumeMountLines(opts, '    '),
 		'    depends_on:',
-		'      auth:',
+		`      ${AUTH_SERVICE.transport.docker.serviceName}:`,
 		'        condition: service_healthy',
 		'      migrate:',
 		'        condition: service_completed_successfully',
-		...healthcheckLines(8788)
+		...healthcheckLines(USERS_SERVICE.development.port)
 	]
 	return lines.join('\n')
+}
+
+function gatewayService(opts: DockerOpts): string {
+	return `  ${HONO_GATEWAY.transport.docker.serviceName}:
+    build:
+      context: .
+      target: gateway-runtime
+      args:
+        TURBO_FILTER: "${honoPackageIdentity(opts.project, HONO_GATEWAY)}"
+    image: ${honoServiceName(opts.project, HONO_GATEWAY)}:latest
+    restart: unless-stopped
+    ports:
+      - "${HONO_GATEWAY.development.port}:${HONO_GATEWAY.development.port}"
+    environment:
+      PORT: "${HONO_GATEWAY.development.port}"
+      API_PUBLIC_ORIGIN: \${API_PUBLIC_ORIGIN:-http://localhost:${HONO_GATEWAY.development.port}}
+      ${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(AUTH_SERVICE)}
+      ${USERS_SERVICE.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(USERS_SERVICE)}
+    depends_on:
+      ${AUTH_SERVICE.transport.docker.serviceName}:
+        condition: service_healthy
+      ${USERS_SERVICE.transport.docker.serviceName}:
+        condition: service_healthy
+${healthcheckLines(HONO_GATEWAY.development.port, '/api/healthz').join('\n')}`
+}
+
+function ingressService(): string {
+	return `  ingress:
+    image: nginxinc/nginx-unprivileged:1.28.0-alpine@sha256:c97ff0bf7cbae369953c6da1232ec14ad9f971d66360c5698db0856a4cd657a0
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    environment:
+      API_HOST: \${API_HOST:-api.localhost}
+      PUBLIC_SCHEME: \${PUBLIC_SCHEME:-http}
+      NGINX_ENVSUBST_FILTER: "^(API_HOST|PUBLIC_SCHEME)$"
+    volumes:
+      - ./docker/ingress.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      ${HONO_GATEWAY.transport.docker.serviceName}:
+        condition: service_healthy
+      web:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--spider", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+      start_period: 2s`
+}
+
+function ingressConfig(): string {
+	return `upstream gateway_upstream {
+	server ${HONO_GATEWAY.transport.docker.hostname}:${HONO_GATEWAY.development.port};
+}
+
+upstream web_upstream {
+	server web:3000;
+}
+
+server {
+	listen 8080 default_server;
+	server_name _;
+
+	location = /api {
+		proxy_pass http://gateway_upstream;
+		proxy_set_header Host $http_host;
+		proxy_set_header X-Forwarded-Host $http_host;
+		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Request-ID $request_id;
+	}
+
+	location ^~ /api/ {
+		proxy_pass http://gateway_upstream;
+		proxy_set_header Host $http_host;
+		proxy_set_header X-Forwarded-Host $http_host;
+		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Request-ID $request_id;
+	}
+
+	location / {
+		proxy_pass http://web_upstream;
+		proxy_set_header Host $http_host;
+		proxy_set_header X-Forwarded-Host $http_host;
+		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Request-ID $request_id;
+	}
+}
+
+server {
+	listen 8080;
+	server_name \${API_HOST};
+
+	location / {
+		proxy_pass http://gateway_upstream;
+		proxy_set_header Host $http_host;
+		proxy_set_header X-Forwarded-Host $http_host;
+		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Request-ID $request_id;
+	}
+}
+`
 }
 
 function webService(opts: DockerOpts): string {
@@ -924,11 +1411,15 @@ function webService(opts: DockerOpts): string {
 	if (opts.hasMarketing) {
 		buildArgs.push('        PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}')
 	}
+	if (opts.wantsEmailOTP) {
+		buildArgs.push(
+			'        PUBLIC_TURNSTILE_SITE_KEY: ${PUBLIC_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}'
+		)
+	}
 
 	if (opts.isHono) {
 		env.push(
-			'      PUBLIC_AUTH_URL: ${PUBLIC_AUTH_URL:-http://localhost:8787/api/auth}',
-			'      PUBLIC_API_URL: ${PUBLIC_API_URL:-http://localhost:8788}'
+			`      ${HONO_GATEWAY.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(HONO_GATEWAY)}`
 		)
 	} else {
 		env.push(...dbEnvLines(opts, '      '))
@@ -960,9 +1451,7 @@ function webService(opts: DockerOpts): string {
 	const dependsOn: string[] = ['    depends_on:']
 	if (opts.isHono) {
 		dependsOn.push(
-			'      auth:',
-			'        condition: service_healthy',
-			'      users:',
+			`      ${HONO_GATEWAY.transport.docker.serviceName}:`,
 			'        condition: service_healthy'
 		)
 	} else {
@@ -981,8 +1470,7 @@ function webService(opts: DockerOpts): string {
 		...buildArgs,
 		`    image: ${opts.project}-web:latest`,
 		'    restart: unless-stopped',
-		'    ports:',
-		'      - "3000:3000"',
+		...(opts.isHono ? [] : ['    ports:', '      - "3000:3000"']),
 		'    environment:',
 		...env,
 		...volumes,
@@ -1053,10 +1541,10 @@ function dependsOnDbAndMigrate(opts: DockerOpts): string[] {
 	return lines
 }
 
-function healthcheckLines(port: number): string[] {
+function healthcheckLines(port: number, path = '/healthz'): string[] {
 	return [
 		'    healthcheck:',
-		`      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:${port}/healthz"]`,
+		`      test: ["CMD", "wget", "--quiet", "--tries=1", "--output-document=/dev/null", "http://127.0.0.1:${port}${path}"]`,
 		'      interval: 15s',
 		'      timeout: 3s',
 		'      retries: 3',

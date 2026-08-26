@@ -1,6 +1,6 @@
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
-import { WORKERS_COMPAT_DATE } from '../lib/workers.js'
+import { HONO_WORKERS_COMPAT_DATE, WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
 
 /** Generate the optional static Astro marketing surface under `apps/marketing`. */
@@ -18,7 +18,8 @@ export function generateMarketingAstro(cfg: GvKitConfig): FileEntry[] {
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,
-			__COMPAT_DATE__: WORKERS_COMPAT_DATE
+			__COMPAT_DATE__:
+				cfg.choices.backend === 'hono' ? HONO_WORKERS_COMPAT_DATE : WORKERS_COMPAT_DATE
 		}
 	})
 }

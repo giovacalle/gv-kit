@@ -1,5 +1,6 @@
 import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
+import { AUTH_SERVICE } from './hono-topology.js'
 
 export function generateEmail(cfg: GvKitConfig): FileEntry[] {
 	const choice = cfg.choices.email
@@ -290,7 +291,7 @@ pnpm build       # one-shot — clean dist/ then emit ESM + .d.ts
 pnpm dev         # tsup --watch
 \`\`\`
 
-\`turbo run build\` wires \`^build\` so consumers (e.g. \`apps/api/auth\`) get
+\`turbo run build\` wires \`^build\` so consumers (e.g. \`${AUTH_SERVICE.workspacePath}\`) get
 \`packages/mailer/dist/\` rebuilt on demand. Run \`pnpm build\` once after
 \`git clone\` if you skip the turbo orchestrator.
 
@@ -806,7 +807,7 @@ pnpm dev         # tsup --watch — rebuild on change while you iterate
 pnpm preview     # react-email preview UI at http://localhost:3001
 \`\`\`
 
-\`turbo run build\` already wires \`^build\` so consumers (e.g. \`apps/api/auth\`)
+\`turbo run build\` already wires \`^build\` so consumers (e.g. \`${AUTH_SERVICE.workspacePath}\`)
 get \`packages/mailer/dist/\` rebuilt on demand. Run \`pnpm build\` once after
 \`git clone\` if you skip the turbo orchestrator.
 

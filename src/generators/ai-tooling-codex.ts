@@ -55,7 +55,9 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 		'- `.ai/rules/web-svelte.md`, `web-forms.md`, `web-tailwind.md`, `web-ui.md` — frontend conventions'
 	)
 	if (cfg.choices.backend === 'hono')
-		lines.push('- `.ai/rules/web-api.md` — `apps/web` → `apps/api/<svc>` integration')
+		lines.push(
+			'- `.ai/rules/web-api.md` — same-origin browser API access and request-scoped SSR gateway transport'
+		)
 	if (cfg.choices.apiClient === 'hey-api')
 		lines.push('- `.ai/rules/web-query.md` — TanStack Query (svelte-query) client-data conventions')
 	if (cfg.choices.auth.length > 0)
@@ -101,7 +103,7 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 			lines.push('')
 			lines.push('Specialists:')
 			lines.push('')
-			lines.push('- `service-architect` — scaffolds a new `apps/api/<svc>/` Hono Worker.')
+			lines.push('- `service-architect` — scaffolds a new private `services/<svc>/` Hono Worker.')
 		}
 		lines.push('')
 	}
@@ -115,7 +117,7 @@ function renderStackBullets(cfg: GvKitConfig): string {
 	if (cfg.choices.marketing === 'astro')
 		lines.push('- Marketing: Astro static site (`apps/marketing`)')
 	if (cfg.choices.backend === 'hono')
-		lines.push('- Backend: Hono Workers under `apps/api/<service>/`')
+		lines.push('- Backend: public Hono gateway at `apps/api` with private workers under `services/`')
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
 	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
 	if (cfg.choices.auth.length > 0)
@@ -146,8 +148,10 @@ function renderLayoutBullets(cfg: GvKitConfig): string {
 	if (cfg.choices.marketing === 'astro')
 		lines.push('- `apps/marketing/` — static Astro public site')
 	lines.push('- `apps/web/` — SvelteKit app')
-	if (cfg.choices.backend === 'hono')
-		lines.push('- `apps/api/<service>/` — independently deployable Hono Workers')
+	if (cfg.choices.backend === 'hono') {
+		lines.push('- `apps/api/` — public Hono API gateway')
+		lines.push('- `services/<service>/` — independently deployable private Hono Workers')
+	}
 	lines.push('- `packages/db/` — Drizzle schema + client factory')
 	lines.push('- `packages/backend/` — horizontal helpers (logger, error helpers, middleware)')
 	lines.push(
@@ -158,7 +162,7 @@ function renderLayoutBullets(cfg: GvKitConfig): string {
 			'- `packages/i18n/` — Paraglide messages + compiled runtime (`@repo/i18n/messages`, `@repo/i18n/runtime`, `@repo/i18n/server`)'
 		)
 	if (cfg.choices.apiClient === 'hey-api')
-		lines.push('- `packages/openapi-client/` — generated TypeScript clients')
+		lines.push('- `packages/openapi-client/` — flat client generated from the gateway contract')
 	return lines.join('\n')
 }
 

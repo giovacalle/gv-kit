@@ -1,5 +1,6 @@
 import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
+import { AUTH_SERVICE } from './hono-topology.js'
 
 /**
  * Generator for `packages/backend/` — horizontal helpers, core types, and Hono middleware.
@@ -272,8 +273,8 @@ const MIDDLEWARE_AUTH_CLIENT = `export type SessionLike = {
 }
 
 type AuthEnv = {
-	AUTH?: { fetch: (req: Request) => Promise<Response> }
-	AUTH_URL?: string
+	${AUTH_SERVICE.internalTarget}?: { fetch: (req: Request) => Promise<Response> }
+	${AUTH_SERVICE.transport.node.targetEnvironmentVariable}?: string
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -286,15 +287,20 @@ export async function getSession<TBindings extends Record<string, any>>(
 	if (cookie) headers.set('cookie', cookie)
 	const authorization = request.headers.get('authorization')
 	if (authorization) headers.set('authorization', authorization)
+	const forwardedHost = request.headers.get('x-forwarded-host') ?? new URL(request.url).host
+	headers.set('x-forwarded-host', forwardedHost)
+	const forwardedProto =
+		request.headers.get('x-forwarded-proto') ?? new URL(request.url).protocol.slice(0, -1)
+	headers.set('x-forwarded-proto', forwardedProto)
 
 	const path = '/internal/session'
 	const e = env as unknown as AuthEnv
 
 	let res: Response
-	if ('AUTH' in env && e.AUTH) {
-		res = await e.AUTH.fetch(new Request(\`https://internal\${path}\`, { headers }))
+	if ('${AUTH_SERVICE.internalTarget}' in env && e.${AUTH_SERVICE.internalTarget}) {
+		res = await e.${AUTH_SERVICE.internalTarget}.fetch(new Request(\`https://internal\${path}\`, { headers }))
 	} else {
-		const base = e.AUTH_URL
+		const base = e.${AUTH_SERVICE.transport.node.targetEnvironmentVariable}
 		if (!base) return null
 		res = await fetch(\`\${base}\${path}\`, { headers })
 	}

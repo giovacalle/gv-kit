@@ -65,10 +65,16 @@ The pattern is: **client singleton** in `$lib/auth/client.ts` (stateless action 
 
 ```typescript
 // src/lib/auth/client.ts
+<!--@gvkit:if hono-->
+import { createAuthClient } from 'better-auth/svelte';
+
+export const authClient = createAuthClient();
+<!--@gvkit:else-->
 import { PUBLIC_AUTH_URL } from '$env/static/public';
 import { createAuthClient } from 'better-auth/svelte';
 
 export const authClient = createAuthClient({ baseURL: PUBLIC_AUTH_URL });
+<!--@gvkit:endif-->
 export type Session = typeof authClient.$Infer.Session;
 ```
 
@@ -219,15 +225,26 @@ export function useClipboard() {
 
 ## Services vs API — two different layers
 
-Two folders, two different jobs. Don't confuse them.
+Keep application API access separate from auth and third-party SDK integrations.
 
+<!--@gvkit:if hono-->
 | Folder | What lives there | Examples |
 |---|---|---|
-| `src/lib/api/` | Typed fetch wrappers calling **your own** backend services (`apps/api/<service>/`) | `api/users.ts`, `api/billing.ts` |
-| `src/lib/auth/` | Better-auth `authClient` singleton (NOT a fetch wrapper). One file: `client.ts` | `auth/client.ts` |
-| `src/lib/services/` | Wrappers around **third-party SDKs** with their own I/O surface (analytics, captcha, payments, transactional email) | `services/umami.ts`, `services/turnstile.ts`, `services/stripe.ts` |
+| `packages/openapi-client/` | Flat generated client for the public gateway contract | `usersGetMe`, `usersGetMeOptions` |
+| `src/lib/auth/` | Better-auth `authClient` singleton. One file: `client.ts` | `auth/client.ts` |
+| `src/lib/services/` | Wrappers around third-party SDKs with their own I/O surface | `services/umami.ts`, `services/turnstile.ts`, `services/stripe.ts` |
 
-Rule of thumb: if the URL host is one you operate AND it's not auth, it's `api/`. Auth has its own client SDK — use `authClient` from `$lib/auth/client`, never a raw fetch wrapper. Third-party vendors live in `services/`. One file per vendor; no per-vendor sub-folders until that vendor owns 5+ files.
+Browser API calls use same-origin `/api/*` paths through the flat gateway client. Server loads and actions pass SvelteKit's request-scoped `fetch` to that same client. On Cloudflare, `handleFetch` routes SSR calls through the web Worker's `GATEWAY` Service Binding. Never add a per-service public URL or a direct web-to-private-service binding.
+
+Auth has its own Better Auth client. Use `authClient` from `$lib/auth/client`, never a raw auth fetch wrapper. Third-party vendors live in `src/lib/services/`. One file per vendor; no per-vendor sub-folders until that vendor owns 5+ files.
+<!--@gvkit:else-->
+| Folder | What lives there | Examples |
+|---|---|---|
+| `src/lib/auth/` | Better-auth `authClient` singleton. One file: `client.ts` | `auth/client.ts` |
+| `src/lib/services/` | Wrappers around third-party SDKs with their own I/O surface | `services/umami.ts`, `services/turnstile.ts`, `services/stripe.ts` |
+
+Auth has its own client SDK. Use `authClient` from `$lib/auth/client`, never a raw fetch wrapper. Third-party vendors live in `src/lib/services/`. One file per vendor; no per-vendor sub-folders until that vendor owns 5+ files.
+<!--@gvkit:endif-->
 
 ## Types live next to their owners
 
@@ -249,7 +266,9 @@ apps/web/src/
 ├── app.html                    # root HTML template
 ├── hooks.server.ts             # session bootstrap, handleFetch cookie forwarding
 ├── lib/
-│   ├── api/                    # typed fetch wrappers per upstream service (apps/api/*)
+<!--@gvkit:if hono-->
+│   ├── auth/                   # Better Auth client only; domain API operations use @repo/openapi-client
+<!--@gvkit:endif-->
 │   ├── components/
 │   │   ├── layout/             # chrome: nav, footer, header, sidebar
 │   │   ├── seo.svelte          # <svelte:head> wrapper consumed by +layout.svelte
@@ -366,7 +385,12 @@ Don't render a per-page title bar in the layout — every page renders its own h
 | `apps/web/src/lib/monitoring/` | `lib/services/` (umami, posthog, … sit alongside other vendor wrappers) |
 | `apps/web/src/lib/types/` folder | Types alongside owners: schemas, components, or single `lib/types.ts` |
 | `apps/web/src/lib/features/<feature>/` | Co-locate in `routes/<feature>/` — SvelteKit's route tree already is the feature boundary |
-| `apps/web/src/lib/domain/<entity>/` | Domain logic belongs in `apps/api/<service>/`; this is a client app |
+<!--@gvkit:if hono-->
+| `apps/web/src/lib/domain/<entity>/` | Domain logic belongs in the owning private worker under `services/<service>/`; this is a client app |
+| `apps/web/src/lib/api/<service>.ts` | Import domain-prefixed operations from the flat `@repo/openapi-client` package |
+<!--@gvkit:else-->
+| `apps/web/src/lib/domain/<entity>/` | Domain logic belongs behind a SvelteKit server boundary; this is client code |
+<!--@gvkit:endif-->
 | `apps/web/src/lib/stores/` | `.svelte.ts` class holders in `lib/context/`. Runes replace stores |
 | `+layout.svelte` setting `<title>` once for the whole app | Per-page `<svelte:head>` overrides on top of root `<Seo />` |
 | Route group `(authenticated)/` for a single guard | Segment-level `+layout.server.ts` with `redirect()` |

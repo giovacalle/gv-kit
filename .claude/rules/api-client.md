@@ -18,9 +18,9 @@ emits nothing. Owned by `src/generators/openapi-client.ts` and the
   reads `data.user`.
 - **`enabled: browser`** on the QueryClient defaults keeps queries off during SSR;
   the server-first path uses the plain SDK function with `event.fetch`.
-- **Auth is excluded from codegen** — better-auth ships its own client. The config
-  targets non-auth services only (`apps/api/users`, …). Don't feed auth's spec to
-  the generator.
+- **Auth is excluded from codegen** — better-auth ships its own client. Hey API
+  reads only the composed public contract at `apps/api/openapi.json`; service
+  fragments are composition inputs, never separate client inputs.
 
 ## Conventions
 
@@ -32,10 +32,11 @@ emits nothing. Owned by `src/generators/openapi-client.ts` and the
   (`src/generators/tooling.ts`) ignores `**/openapi-client/src/*/**` + `**/*.gen.ts`;
   the root `.prettierignore` (`src/generators/root.ts`) ignores
   `**/openapi-client/src/*/`. Keep generated `*.gen.ts` out of lint/format.
-- The **emitted** `web-query.md` rule documents the consumer-facing policy (client
-  reads on non-auth services only; mutations stay on superforms; auth on
-  better-auth). It lives in the `api-client-hey-api` root overlay — keep it in sync
-  with the showcase.
+- The **emitted** `web-query.md` rule documents the consumer-facing policy (flat
+  gateway operations for domain reads; mutations stay on superforms; auth on
+  better-auth). Browser calls use same-origin `/api/*`; SSR passes request-scoped
+  `fetch` through the private gateway transport. Keep the rule in sync with the
+  showcase.
 
 ## After changing the generator, overlay, or i18n keys
 

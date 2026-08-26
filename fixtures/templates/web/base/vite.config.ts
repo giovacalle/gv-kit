@@ -6,6 +6,13 @@ import tailwindcss from '@tailwindcss/vite'
 import { defineConfig } from 'vite'
 
 export default defineConfig({
+	/*@gvkit:if honoGateway*/
+	server: {
+		proxy: {
+			'/api': { target: '__GATEWAY_URL__' }
+		}
+	},
+	/*@gvkit:endif*/
 	plugins: [
 		tailwindcss(),
 		/*@gvkit:if i18nParaglide*/

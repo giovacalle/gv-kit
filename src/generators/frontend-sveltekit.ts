@@ -1,10 +1,19 @@
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
-import { WORKERS_COMPAT_DATE } from '../lib/workers.js'
+import { HONO_WORKERS_COMPAT_DATE, WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
+import {
+	CLOUDFLARE_TYPES_BOOTSTRAP_FILE,
+	renderCloudflareBootstrapTypes
+} from './cloudflare-worker-types.js'
+import {
+	AUTH_SERVICE,
+	HONO_GATEWAY,
+	honoServiceName,
+	nodeDevelopmentOrigin
+} from './hono-topology.js'
 
 const WEB_DEV_AUTH_URL = 'http://localhost:5173'
-const SERVICE_DEV_AUTH_URL = 'http://127.0.0.1:8787'
 const ASTRO_OWNED_SEO_ROUTES = new Set([
 	'apps/web/src/routes/robots.txt/+server.ts',
 	'apps/web/src/routes/sitemap.xml/+server.ts'
@@ -34,21 +43,44 @@ export function generateFrontendSveltekit(cfg: GvKitConfig): FileEntry[] {
 			monitoringUmami: cfg.choices.monitoring.includes('umami'),
 			deployCfWorkers: cfg.choices.deploy === 'cf-workers',
 			deployNode: cfg.choices.deploy !== 'cf-workers',
+			honoGatewayCfWorkers:
+				cfg.choices.backend === 'hono' && cfg.choices.deploy === 'cf-workers',
+			insideFrontendCfWorkers:
+				isInsideFrontend && cfg.choices.deploy === 'cf-workers',
 			insideFrontend: isInsideFrontend,
+			insideFrontendAuthEmailOtp:
+				isInsideFrontend && hasAuth && cfg.choices.auth.includes('emailOTP'),
+			insideFrontendAuthNoEmailOtp:
+				isInsideFrontend && hasAuth && !cfg.choices.auth.includes('emailOTP'),
+			honoGateway: cfg.choices.backend === 'hono',
 			honoAuth: cfg.choices.backend === 'hono' && hasAuth,
-			authCfWorkers:
-				cfg.choices.backend === 'hono' && hasAuth && cfg.choices.deploy === 'cf-workers',
+			honoAuthEmailOtp:
+				cfg.choices.backend === 'hono' && hasAuth && cfg.choices.auth.includes('emailOTP'),
+			honoAuthTransport: cfg.choices.backend === 'hono' && hasAuth,
 			apiClientHeyApi: cfg.choices.apiClient === 'hey-api'
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,
-			__COMPAT_DATE__: WORKERS_COMPAT_DATE,
+			__COMPAT_DATE__:
+				cfg.choices.backend === 'hono' ? HONO_WORKERS_COMPAT_DATE : WORKERS_COMPAT_DATE,
+			__GATEWAY_TARGET__: HONO_GATEWAY.identity.toUpperCase(),
+			__GATEWAY_SERVICE__: honoServiceName(cfg.choices.name, HONO_GATEWAY),
+			__GATEWAY_URL__: nodeDevelopmentOrigin(HONO_GATEWAY),
 			__AUTH_URL__:
-				cfg.choices.backend === 'hono' && hasAuth && cfg.choices.deploy === 'cf-workers'
+				cfg.choices.backend === 'hono' && hasAuth
 					? WEB_DEV_AUTH_URL
-					: SERVICE_DEV_AUTH_URL
+					: nodeDevelopmentOrigin(AUTH_SERVICE)
 		}
 	})
+
+	if (cfg.choices.backend === 'hono' && cfg.choices.deploy === 'cf-workers') {
+		const wrangler = entries.find((entry) => entry.path === 'apps/web/wrangler.jsonc')
+		if (!wrangler) throw new Error('Hono Cloudflare web output requires wrangler.jsonc')
+		entries.push({
+			path: `apps/web/${CLOUDFLARE_TYPES_BOOTSTRAP_FILE}`,
+			content: renderCloudflareBootstrapTypes(wrangler.content)
+		})
+	}
 
 	// In the split shape Astro is the sole owner of public SEO endpoints.
 	// Keep the existing SvelteKit files byte-stable for the integrated shape.

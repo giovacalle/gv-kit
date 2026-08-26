@@ -5,14 +5,16 @@ import { AUTH_SERVICE } from './hono-topology.js'
 export function generateEmail(cfg: GvKitConfig): FileEntry[] {
 	const choice = cfg.choices.email
 	if (choice === 'skip') return []
-	if (choice === 'notifuse') return notifuseFiles()
+	const authWorkspacePath =
+		cfg.choices.backend === 'hono' ? AUTH_SERVICE.workspacePath : 'apps/api/auth'
+	if (choice === 'notifuse') return notifuseFiles(authWorkspacePath)
 
 	const usesParaglide = cfg.choices.i18n === 'paraglide'
 	const usesOtp = cfg.choices.auth.includes('emailOTP')
-	return resendFiles({ usesParaglide, usesOtp })
+	return resendFiles({ usesParaglide, usesOtp, authWorkspacePath })
 }
 
-function notifuseFiles(): FileEntry[] {
+function notifuseFiles(authWorkspacePath: string): FileEntry[] {
 	return [
 		{ path: 'packages/mailer/package.json', content: NOTIFUSE_PKG_JSON },
 		{ path: 'packages/mailer/tsconfig.json', content: NOTIFUSE_TSCONFIG },
@@ -20,16 +22,18 @@ function notifuseFiles(): FileEntry[] {
 		{ path: 'packages/mailer/src/index.ts', content: NOTIFUSE_INDEX_TS },
 		{ path: 'packages/mailer/src/types.ts', content: NOTIFUSE_TYPES_TS },
 		{ path: 'packages/mailer/src/client.ts', content: NOTIFUSE_CLIENT_TS },
-		{ path: 'packages/mailer/README.md', content: NOTIFUSE_README }
+		{ path: 'packages/mailer/README.md', content: notifuseReadme(authWorkspacePath) }
 	]
 }
 
 function resendFiles({
 	usesParaglide,
-	usesOtp
+	usesOtp,
+	authWorkspacePath
 }: {
 	usesParaglide: boolean
 	usesOtp: boolean
+	authWorkspacePath: string
 }): FileEntry[] {
 	const entries: FileEntry[] = [
 		{ path: 'packages/mailer/package.json', content: resendPkgJson(usesParaglide) },
@@ -55,7 +59,10 @@ function resendFiles({
 			path: 'packages/mailer/src/templates/welcome.tsx',
 			content: resendWelcomeTsx(usesParaglide)
 		},
-		{ path: 'packages/mailer/README.md', content: resendReadme(usesParaglide, usesOtp) }
+		{
+			path: 'packages/mailer/README.md',
+			content: resendReadme(usesParaglide, usesOtp, authWorkspacePath)
+		}
 	]
 
 	if (usesOtp) {
@@ -224,7 +231,8 @@ export function createMailer({ apiKey, workspaceId, baseUrl }: MailerConfig) {
 export type Mailer = ReturnType<typeof createMailer>
 `
 
-const NOTIFUSE_README = `# @repo/mailer
+function notifuseReadme(authWorkspacePath: string): string {
+	return `# @repo/mailer
 
 Thin RPC client for a self-hosted [Notifuse](https://notifuse.com) instance.
 Notifuse owns the templates (authored in its console with MJML + Liquid) and
@@ -291,7 +299,7 @@ pnpm build       # one-shot — clean dist/ then emit ESM + .d.ts
 pnpm dev         # tsup --watch
 \`\`\`
 
-\`turbo run build\` wires \`^build\` so consumers (e.g. \`${AUTH_SERVICE.workspacePath}\`) get
+\`turbo run build\` wires \`^build\` so consumers (e.g. \`${authWorkspacePath}\`) get
 \`packages/mailer/dist/\` rebuilt on demand. Run \`pnpm build\` once after
 \`git clone\` if you skip the turbo orchestrator.
 
@@ -322,6 +330,7 @@ The \`data\` object passed to \`mailer.send\` is exactly the set of variables
 your Liquid template can reference. Keep names snake_case to match
 Notifuse's overall API style.
 `
+}
 
 // -----------------------------------------------------------------------------
 // Resend — react-email templates rendered locally to HTML + plain text
@@ -681,7 +690,11 @@ export { MailerError, type SendInput, type SendResult } from './types.js'
 export type { BaseTemplateProps, Locale } from './templates/_shared/types.js'
 `
 
-function resendReadme(usesParaglide: boolean, usesOtp: boolean): string {
+function resendReadme(
+	usesParaglide: boolean,
+	usesOtp: boolean,
+	authWorkspacePath: string
+): string {
 	const otpListItem = usesOtp
 		? `
 - \`src/templates/otp-login.tsx\` — OTP sign-in code`
@@ -807,7 +820,7 @@ pnpm dev         # tsup --watch — rebuild on change while you iterate
 pnpm preview     # react-email preview UI at http://localhost:3001
 \`\`\`
 
-\`turbo run build\` already wires \`^build\` so consumers (e.g. \`${AUTH_SERVICE.workspacePath}\`)
+\`turbo run build\` already wires \`^build\` so consumers (e.g. \`${authWorkspacePath}\`)
 get \`packages/mailer/dist/\` rebuilt on demand. Run \`pnpm build\` once after
 \`git clone\` if you skip the turbo orchestrator.
 

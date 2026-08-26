@@ -7,7 +7,7 @@ How `apps/web` uses the public gateway at `apps/api/`. Private services live und
 
 Use the flat `@repo/openapi-client` package for domain API operations. It is generated from the composed gateway contract at `apps/api/openapi.json`. Do not create per-service client packages or fetch wrappers.
 
-The browser client keeps an empty base URL, so every `/api/*` request uses the web origin's same-origin gateway alias:
+The browser client keeps an empty base URL, so requests at `/api` and `/api/*` use the web origin's same-origin gateway alias:
 
 ```typescript
 // src/routes/+layout.ts
@@ -45,7 +45,7 @@ export const load = async ({ fetch, url }) => {
 Call the public gateway path with `event.fetch`. Do not add a service-specific client wrapper.
 <!--@gvkit:endif-->
 
-For same-origin `/api/*` requests, `handleFetch` in `hooks.server.ts` changes only the transport. Cloudflare SSR calls the gateway through the `GATEWAY` Service Binding. Node and Docker SSR use the private `GATEWAY_URL`. Neither path calls auth or a domain service directly.
+For same-origin `/api` and `/api/*` SSR requests, `handleFetch` in `hooks.server.ts` changes only the transport. It does not handle inbound browser requests. Cloudflare SSR calls the gateway through the `GATEWAY` Service Binding. Node and Docker SSR use the private `GATEWAY_URL`. Neither path calls auth or a domain service directly.
 
 Preserve method, path, query, request headers, cookies, body streams, redirects, status, and response headers when changing this transport.
 
@@ -69,4 +69,4 @@ Do not create an auth fetch wrapper or SvelteKit auth facade.
 <!--@gvkit:endif-->
 | Bind the web Worker to a private domain service | Bind web only to `GATEWAY` for SSR |
 | Write a `lib/api/auth.ts` wrapper | Use `authClient` from `$lib/auth/client` |
-| Add a SvelteKit `/api/*` proxy | Keep browser ingress on the more-specific Cloudflare gateway route |
+| Add a SvelteKit `/api` or `/api/*` proxy | Keep browser ingress on the more-specific Cloudflare gateway routes |

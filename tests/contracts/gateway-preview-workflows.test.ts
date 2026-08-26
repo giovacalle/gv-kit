@@ -52,7 +52,10 @@ async function runChecked(command: string[], cwd: string, env: Record<string, st
 	return stdout
 }
 
-async function materializePreviewConfigs(cfg: GvKitConfig) {
+async function runPreviewPreparation(
+	cfg: GvKitConfig,
+	overrideEnv: Record<string, string> = {}
+) {
 	const root = await mkdtemp(join(tmpdir(), 'gv-kit-preview-contract-'))
 	temporaryDirectories.push(root)
 	const entries = runGenerators(cfg)
@@ -90,14 +93,15 @@ async function materializePreviewConfigs(cfg: GvKitConfig) {
 						STAGING_DATABASE_URL:
 							'postgres://preview:preview@preview.example.test:5432/preview'
 					}),
-			CLOUDFLARE_WORKERS_SUBDOMAIN: 'example'
+			CLOUDFLARE_PREVIEW_WEB_DOMAIN: 'app.example.com',
+			CLOUDFLARE_PREVIEW_API_DOMAIN: 'api.example.com',
+			CLOUDFLARE_PREVIEW_ZONE_NAME: 'example.com',
+			...overrideEnv
 		},
 		stdout: 'pipe',
 		stderr: 'pipe'
 	})
 	const exitCode = await process.exited
-	const stderr = await new Response(process.stderr).text()
-	expect(exitCode, stderr).toBe(0)
 
 	async function config(path: string) {
 		return parseJsonc<Record<string, unknown>>(
@@ -106,25 +110,120 @@ async function materializePreviewConfigs(cfg: GvKitConfig) {
 	}
 	return {
 		root,
-		gateway: await config('apps/api'),
-		web: await config('apps/web'),
-		auth: await config('services/auth'),
-		users: await config('services/users'),
-		marketing: materializedPaths.includes('apps/marketing/wrangler.jsonc')
-			? await config('apps/marketing')
-			: undefined,
-		githubOutput: await readFile(githubOutput, 'utf8')
+		entries,
+		exitCode,
+		stdout: await new Response(process.stdout).text(),
+		stderr: await new Response(process.stderr).text(),
+		configs:
+			exitCode === 0
+				? {
+						gateway: await config('apps/api'),
+						web: await config('apps/web'),
+						auth: await config('services/auth'),
+						users: await config('services/users'),
+						marketing: materializedPaths.includes('apps/marketing/wrangler.jsonc')
+							? await config('apps/marketing')
+							: undefined
+					}
+				: undefined,
+		githubOutput:
+			exitCode === 0 ? await readFile(githubOutput, 'utf8') : undefined
 	}
 }
 
 describe('Cloudflare gateway preview contracts', () => {
-	test('one stable alias rewrites every Worker, service binding, origin, and D1 binding', async () => {
-		const configs = await materializePreviewConfigs(makeCfg())
+	test('the managed-domain gate runs before preview database provisioning', () => {
+		const workflow = Bun.YAML.parse(
+			entry(generateDeploy(makeCfg()), '.github/workflows/deploy-staging.yml')
+		) as {
+			jobs: Record<
+				string,
+				{ needs?: string; steps?: Array<{ name?: string; run?: string; env?: Record<string, string> }> }
+			>
+		}
+		expect(workflow.jobs['preview-db']?.needs).toBe('preview-ingress')
+		const gate = workflow.jobs['preview-ingress']?.steps?.find(
+			(step) => step.name === 'Verify managed preview ingress'
+		)
+		expect(gate?.run).toContain('verify-cloudflare-preview-ingress.mjs')
+		expect(gate?.env).toEqual({
+			CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
+			CLOUDFLARE_PREVIEW_WEB_DOMAIN: '${{ vars.CLOUDFLARE_PREVIEW_WEB_DOMAIN }}',
+			CLOUDFLARE_PREVIEW_API_DOMAIN: '${{ vars.CLOUDFLARE_PREVIEW_API_DOMAIN }}',
+			CLOUDFLARE_PREVIEW_ZONE_NAME: '${{ vars.CLOUDFLARE_PREVIEW_ZONE_NAME }}'
+		})
+	})
+
+	test('the ingress gate verifies both shared proxied wildcard DNS records', async () => {
+		const root = await mkdtemp(join(tmpdir(), 'gv-kit-preview-ingress-gate-'))
+		temporaryDirectories.push(root)
+		const generated = generateDeploy(makeCfg())
+		await mkdir(join(root, 'scripts'), { recursive: true })
+		await writeFile(
+			join(root, 'scripts/verify-cloudflare-preview-ingress.mjs'),
+			entry(generated, 'scripts/verify-cloudflare-preview-ingress.mjs')
+		)
+		await writeFile(
+			join(root, 'mock-fetch.mjs'),
+			`globalThis.fetch = async (input) => {
+	const url = new URL(String(input))
+	let result
+	if (url.pathname === '/client/v4/zones') result = [{ id: 'zone-id' }]
+	else {
+		const name = url.searchParams.get('name')
+		result = process.env.MISSING_WILDCARD === name ? [] : [{ name, proxied: true }]
+	}
+	return new Response(JSON.stringify({ success: true, result }), {
+		status: 200,
+		headers: { 'content-type': 'application/json' }
+	})
+}
+`
+		)
+		const env = {
+			CLOUDFLARE_API_TOKEN: 'verification-token',
+			CLOUDFLARE_PREVIEW_WEB_DOMAIN: 'app.example.com',
+			CLOUDFLARE_PREVIEW_API_DOMAIN: 'api.example.com',
+			CLOUDFLARE_PREVIEW_ZONE_NAME: 'example.com'
+		}
+		const output = await runChecked(
+			['node', '--import', './mock-fetch.mjs', 'scripts/verify-cloudflare-preview-ingress.mjs'],
+			root,
+			env
+		)
+		expect(output).toContain('Managed Cloudflare preview ingress prerequisites verified.')
+
+		const missing = Bun.spawn(
+			['node', '--import', './mock-fetch.mjs', 'scripts/verify-cloudflare-preview-ingress.mjs'],
+			{
+				cwd: root,
+				env: { ...Bun.env, ...env, MISSING_WILDCARD: '*.api.example.com' },
+				stdout: 'pipe',
+				stderr: 'pipe'
+			}
+		)
+		expect(await missing.exited).not.toBe(0)
+		expect(await new Response(missing.stderr).text()).toContain(
+			'Missing proxied shared wildcard DNS record: *.api.example.com'
+		)
+	})
+
+	test('one alias gives the gateway direct managed-domain routes and keeps private boundaries', async () => {
+		const result = await runPreviewPreparation(makeCfg())
+		expect(result.exitCode, result.stderr).toBe(0)
+		const configs = result.configs!
 		expect(configs.gateway.name).toBe('demo-api-pr-123')
 		expect(configs.web.name).toBe('demo-web-pr-123')
 		expect(configs.auth.name).toBe('demo-auth-pr-123')
 		expect(configs.users.name).toBe('demo-users-pr-123')
-
+		expect(configs.gateway.routes).toEqual([
+			{ pattern: 'pr-123.api.example.com/*', zone_name: 'example.com' },
+			{ pattern: 'pr-123.app.example.com/api', zone_name: 'example.com' },
+			{ pattern: 'pr-123.app.example.com/api/*', zone_name: 'example.com' }
+		])
+		expect(configs.web.routes).toEqual([
+			{ pattern: 'pr-123.app.example.com/*', zone_name: 'example.com' }
+		])
 		expect(configs.gateway.services).toEqual([
 			{ binding: 'AUTH', service: 'demo-auth-pr-123' },
 			{ binding: 'USERS', service: 'demo-users-pr-123' }
@@ -135,136 +234,65 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(configs.users.services).toEqual([
 			{ binding: 'AUTH', service: 'demo-auth-pr-123' }
 		])
-		expect(configs.gateway.vars).toEqual({
-			API_PUBLIC_ORIGIN: 'https://demo-api-pr-123.example.workers.dev'
-		})
-
-		for (const config of [configs.auth, configs.users]) {
+		for (const config of Object.values(configs)) {
+			if (!config) continue
 			expect(config.workers_dev).toBe(false)
 			expect(config.preview_urls).toBe(false)
-			expect(config.routes).toBeUndefined()
-			expect(config.d1_databases).toEqual([
-				{
-					binding: 'DB',
-					database_name: 'demo-db-pr-123',
-					database_id: '11111111-1111-4111-8111-111111111111'
-				}
-			])
 		}
-		for (const config of [configs.gateway, configs.web]) {
-			expect(config.workers_dev).toBe(true)
-			expect(config.preview_urls).toBe(false)
-			expect(config.routes).toBeUndefined()
+		for (const config of [configs.auth, configs.users]) expect(config.routes).toBeUndefined()
+		expect(configs.gateway.vars).toEqual({
+			API_PUBLIC_ORIGIN: 'https://pr-123.api.example.com',
+			API_CORS_ORIGINS:
+				'https://pr-123.app.example.com,http://localhost:3000,http://localhost:5173,http://localhost:8786,http://127.0.0.1:8786',
+			GATEWAY_UPSTREAM_TIMEOUT_MS: '10000'
+		})
+		expect(configs.auth.vars).toEqual({
+			BETTER_AUTH_ALLOWED_HOSTS:
+				'pr-123.app.example.com,pr-123.api.example.com,localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786',
+			AUTH_CORS_ORIGINS:
+				'https://pr-123.app.example.com,https://pr-123.api.example.com,http://localhost:3000,http://localhost:5173,http://localhost:8786,http://127.0.0.1:8786'
+		})
+		expect(result.githubOutput).toContain('api_origin=https://pr-123.api.example.com\n')
+		expect(result.githubOutput).toContain('web_origin=https://pr-123.app.example.com\n')
+	})
+
+	test('preview preparation fails closed before writing configs when managed domains are absent', async () => {
+		const result = await runPreviewPreparation(makeCfg(), {
+			CLOUDFLARE_PREVIEW_WEB_DOMAIN: ''
+		})
+		expect(result.exitCode).not.toBe(0)
+		expect(result.stderr).toContain('CLOUDFLARE_PREVIEW_WEB_DOMAIN is required')
+		expect(result.stdout).toBe('')
+		for (const directory of ['apps/api', 'apps/web', 'services/auth', 'services/users']) {
+			expect(await Bun.file(join(result.root, directory, 'wrangler.staging.jsonc')).exists()).toBe(
+				false
+			)
 		}
 	})
 
-	test('long valid project names keep collision-resistant preview Workers within DNS limits', async () => {
+	test('preview Worker names remain bounded for cleanup', async () => {
 		const project = 'a'.repeat(55)
-		const cfg = makeCfg({ name: project })
-		const configs = await materializePreviewConfigs(cfg)
-		const previewConfigs = [configs.gateway, configs.web, configs.auth, configs.users]
-		const previewNames = previewConfigs.map((config) => config.name as string)
-
+		const result = await runPreviewPreparation(makeCfg({ name: project }))
+		expect(result.exitCode, result.stderr).toBe(0)
+		const previewNames = Object.values(result.configs!).flatMap((config) =>
+			config && typeof config.name === 'string' ? [config.name] : []
+		)
 		for (const name of previewNames) {
 			expect(name.length).toBeLessThanOrEqual(63)
 			expect(name).toMatch(/-[0-9a-f]{10}-pr-123$/)
 		}
 		expect(new Set(previewNames).size).toBe(previewNames.length)
-		expect(configs.gateway.services).toEqual([
-			{ binding: 'AUTH', service: configs.auth.name },
-			{ binding: 'USERS', service: configs.users.name }
-		])
-		expect(configs.web.services).toEqual([
-			{ binding: 'GATEWAY', service: configs.gateway.name }
-		])
-		expect(configs.users.services).toEqual([
-			{ binding: 'AUTH', service: configs.auth.name }
-		])
-		expect(configs.gateway.vars).toEqual({
-			API_PUBLIC_ORIGIN: `https://${String(configs.gateway.name)}.example.workers.dev`
-		})
-
-		const generated = runGenerators(cfg)
-		for (const packagePath of [
-			'apps/api/package.json',
-			'apps/web/package.json',
-			'services/auth/package.json',
-			'services/users/package.json'
-		]) {
-			const packageJson = JSON.parse(entry(generated, packagePath)) as {
-				scripts: Record<string, string>
-			}
-			const deployCommand = packageJson.scripts['deploy:staging']
-			expect(deployCommand).toContain(
-				'wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}"'
-			)
-			expect(deployCommand).not.toContain('--name')
-		}
-		for (const [path, previewName] of [
-			['apps/api/wrangler.jsonc', configs.gateway.name],
-			['apps/web/wrangler.jsonc', configs.web.name],
-			['services/auth/wrangler.jsonc', configs.auth.name],
-			['services/users/wrangler.jsonc', configs.users.name]
-		] as const) {
-			const production = parseJsonc<{ name: string }>(entry(generated, path))
-			const cleanupName = (
-				await runChecked(
-					['node', 'scripts/cloudflare-preview-name.mjs', production.name, 'pr-123'],
-					configs.root
-				)
-			).trim()
-			expect(cleanupName).toBe(String(previewName))
-		}
-		const cleanup = entry(generated, 'scripts/cleanup-cloudflare-preview-workers.sh')
-		expect(cleanup).toContain('node scripts/cloudflare-preview-name.mjs')
 	})
 
-	test('Astro preview uses its prepared bounded Worker name and origin', async () => {
-		const project = 'a'.repeat(52)
-		const cfg = makeCfg({ name: project, marketing: 'astro' })
-		const configs = await materializePreviewConfigs(cfg)
-		const marketingName = String(configs.marketing?.name)
-
-		expect(marketingName).toHaveLength(63)
-		expect(marketingName).toMatch(/-[0-9a-f]{10}-pr-123$/)
-		const generated = runGenerators(cfg)
-		const marketingPackage = JSON.parse(entry(generated, 'apps/marketing/package.json')) as {
-			scripts: Record<string, string>
-		}
-		expect(marketingPackage.scripts['deploy:staging']).toBe(
-			'test -n "$STAGING_ALIAS" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}"'
+	test('Astro preview uses a managed hostname covered by the shared web wildcard', async () => {
+		const result = await runPreviewPreparation(makeCfg({ marketing: 'astro' }))
+		expect(result.exitCode, result.stderr).toBe(0)
+		expect(result.configs?.marketing?.routes).toEqual([
+			{ pattern: 'pr-123-marketing.app.example.com/*', zone_name: 'example.com' }
+		])
+		expect(result.githubOutput).toContain(
+			'marketing_origin=https://pr-123-marketing.app.example.com\n'
 		)
-		const staging = entry(generated, '.github/workflows/deploy-staging.yml')
-		expect(staging).toContain(
-			'PUBLIC_MARKETING_URL: ${{ steps.preview_config.outputs.marketing_origin }}'
-		)
-		expect(configs.githubOutput).toContain(`marketing_worker_name=${marketingName}\n`)
-		expect(configs.githubOutput).toContain(
-			`marketing_origin=https://${marketingName}.example.workers.dev\n`
-		)
-		expect(staging).not.toContain(`${project}-marketing-\${{ needs.preview-db.outputs.alias }}`)
-
-		const production = parseJsonc<{ name: string }>(
-			entry(generated, 'apps/marketing/wrangler.jsonc')
-		)
-		const cleanupName = (
-			await runChecked(
-				['node', 'scripts/cloudflare-preview-name.mjs', production.name, 'pr-123'],
-				configs.root
-			)
-		).trim()
-		expect(cleanupName).toBe(marketingName)
-	})
-
-	test('preview auth hosts and CORS contain only preview and local origins', async () => {
-		const { auth } = await materializePreviewConfigs(makeCfg())
-		expect(auth.vars).toEqual({
-			BETTER_AUTH_ALLOWED_HOSTS:
-				'demo-web-pr-123.example.workers.dev,demo-api-pr-123.example.workers.dev,localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786',
-			AUTH_CORS_ORIGINS:
-				'https://demo-web-pr-123.example.workers.dev,https://demo-api-pr-123.example.workers.dev,http://localhost:3000,http://localhost:5173,http://localhost:8786,http://127.0.0.1:8786'
-		})
-		expect(JSON.stringify(auth.vars)).not.toContain('<domain>')
 	})
 
 	test('database, private services, gateway, and web deploy in order for production and previews', () => {
@@ -373,6 +401,9 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(cleanupScript).toContain(
 			'worker_name=$(node scripts/cloudflare-preview-name.mjs "$base_name" "$alias")'
 		)
+		expect(cleanupScript).toContain('Deleted $worker_name and its attached preview routes.')
+		expect(cleanupScript).toContain('Shared wildcard DNS records')
+		expect(cleanupScript).not.toMatch(/dns_records|api\.cloudflare\.com|wrangler[^\n]*dns/i)
 		expect(cleanup).not.toContain('deleteRef')
 		expect(cleanup).not.toContain('contents: write')
 		expect(cleanup).not.toContain('git push')
@@ -437,13 +468,12 @@ exit 0
 		expect(workflow).not.toContain('if: always()')
 	})
 
-	test('web Worker forwards its preview API path through the preview GATEWAY binding', () => {
+	test('web Worker never handles inbound browser API aliases', () => {
 		const entries = runGenerators(makeCfg())
 		const hooks = entry(entries, 'apps/web/src/hooks.server.ts')
-		expect(hooks).toContain('const forwardApiAlias: Handle')
-		expect(hooks).toContain("event.url.pathname.startsWith('/api/')")
-		expect(hooks).toContain('gateway.fetch(event.request)')
-		expect(hooks.indexOf('forwardApiAlias')).toBeLessThan(hooks.indexOf('attachUser'))
+		expect(hooks).toContain('export const handleFetch')
+		expect(hooks).not.toContain('forwardApiAlias')
+		expect(hooks).not.toContain('gateway.fetch(event.request)')
 	})
 
 	test('required preview secrets are supplied with each private Worker initial deployment', () => {

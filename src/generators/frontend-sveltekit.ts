@@ -27,6 +27,7 @@ export function generateFrontendSveltekit(cfg: GvKitConfig): FileEntry[] {
 	const entries = renderTemplate({
 		tree: 'web',
 		flags: {
+			insideFrontendBaseline: isInsideFrontend,
 			webCompilesI18n: cfg.choices.i18n === 'paraglide',
 			marketingAstro: isAstroMarketing,
 			marketingAstroAuth: isAstroMarketing && hasAuth,

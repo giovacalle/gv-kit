@@ -42,12 +42,14 @@ export const load = async ({ platform }) => {
 
 > The web Worker owns static assets and the `GATEWAY` Service Binding for SSR. It does not bind directly to auth, users, databases, KV, R2, queues, or Durable Objects. The gateway at `apps/api/wrangler.jsonc` binds to private services, and each private service owns its data capabilities under `services/<service>/wrangler.jsonc`.
 
-Browser `/api/*` traffic uses the web origin's more-specific Cloudflare route and reaches the gateway without invoking the web Worker. Server-side SvelteKit requests use `event.fetch`; `handleFetch` forwards same-origin API requests through `platform.env.GATEWAY`.
+Browser `/api` and `/api/*` traffic uses the web origin's more-specific Cloudflare routes and reaches the gateway without invoking the web Worker. Server-side SvelteKit requests use `event.fetch`; `handleFetch` forwards same-origin API requests through `platform.env.GATEWAY`.
 
 <!--@gvkit:if hono-->
 The canonical API Custom Domain reaches the same gateway. Private services must have no `routes`, `workers_dev` must stay `false`, and `preview_urls` must stay `false`. Gateway-to-service and service-to-service calls use explicit Service Bindings. Never call a public gateway URL for internal work, and never import or mount a service application in the gateway.
 
 Deploy database migrations first, then private services, gateway, and web. A Service Binding target must exist before its caller's first deployment. Preview bindings must target services with the same preview alias, never production services.
+
+Hono previews use PR-scoped hosts beneath `CLOUDFLARE_PREVIEW_WEB_DOMAIN` and `CLOUDFLARE_PREVIEW_API_DOMAIN` in `CLOUDFLARE_PREVIEW_ZONE_NAME`. Provision shared proxied wildcard DNS records for both parent domains. The preview-ingress job verifies those records before database or Worker provisioning. The gateway owns the canonical API route and the more-specific web `/api` and `/api/*` routes; the web Worker owns the less-specific web route. Cleanup removes PR-scoped Workers and routes but never shared wildcard DNS. Never fall back to workers.dev or a SvelteKit proxy.
 
 Credentialed CORS on the canonical API origin uses an explicit allowlist. `Access-Control-Allow-Origin: *` with credentials is forbidden.
 <!--@gvkit:endif-->

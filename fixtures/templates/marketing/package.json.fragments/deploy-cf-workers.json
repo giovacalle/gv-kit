@@ -1,7 +1,7 @@
 {
 	"scripts": {
 		"deploy:production": "wrangler deploy",
-		"deploy:staging": "test -n \"$STAGING_ALIAS\" && wrangler deploy --config \"${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}\""
+		"deploy:staging": "test -n \"$STAGING_ALIAS\" && wrangler deploy --config \"${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}\" --name __PROJECT__-marketing-$STAGING_ALIAS"
 	},
 	"devDependencies": {
 		"wrangler": "^4.112.0"

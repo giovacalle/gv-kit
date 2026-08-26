@@ -663,6 +663,7 @@ export function mountOpenApi(app: OpenAPIHono<{ Bindings: Env }>): void {
 function appTs(runtime: Runtime): string {
 	if (runtime === 'cf-workers') {
 		return `import { OpenAPIHono } from '@hono/zod-openapi'
+import { logger } from '@repo/backend/middleware'
 import { cors } from 'hono/cors'
 
 import { getAuth } from './auth.js'
@@ -671,6 +672,7 @@ import { mountOpenApi, sessionRoute } from './openapi.js'
 
 const app = new OpenAPIHono<{ Bindings: Env }>()
 
+app.use('*', logger('auth'))
 app.get('/healthz', (c) => c.text('ok'))
 
 app.use('${PUBLIC_AUTH_PREFIX}/*', async (c, next) => {
@@ -709,6 +711,7 @@ export default app
 	}
 
 	return `import { OpenAPIHono } from '@hono/zod-openapi'
+import { logger } from '@repo/backend/middleware'
 import { cors } from 'hono/cors'
 
 import { auth } from './auth.js'
@@ -717,6 +720,7 @@ import { mountOpenApi, sessionRoute } from './openapi.js'
 
 const app = new OpenAPIHono<{ Bindings: Env }>()
 
+app.use('*', logger('auth'))
 app.get('/healthz', (c) => c.text('ok'))
 
 app.use(

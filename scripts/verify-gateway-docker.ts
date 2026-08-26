@@ -5,10 +5,7 @@ import { join, resolve } from 'node:path'
 import { parseJsonc } from '../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../src/pipeline/plan.js'
 import { GvKitConfig } from '../src/schema/config.js'
-import {
-	appendCommandEvidence,
-	writeSanitizedArtifact
-} from './gateway-verification-evidence.js'
+import { appendCommandEvidence, writeSanitizedArtifact } from './gateway-verification-evidence.js'
 
 const PNPM_VERSION = '11.1.1'
 let webOrigin = 'http://localhost:3000'
@@ -34,9 +31,8 @@ async function materialize(fixture: string, output: string) {
 	const config = GvKitConfig.parse(
 		parseJsonc(await readFile(resolve('fixtures', `${fixture}.jsonc`), 'utf8'))
 	)
-	if (config.choices.backend !== 'hono' || config.choices.deploy !== 'docker') {
+	if (config.choices.backend !== 'hono' || config.choices.deploy !== 'docker')
 		throw new Error(`${fixture} must use the Hono Docker topology`)
-	}
 	const project = join(output, fixture)
 	await rm(project, { recursive: true, force: true })
 	await mkdir(project, { recursive: true })
@@ -169,7 +165,10 @@ async function waitForOtp(project: string, env: NodeJS.ProcessEnv, email: string
 		lastOutput = result.output
 		const otp = result.output.match(pattern)?.[1]
 		if (otp) {
-			const logPath = join(project, `otp-poll-${email.startsWith('docker-web') ? 'web' : 'api'}.log`)
+			const logPath = join(
+				project,
+				`otp-poll-${email.startsWith('docker-web') ? 'web' : 'api'}.log`
+			)
 			await writeSanitizedArtifact(
 				logPath,
 				result.output.replace(/(\[auth\] OTP for [^:]+: )\d{6}/g, '$1[REDACTED]'),
@@ -218,14 +217,12 @@ async function signIn(
 		{ email, otp },
 		{ origin }
 	)
-	if (!response.ok) {
+	if (!response.ok)
 		throw new Error(`OTP sign-in failed at ${origin}: ${response.status} ${await response.text()}`)
-	}
 	const jar = cookieJar(response)
 	if (!jar.header) throw new Error(`OTP sign-in at ${origin} did not set a cookie`)
-	if (jar.setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie))) {
+	if (jar.setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie)))
 		throw new Error(`OTP sign-in at ${origin} emitted a domain cookie`)
-	}
 	return jar
 }
 
@@ -234,15 +231,15 @@ async function session(origin: string, jar: CookieJar, email: string) {
 		headers: { cookie: jar.header }
 	})
 	const body = (await response.json()) as { user?: { email?: string } }
-	if (!response.ok || body.user?.email !== email) {
+	if (!response.ok || body.user?.email !== email)
 		throw new Error(`Session at ${origin} did not return ${email}`)
-	}
 	return { status: response.status, email: body.user.email }
 }
 
 async function verifyRuntime(project: string, env: NodeJS.ProcessEnv, inventory: unknown) {
 	const directHealth = await requestWhenReady(`${API_ORIGIN}/api/healthz`)
 	const webAliasHealth = await requestWhenReady(`${webOrigin}/api/healthz`)
+	const exactWebAlias = await fetch(`${webOrigin}/api`)
 	const canonicalHostHealth = await requestWhenReady(
 		`${webOrigin.replace('localhost', '127.0.0.1')}/api/healthz`,
 		{
@@ -255,12 +252,12 @@ async function verifyRuntime(project: string, env: NodeJS.ProcessEnv, inventory:
 		directHealth.status !== 200 ||
 		webAliasHealth.status !== 200 ||
 		canonicalHostHealth.status !== 200
-	) {
+	)
 		throw new Error('One or more gateway ingress health checks failed')
-	}
-	if (JSON.stringify(openApi.servers) !== JSON.stringify([{ url: API_ORIGIN }])) {
+	if (exactWebAlias.status !== 404 || !exactWebAlias.headers.get('x-request-id'))
+		throw new Error('Exact web-origin /api boundary did not reach the gateway')
+	if (JSON.stringify(openApi.servers) !== JSON.stringify([{ url: API_ORIGIN }]))
 		throw new Error('Runtime OpenAPI did not advertise the explicit independent API origin')
-	}
 
 	const suffix = Date.now()
 	const webEmail = `docker-web-${suffix}@example.test`
@@ -277,27 +274,29 @@ async function verifyRuntime(project: string, env: NodeJS.ProcessEnv, inventory:
 	const apiUsers = await fetch(`${API_ORIGIN}/api/v1/users/me`, {
 		headers: { cookie: apiJar.header }
 	})
-	if (!webUsers.ok || !apiUsers.ok) {
+	if (!webUsers.ok || !apiUsers.ok)
 		throw new Error(
 			`Versioned users route failed through an ingress: web=${webUsers.status} ${await webUsers.text()}; api=${apiUsers.status} ${await apiUsers.text()}`
 		)
-	}
 	const webUsersBody = (await webUsers.json()) as { email?: string }
 	const apiUsersBody = (await apiUsers.json()) as { email?: string }
-	if (webUsersBody.email !== webEmail || apiUsersBody.email !== apiEmail) {
+	if (webUsersBody.email !== webEmail || apiUsersBody.email !== apiEmail)
 		throw new Error('Versioned users route returned the wrong authenticated user')
-	}
 
 	const ssr = await fetch(webOrigin, { headers: { cookie: webJar.header } })
 	const ssrBody = await ssr.text()
-	if (!ssr.ok || !ssrBody.includes(webEmail)) {
+	if (!ssr.ok || !ssrBody.includes(webEmail))
 		throw new Error('Web SSR did not load the session through the private gateway URL')
-	}
 
 	return {
 		project: '.',
 		inventory,
 		ingress: {
+			exactWebAlias: {
+				url: `${webOrigin}/api`,
+				status: exactWebAlias.status,
+				gatewayRequestId: true
+			},
 			webAlias: { url: `${webOrigin}/api/healthz`, status: webAliasHealth.status },
 			canonicalApiHost: {
 				host: `${API_HOST}:${new URL(webOrigin).port}`,
@@ -399,6 +398,8 @@ async function main(): Promise<void> {
 		ORIGIN: webOrigin,
 		BETTER_AUTH_ALLOWED_HOSTS: `localhost:${webPort},127.0.0.1:8786,api.localhost:${webPort}`,
 		AUTH_CORS_ORIGINS: webOrigin,
+		API_CORS_ORIGINS: webOrigin,
+		GATEWAY_UPSTREAM_TIMEOUT_MS: '10000',
 		TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
 		PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
 		API_PUBLIC_ORIGIN: API_ORIGIN,
@@ -406,6 +407,17 @@ async function main(): Promise<void> {
 		PUBLIC_SCHEME: 'http'
 	}
 	console.log(`[gateway-docker] generated project: ${generated.project}`)
+	const webHooks = await readFile(join(generated.project, 'apps/web/src/hooks.server.ts'), 'utf8')
+	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)'))
+		throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
+	if (!webHooks.includes('export const handleFetch') || !webHooks.includes('env.GATEWAY_URL'))
+		throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
+	const ingressConfig = await readFile(
+		join(generated.project, 'docker/ingress.conf.template'),
+		'utf8'
+	)
+	if (!ingressConfig.includes('location = /api') || !ingressConfig.includes('location ^~ /api/'))
+		throw new Error('generated Docker ingress omits an exact API boundary')
 
 	let evidence: unknown
 	let cleanup: unknown

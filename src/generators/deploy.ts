@@ -8,8 +8,11 @@ import {
 	honoServiceName,
 	USERS_SERVICE
 } from './hono-topology.js'
+import { generateIntegratedDeploy } from './integrated-deploy.js'
 
 export function generateDeploy(cfg: GvKitConfig): FileEntry[] {
+	if (cfg.choices.backend === 'inside-frontend') return generateIntegratedDeploy(cfg)
+
 	switch (cfg.choices.deploy) {
 		case 'skip':
 			return []
@@ -46,6 +49,10 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		{
 			path: 'scripts/cloudflare-preview-name.mjs',
 			content: cloudflarePreviewNameScript()
+		},
+		{
+			path: 'scripts/verify-cloudflare-preview-ingress.mjs',
+			content: verifyCloudflarePreviewIngressScript()
 		},
 		{
 			path: 'scripts/prepare-cloudflare-preview.mjs',
@@ -115,11 +122,65 @@ if (productionName && alias) console.log(cloudflarePreviewName(productionName, a
 `
 }
 
+function verifyCloudflarePreviewIngressScript(): string {
+	return `function required(name) {
+	const value = process.env[name]?.trim()
+	if (!value) throw new Error(name + ' is required')
+	return value
+}
+
+function domain(name) {
+	const value = required(name).toLowerCase().replace(/\\.$/, '')
+	if (!/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(value)) throw new Error(name + ' must be a plain DNS hostname without a wildcard')
+	return value
+}
+
+function requireManagedParent(name, zone) {
+	const value = domain(name)
+	if (value !== zone && !value.endsWith('.' + zone)) throw new Error(name + ' must belong to CLOUDFLARE_PREVIEW_ZONE_NAME')
+	return value
+}
+
+async function cloudflare(pathname, token) {
+	const response = await fetch('https://api.cloudflare.com/client/v4' + pathname, {
+		headers: { Authorization: 'Bearer ' + token }
+	})
+	const payload = await response.json()
+	if (!response.ok || payload.success !== true) throw new Error('Cloudflare preview ingress prerequisite check failed for ' + pathname)
+	return payload.result
+}
+
+const token = required('CLOUDFLARE_API_TOKEN')
+const zoneName = domain('CLOUDFLARE_PREVIEW_ZONE_NAME')
+const webDomain = requireManagedParent('CLOUDFLARE_PREVIEW_WEB_DOMAIN', zoneName)
+const apiDomain = requireManagedParent('CLOUDFLARE_PREVIEW_API_DOMAIN', zoneName)
+if (webDomain === apiDomain) throw new Error('Managed preview web and API domains must be distinct')
+
+const zones = await cloudflare('/zones?name=' + encodeURIComponent(zoneName) + '&status=active', token)
+if (!Array.isArray(zones) || zones.length !== 1) throw new Error('CLOUDFLARE_PREVIEW_ZONE_NAME must identify exactly one active Cloudflare zone')
+const zoneId = zones[0]?.id
+if (typeof zoneId !== 'string' || !zoneId) throw new Error('Cloudflare preview zone has no id')
+
+for (const parent of [webDomain, apiDomain]) {
+	const wildcard = '*.' + parent
+	const records = await cloudflare(
+		'/zones/' + zoneId + '/dns_records?name=' + encodeURIComponent(wildcard),
+		token
+	)
+	if (!Array.isArray(records) || !records.some((record) => record.name === wildcard && record.proxied === true)) throw new Error('Missing proxied shared wildcard DNS record: ' + wildcard)
+}
+
+console.log('Managed Cloudflare preview ingress prerequisites verified.')
+`
+}
+
 function cleanupCloudflarePreviewWorkersScript(): string {
 	return `#!/bin/sh
 set -eu
 
 alias="\${1:?preview alias is required}"
+# Deleting each preview Worker also removes its attached PR-scoped routes.
+# Shared wildcard DNS records are prerequisites and are never deleted here.
 set --
 [ ! -d apps ] || set -- "$@" apps
 [ ! -d services ] || set -- "$@" services
@@ -149,6 +210,7 @@ printf '%s\\n' "$configs" | while read -r config; do
 	fi
 	echo "Deleting $worker_name"
 	npx wrangler@${WRANGLER_VERSION} delete --name "$worker_name" --force
+	echo "Deleted $worker_name and its attached preview routes."
 done
 `
 }
@@ -228,10 +290,24 @@ function findWranglerConfigs(directory) {
 }
 
 const alias = required('STAGING_ALIAS')
-if (!/^[a-z][a-z0-9-]{0,47}$/.test(alias)) {
-	throw new Error('STAGING_ALIAS must start with a lowercase letter and contain only lowercase letters, numbers, and dashes')
-}
+if (!/^[a-z][a-z0-9-]{0,47}$/.test(alias)) throw new Error('STAGING_ALIAS must start with a lowercase letter and contain only lowercase letters, numbers, and dashes')
 const hasHonoGateway = existsSync('apps/api/wrangler.jsonc') && existsSync('services')
+const hostnamePattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+function domain(name) {
+	const value = required(name).trim().toLowerCase().replace(/\\.$/, '')
+	if (!hostnamePattern.test(value)) throw new Error(name + ' must be a plain DNS hostname without a wildcard')
+	return value
+}
+const previewZoneName = domain('CLOUDFLARE_PREVIEW_ZONE_NAME')
+const previewWebDomain = domain('CLOUDFLARE_PREVIEW_WEB_DOMAIN')
+const previewApiDomain = domain('CLOUDFLARE_PREVIEW_API_DOMAIN')
+for (const [name, value] of [
+	['CLOUDFLARE_PREVIEW_WEB_DOMAIN', previewWebDomain],
+	['CLOUDFLARE_PREVIEW_API_DOMAIN', previewApiDomain]
+]) {
+	if (value !== previewZoneName && !value.endsWith('.' + previewZoneName)) throw new Error(name + ' must belong to CLOUDFLARE_PREVIEW_ZONE_NAME')
+}
+if (previewWebDomain === previewApiDomain) throw new Error('Managed preview web and API domains must be distinct')
 const localHosts = ['localhost:3000', 'localhost:5173', 'localhost:8786', '127.0.0.1:8786']
 const localOrigins = [
 	'http://localhost:3000',
@@ -245,9 +321,7 @@ const sources = [...findWranglerConfigs('apps'), ...findWranglerConfigs('service
 		const normalizedPath = configPath.split(path.sep).join('/')
 		const config = JSON.parse(stripJsonc(readFileSync(configPath, 'utf8')))
 		const productionName = config.name
-		if (typeof productionName !== 'string' || productionName.length === 0) {
-			throw new Error(configPath + ' has no Worker name')
-		}
+		if (typeof productionName !== 'string' || productionName.length === 0) throw new Error(configPath + ' has no Worker name')
 		return { config, configPath, normalizedPath, productionName }
 	})
 const previewNames = new Map(
@@ -265,18 +339,11 @@ const marketingProductionName = sources.find(
 const gatewayName = gatewayProductionName ? previewNames.get(gatewayProductionName) : null
 const webName = webProductionName ? previewNames.get(webProductionName) : null
 const marketingName = marketingProductionName ? previewNames.get(marketingProductionName) : null
-if (hasHonoGateway && (!gatewayName || !webName)) {
-	throw new Error('Could not derive public preview Worker names')
-}
-const workersSubdomain = webName ? required('CLOUDFLARE_WORKERS_SUBDOMAIN') : null
-const apiOrigin = gatewayName
-	? new URL('https://' + gatewayName + '.' + workersSubdomain + '.workers.dev')
-	: null
-const webOrigin = webName
-	? new URL('https://' + webName + '.' + workersSubdomain + '.workers.dev')
-	: null
+if (hasHonoGateway && (!gatewayName || !webName)) throw new Error('Could not derive public preview Worker names')
+const apiOrigin = gatewayName ? new URL('https://' + alias + '.' + previewApiDomain) : null
+const webOrigin = webName ? new URL('https://' + alias + '.' + previewWebDomain) : null
 const marketingOrigin = marketingName
-	? new URL('https://' + marketingName + '.' + workersSubdomain + '.workers.dev')
+	? new URL('https://' + alias + '-marketing.' + previewWebDomain)
 	: null
 const inventory = []
 
@@ -286,8 +353,22 @@ for (const { config, configPath, normalizedPath, productionName } of sources) {
 	delete config.routes
 
 	const isPrivateService = normalizedPath.startsWith('services/')
-	config.workers_dev = !isPrivateService
+	config.workers_dev = false
 	config.preview_urls = false
+	if (normalizedPath === 'apps/api/wrangler.jsonc' && apiOrigin && webOrigin) {
+		config.routes = [
+			{ pattern: apiOrigin.host + '/*', zone_name: previewZoneName },
+			{ pattern: webOrigin.host + '/api', zone_name: previewZoneName },
+			{ pattern: webOrigin.host + '/api/*', zone_name: previewZoneName }
+		]
+	}
+	if (normalizedPath === 'apps/web/wrangler.jsonc' && webOrigin) {
+		config.routes = [{ pattern: webOrigin.host + '/*', zone_name: previewZoneName }]
+	}
+	if (normalizedPath === 'apps/marketing/wrangler.jsonc' && marketingOrigin) {
+		config.routes = [{ pattern: marketingOrigin.host + '/*', zone_name: previewZoneName }]
+	}
+	if (isPrivateService) delete config.routes
 
 	if (process.env.PREVIEW_DB_KIND === 'd1' && Array.isArray(config.d1_databases)) {
 		const databaseName = required('STAGING_D1_DATABASE_NAME')
@@ -299,8 +380,12 @@ for (const { config, configPath, normalizedPath, productionName } of sources) {
 		)
 	}
 
-	if (normalizedPath === 'apps/api/wrangler.jsonc' && apiOrigin) {
-		config.vars = { ...(config.vars ?? {}), API_PUBLIC_ORIGIN: apiOrigin.origin }
+	if (normalizedPath === 'apps/api/wrangler.jsonc' && apiOrigin && webOrigin) {
+		config.vars = {
+			...(config.vars ?? {}),
+			API_PUBLIC_ORIGIN: apiOrigin.origin,
+			API_CORS_ORIGINS: [webOrigin.origin, ...localOrigins].join(',')
+		}
 	}
 	if (normalizedPath === 'services/auth/wrangler.jsonc' && apiOrigin && webOrigin) {
 		config.vars = {
@@ -614,11 +699,20 @@ function deployStagingWorkflow(
 	cfg: GvKitConfig
 ): string {
 	const hasMarketing = cfg.choices.marketing === 'astro'
-	const previewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
 	const isHono = cfg.choices.backend === 'hono'
+	const previewIngressGate = isHono ? honoPreviewIngressGateJob() : ''
+	const basePreviewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
+	const previewDbJob = isHono
+		? basePreviewDbJob.replace('  preview-db:\n', '  preview-db:\n    needs: preview-ingress\n')
+		: basePreviewDbJob
 	const stagingConfigStep = writeStagingWranglerConfigStep({ db })
 	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
-	const requiredVariables = ['CLOUDFLARE_WORKERS_SUBDOMAIN', ...monitoringKeys]
+	const requiredVariables = [
+		'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
+		'CLOUDFLARE_PREVIEW_API_DOMAIN',
+		'CLOUDFLARE_PREVIEW_ZONE_NAME',
+		...monitoringKeys
+	]
 	const publicOriginRequirement = workflowVariableRequirements(requiredVariables)
 	const authSecretRequirements = isHono
 		? previewAuthSecretKeys(cfg)
@@ -661,7 +755,7 @@ ${deployEnv}`
 # Tear-down lives in cleanup-staging.yml.
 #
 # Required GitHub Secrets:
-#   - CLOUDFLARE_API_TOKEN
+#   - CLOUDFLARE_API_TOKEN (including Zone Read and DNS Read for preview ingress validation)
 #   - CLOUDFLARE_ACCOUNT_ID
 ${authSecretRequirements}${db === 'postgres' ? '#   - NEON_API_KEY\n# Required GitHub Variables:\n#   - NEON_PROJECT_ID\n' : ''}${publicOriginRequirement}
 
@@ -680,6 +774,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+${previewIngressGate}
 ${previewDbJob}
 
   deploy:
@@ -754,7 +849,9 @@ function writeStagingWranglerConfigStep({ db }: { db: GvKitConfig['choices']['db
         run: node scripts/prepare-cloudflare-preview.mjs
         env:
           STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
-          CLOUDFLARE_WORKERS_SUBDOMAIN: \${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}
+          CLOUDFLARE_PREVIEW_WEB_DOMAIN: \${{ vars.CLOUDFLARE_PREVIEW_WEB_DOMAIN }}
+          CLOUDFLARE_PREVIEW_API_DOMAIN: \${{ vars.CLOUDFLARE_PREVIEW_API_DOMAIN }}
+          CLOUDFLARE_PREVIEW_ZONE_NAME: \${{ vars.CLOUDFLARE_PREVIEW_ZONE_NAME }}
 ${envLines}`
 }
 
@@ -769,6 +866,23 @@ function previewMigrationEnv(db: GvKitConfig['choices']['db']): string {
 		? `          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
 		: `          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
+}
+
+function honoPreviewIngressGateJob(): string {
+	return `  preview-ingress:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify managed preview ingress
+        run: node scripts/verify-cloudflare-preview-ingress.mjs
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_PREVIEW_WEB_DOMAIN: \${{ vars.CLOUDFLARE_PREVIEW_WEB_DOMAIN }}
+          CLOUDFLARE_PREVIEW_API_DOMAIN: \${{ vars.CLOUDFLARE_PREVIEW_API_DOMAIN }}
+          CLOUDFLARE_PREVIEW_ZONE_NAME: \${{ vars.CLOUDFLARE_PREVIEW_ZONE_NAME }}
+`
 }
 
 const PREVIEW_ALIAS_SCRIPT = `raw="pr-\${{ github.event.pull_request.number || github.run_id }}"
@@ -1317,6 +1431,8 @@ function gatewayService(opts: DockerOpts): string {
     environment:
       PORT: "${HONO_GATEWAY.development.port}"
       API_PUBLIC_ORIGIN: \${API_PUBLIC_ORIGIN:-http://localhost:${HONO_GATEWAY.development.port}}
+      API_CORS_ORIGINS: \${API_CORS_ORIGINS:-http://localhost:3000}
+      GATEWAY_UPSTREAM_TIMEOUT_MS: \${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}
       ${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(AUTH_SERVICE)}
       ${USERS_SERVICE.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(USERS_SERVICE)}
     depends_on:

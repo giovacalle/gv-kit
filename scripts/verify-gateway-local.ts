@@ -6,10 +6,7 @@ import { join, resolve } from 'node:path'
 import { parseJsonc } from '../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../src/pipeline/plan.js'
 import { GvKitConfig, type GvKitConfig as Config } from '../src/schema/config.js'
-import {
-	appendCommandEvidence,
-	writeSanitizedArtifact
-} from './gateway-verification-evidence.js'
+import { appendCommandEvidence, writeSanitizedArtifact } from './gateway-verification-evidence.js'
 
 const PNPM_VERSION = '11.1.1'
 const LOCAL_ALLOWED_HOSTS = 'localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786'
@@ -149,6 +146,8 @@ function start(command: string, args: string[], cwd: string, authUrl: string): R
 			PATH: `${join(cwd, '.verify-bin')}:${process.env.PATH ?? ''}`,
 			GATEWAY_URL: 'http://127.0.0.1:8786',
 			API_PUBLIC_ORIGIN: 'http://localhost:8786',
+			API_CORS_ORIGINS: LOCAL_CORS_ORIGINS,
+			GATEWAY_UPSTREAM_TIMEOUT_MS: '10000',
 			AUTH_URL: authUrl,
 			AUTH_PORT: new URL(authUrl).port,
 			USERS_URL: 'http://127.0.0.1:8788',
@@ -261,38 +260,32 @@ async function verifyGatewayTopology({
 		},
 		normalApplicationPath: 'web alias or independent gateway; direct service ports are debug-only'
 	}
-	if (evidence.gatewayHealth.status !== 200 || evidence.gatewayHealth.body !== 'ok') {
+	if (evidence.gatewayHealth.status !== 200 || evidence.gatewayHealth.body !== 'ok')
 		throw new Error('independent gateway health failed')
-	}
-	if (evidence.webAliasHealth.status !== 200 || evidence.webAliasHealth.body !== 'ok') {
+	if (evidence.webAliasHealth.status !== 200 || evidence.webAliasHealth.body !== 'ok')
 		throw new Error('web same-origin alias health failed')
-	}
 	if (
 		evidence.openApi.status !== 200 ||
 		JSON.stringify(evidence.openApi.servers) !== JSON.stringify([{ url: 'http://localhost:8786' }])
-	) {
+	)
 		throw new Error('runtime OpenAPI did not advertise the configured local canonical origin')
-	}
 	if (evidence.knownPrefix.status !== 401) throw new Error('known users prefix was not forwarded')
-	if (evidence.unknownPrefix.status !== 404) {
+	if (evidence.unknownPrefix.status !== 404)
 		throw new Error('unknown gateway prefix did not return 404')
-	}
 	if (evidence.directDebugHealth.status !== 200)
 		throw new Error('users debug service did not start')
 	if (
 		evidence.directAuthTransport.requests.length !== 1 ||
 		evidence.directAuthTransport.requests[0]?.cookie !== 'session=verification'
-	) {
+	)
 		throw new Error('users service did not call the direct private auth transport')
-	}
 	if (
 		evidence.upstreamRedirect.status !== 302 ||
 		evidence.upstreamRedirect.location !== '/api/auth/final' ||
 		evidence.upstreamRedirect.marker !== 'preserved' ||
 		evidence.upstreamRedirect.requests.length !== 1
-	) {
+	)
 		throw new Error('gateway did not preserve the upstream redirect response')
-	}
 	await writeSanitizedArtifact(
 		join(project, 'evidence.json'),
 		`${JSON.stringify(evidence, null, 2)}\n`,
@@ -348,14 +341,12 @@ async function signInWithOtp(origin: string, email: string, command: RunningComm
 		throw new Error(`OTP send failed for ${origin}: ${send.status} ${await send.text()}`)
 	const otp = await waitForOtp(command, email)
 	const signIn = await postJson(`${origin}/api/auth/sign-in/email-otp`, { email, otp }, { origin })
-	if (!signIn.ok) {
+	if (!signIn.ok)
 		throw new Error(`OTP sign-in failed for ${origin}: ${signIn.status} ${await signIn.text()}`)
-	}
 	const jar = cookieJar(signIn)
 	if (!jar.header) throw new Error(`OTP sign-in for ${origin} did not set a cookie`)
-	if (jar.setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie))) {
+	if (jar.setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie)))
 		throw new Error(`OTP sign-in for ${origin} emitted a domain cookie`)
-	}
 	return jar
 }
 
@@ -370,6 +361,162 @@ async function verifySession(origin: string, jar: CookieJar, email: string) {
 	return { status: response.status, email: session.user.email }
 }
 
+async function verifyOperationalRuntime(project: string) {
+	const gatewayModule = (await import(join(project, 'apps/api/src/app.ts'))) as {
+		createGateway(
+			targets: Record<string, { fetch(request: Request): Promise<Response> }>,
+			options: {
+				openApiDocument: {
+					openapi: string
+					info: Record<string, unknown>
+					paths: Record<string, unknown>
+				}
+				canonicalApiOrigin: string
+				corsOrigins: string
+				logger: (line: string) => void
+				upstreamTimeoutMs: number
+			}
+		): { fetch(request: Request): Promise<Response> }
+	}
+	const logs: string[] = []
+	const app = gatewayModule.createGateway(
+		{
+			USERS: {
+				async fetch(request) {
+					const pathname = new URL(request.url).pathname
+					if (pathname.endsWith('/timeout')) return new Promise<Response>(() => undefined)
+					if (pathname.endsWith('/transport')) throw new Error('verification transport failure')
+					return new Response('upstream response', {
+						status: 418,
+						headers: {
+							'x-request-id': request.headers.get('x-request-id') ?? '',
+							'x-upstream': 'preserved'
+						}
+					})
+				}
+			}
+		},
+		{
+			openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
+			canonicalApiOrigin: 'http://localhost:8786',
+			corsOrigins: LOCAL_CORS_ORIGINS,
+			logger: (line) => logs.push(line),
+			upstreamTimeoutMs: 25
+		}
+	)
+	const server = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		fetch: (request) => app.fetch(request)
+	})
+	const origin = `http://127.0.0.1:${server.port}`
+	try {
+		const headers = {
+			cookie: 'not-logged',
+			origin: 'http://localhost:5173',
+			'x-request-id': 'operational-contract-request'
+		}
+		const valid = await fetch(`${origin}/api/v1/users/valid?token=not-logged`, { headers })
+		const validBody = await valid.text()
+		const missing = await fetch(`${origin}/api/auth/session`, { headers })
+		const transport = await fetch(`${origin}/api/v1/users/transport`, { headers })
+		const timeout = await fetch(`${origin}/api/v1/users/timeout`, { headers })
+		const denied = await fetch(`${origin}/api/v1/users/valid`, {
+			headers: { ...headers, origin: 'https://evil.example.test' }
+		})
+
+		if (
+			valid.status !== 418 ||
+			validBody !== 'upstream response' ||
+			valid.headers.get('x-upstream') !== 'preserved'
+		)
+			throw new Error('valid upstream response did not pass through the gateway')
+		for (const response of [valid, missing, transport, timeout]) {
+			if (response.headers.get('x-request-id') !== 'operational-contract-request')
+				throw new Error('gateway response did not preserve one stable request ID')
+			if (
+				response.headers.get('access-control-allow-origin') !== 'http://localhost:5173' ||
+				response.headers.get('access-control-allow-credentials') !== 'true'
+			)
+				throw new Error('gateway operational response did not apply approved CORS')
+		}
+		if (missing.status !== 503) throw new Error('missing target did not return 503')
+		if (transport.status !== 502) throw new Error('transport failure did not return 502')
+		if (timeout.status !== 504) throw new Error('upstream timeout did not return 504')
+		if (valid.headers.get('access-control-allow-origin') !== 'http://localhost:5173')
+			throw new Error('versioned route did not apply the API CORS allowlist')
+		if (valid.headers.get('access-control-allow-credentials') !== 'true')
+			throw new Error('versioned route did not allow approved credentials')
+		if (denied.headers.get('access-control-allow-origin'))
+			throw new Error('versioned route allowed a denied CORS origin')
+		const events = logs
+			.map((line) => JSON.parse(line) as { event?: string })
+			.map(({ event }) => event)
+		for (const event of [
+			'route_selected',
+			'target_missing',
+			'transport_failure',
+			'upstream_timeout',
+			'request_completed'
+		]) {
+			if (!events.includes(event)) throw new Error(`gateway structured logs lack ${event}`)
+		}
+		if (logs.join('\n').includes('not-logged'))
+			throw new Error('gateway structured logs contain a cookie, query, or body value')
+		return {
+			requestId: '[redacted]',
+			statuses: {
+				valid: valid.status,
+				missing: missing.status,
+				transport: transport.status,
+				timeout: timeout.status
+			},
+			cors: {
+				allowedOrigin: valid.headers.get('access-control-allow-origin'),
+				credentials: valid.headers.get('access-control-allow-credentials'),
+				deniedOrigin: denied.headers.get('access-control-allow-origin')
+			},
+			structuredLogEvents: [...new Set(events)].filter(Boolean)
+		}
+	} finally {
+		server.stop(true)
+	}
+}
+
+async function waitForStructuredTrace(command: RunningCommand, requestId: string): Promise<void> {
+	const deadline = Date.now() + 5_000
+	while (Date.now() < deadline) {
+		const records = command
+			.output()
+			.split('\n')
+			.flatMap((line) => {
+				const start = line.indexOf('{\"event\"')
+				if (start < 0) return []
+				try {
+					return [JSON.parse(line.slice(start)) as Record<string, unknown>]
+				} catch {
+					return []
+				}
+			})
+			.filter((record) => record.requestId === requestId)
+		const gateway = records.some(
+			(record) => record.event === 'route_selected' && record.target === 'USERS'
+		)
+		const users = records.some(
+			(record) => record.event === 'service_request_completed' && record.service === 'users'
+		)
+		const auth = records.some(
+			(record) =>
+				record.event === 'service_request_completed' &&
+				record.service === 'auth' &&
+				record.path === '/internal/session'
+		)
+		if (gateway && users && auth) return
+		await Bun.sleep(50)
+	}
+	throw new Error('one request ID was not present in gateway, users, and auth structured logs')
+}
+
 async function verifyDualOriginAuth(project: string, command: RunningCommand, authUrl: string) {
 	const webOrigin = 'http://localhost:5173'
 	const apiOrigin = 'http://127.0.0.1:8786'
@@ -378,13 +525,22 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 	const openApiResponse = await requestWhenReady(`${apiOrigin}/api/openapi.json`)
 	if (openApiResponse.status !== 200) throw new Error('runtime OpenAPI did not return 200')
 	const runtimeOpenApi = (await openApiResponse.json()) as { servers?: { url: string }[] }
-	if (
-		JSON.stringify(runtimeOpenApi.servers) !== JSON.stringify([{ url: 'http://localhost:8786' }])
-	) {
+	if (JSON.stringify(runtimeOpenApi.servers) !== JSON.stringify([{ url: 'http://localhost:8786' }]))
 		throw new Error('runtime OpenAPI did not advertise the configured local canonical origin')
-	}
 	const webHealth = await requestWhenReady(`${webOrigin}/api/healthz`)
 	const webHealthBody = await webHealth.text()
+	const exactWebAlias = await fetch(`${webOrigin}/api`)
+	const exactWebAliasWithQuery = await fetch(`${webOrigin}/api?probe=1`)
+	const outsideWebAlias = await fetch(`${webOrigin}/apiary`)
+	if (
+		exactWebAlias.status !== 404 ||
+		!exactWebAlias.headers.get('x-request-id') ||
+		exactWebAliasWithQuery.status !== 404 ||
+		!exactWebAliasWithQuery.headers.get('x-request-id')
+	)
+		throw new Error('exact local web-origin /api boundary did not reach the gateway')
+	if (outsideWebAlias.headers.get('x-request-id'))
+		throw new Error('local /apiary path escaped the web application boundary')
 	const authHealth = await requestWhenReady(`${authUrl}/healthz`)
 	const authHealthBody = await authHealth.text()
 	for (const [name, status, body] of [
@@ -405,31 +561,25 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 		headers: { host: 'evil.example.test' }
 	})
 	const unknownHostBody = await unknownHost.text()
-	if (allowedCors.status !== 200) {
+	if (allowedCors.status !== 200)
 		throw new Error(`approved Better Auth host control failed with ${allowedCors.status}`)
-	}
-	if (allowedCors.headers.get('access-control-allow-origin') !== webOrigin) {
+	if (allowedCors.headers.get('access-control-allow-origin') !== webOrigin)
 		throw new Error(
 			`approved CORS origin was not echoed: status=${allowedCors.status} headers=${JSON.stringify(Object.fromEntries(allowedCors.headers))}`
 		)
-	}
-	if (allowedCors.headers.get('access-control-allow-credentials') !== 'true') {
+	if (allowedCors.headers.get('access-control-allow-credentials') !== 'true')
 		throw new Error('approved CORS origin did not allow credentials')
-	}
-	if (deniedCors.headers.get('access-control-allow-origin')) {
+	if (deniedCors.headers.get('access-control-allow-origin'))
 		throw new Error('denied CORS origin received an allow-origin header')
-	}
-	const unknownHostDiagnostic =
-		'Host "evil.example.test" is not in the allowed hosts list.'
+	const unknownHostDiagnostic = 'Host "evil.example.test" is not in the allowed hosts list.'
 	if (
 		unknownHost.status !== 500 ||
 		unknownHostBody !== 'Internal Server Error' ||
 		!command.output().includes(unknownHostDiagnostic)
-	) {
+	)
 		throw new Error(
 			`unknown Better Auth host did not return the expected rejection: ${unknownHost.status} ${unknownHostBody}`
 		)
-	}
 
 	const webEmail = 'web-origin@example.test'
 	const apiEmail = 'api-origin@example.test'
@@ -439,14 +589,28 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 		throw new Error('web and API origins received the same cookie jar')
 	const webSession = await verifySession(webOrigin, webJar, webEmail)
 	const apiSession = await verifySession(apiOrigin, apiJar, apiEmail)
+	const traceRequestId = 'local-contract-request'
 	const knownPrefix = await fetch(`${apiOrigin}/api/v1/users/me`, {
-		headers: { cookie: apiJar.header }
+		headers: {
+			cookie: apiJar.header,
+			origin: webOrigin,
+			'x-request-id': traceRequestId
+		}
 	})
 	const knownBody = (await knownPrefix.json()) as { email?: string }
+	const deniedUsersCors = await fetch(`${apiOrigin}/api/v1/users/me`, {
+		headers: { cookie: apiJar.header, origin: 'https://evil.example.test' }
+	})
 	const unknownPrefix = await fetch(`${apiOrigin}/api/unknown`)
-	if (!knownPrefix.ok || knownBody.email !== apiEmail) {
+	if (!knownPrefix.ok || knownBody.email !== apiEmail)
 		throw new Error('known users prefix did not return the API-origin session')
-	}
+	if (knownPrefix.headers.get('x-request-id') !== traceRequestId)
+		throw new Error('gateway did not return the propagated request ID')
+	if (knownPrefix.headers.get('access-control-allow-origin') !== webOrigin)
+		throw new Error('versioned users route did not apply approved CORS')
+	if (deniedUsersCors.headers.get('access-control-allow-origin'))
+		throw new Error('versioned users route allowed a denied CORS origin')
+	await waitForStructuredTrace(command, traceRequestId)
 	if (unknownPrefix.status !== 404) throw new Error('unknown gateway prefix did not return 404')
 	const ssr = await fetch(webOrigin, { headers: { cookie: webJar.header } })
 	const ssrBody = await ssr.text()
@@ -454,13 +618,20 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 		throw new Error('web SSR did not load the gateway session')
 	const sdkSsr = await fetch(`${webOrigin}/users`, { headers: { cookie: webJar.header } })
 	const sdkSsrBody = await sdkSsr.text()
-	if (!sdkSsr.ok || !sdkSsrBody.includes(webEmail)) {
+	if (!sdkSsr.ok || !sdkSsrBody.includes(webEmail))
 		throw new Error('SSR flat client operation did not use the private gateway transport')
-	}
 
+	const operational = await verifyOperationalRuntime(project)
 	const evidence = {
 		project: '.',
 		ingress: {
+			exactWebAlias: {
+				url: `${webOrigin}/api`,
+				status: exactWebAlias.status,
+				queryStatus: exactWebAliasWithQuery.status,
+				gatewayRequestId: true,
+				outsideBoundaryGatewayRequestId: outsideWebAlias.headers.get('x-request-id')
+			},
 			web: `${webOrigin}/api/auth/* -> gateway -> auth`,
 			api: `${apiOrigin}/api/auth/* -> gateway -> auth`
 		},
@@ -476,6 +647,11 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 				status: allowedCors.status,
 				allowOrigin: allowedCors.headers.get('access-control-allow-origin'),
 				credentials: allowedCors.headers.get('access-control-allow-credentials')
+			},
+			versionedRoute: {
+				allowOrigin: knownPrefix.headers.get('access-control-allow-origin'),
+				credentials: knownPrefix.headers.get('access-control-allow-credentials'),
+				deniedOrigin: deniedUsersCors.headers.get('access-control-allow-origin')
 			},
 			denied: {
 				origin: 'https://evil.example.test',
@@ -498,6 +674,13 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 			knownPrefix: { status: knownPrefix.status, email: knownBody.email },
 			unknownPrefix: { status: unknownPrefix.status }
 		},
+		requestTrace: {
+			requestId: '[redacted]',
+			gatewayLog: 'route_selected',
+			serviceLog: 'service_request_completed',
+			responseHeader: true
+		},
+		operational,
 		openApi: { status: openApiResponse.status, servers: runtimeOpenApi.servers },
 		ssr: {
 			status: ssr.status,
@@ -564,9 +747,8 @@ async function verifyOpenApiContract(project: string) {
 	)
 	const secondDocument = await readFile(openApiPath, 'utf8')
 	const secondHash = createHash('sha256').update(secondDocument).digest('hex')
-	if (firstHash !== secondHash || firstDocument !== secondDocument) {
+	if (firstHash !== secondHash || firstDocument !== secondDocument)
 		throw new Error('repeated OpenAPI composition was not byte-identical')
-	}
 
 	await writeFile(openApiPath, `${secondDocument} `)
 	await run(
@@ -594,7 +776,13 @@ async function verifyOpenApiContract(project: string) {
 		0,
 		cleanDiagnostic
 	)
-	await run('openapi-codegen', 'corepack', [...pnpm, 'codegen'], project, join(project, 'codegen.log'))
+	await run(
+		'openapi-codegen',
+		'corepack',
+		[...pnpm, 'codegen'],
+		project,
+		join(project, 'codegen.log')
+	)
 	await run(
 		'typed-consumer-check',
 		'corepack',
@@ -621,27 +809,21 @@ async function verifyOpenApiContract(project: string) {
 		'utf8'
 	)
 	if (checkedDocument.servers !== undefined) throw new Error('checked OpenAPI contains servers')
-	if (Object.keys(checkedDocument.paths).some((path) => path.startsWith('/api/auth'))) {
+	if (Object.keys(checkedDocument.paths).some((path) => path.startsWith('/api/auth')))
 		throw new Error('checked OpenAPI contains Better Auth routes')
-	}
-	if (JSON.stringify(clientPackage.exports) !== JSON.stringify({ '.': './src/index.ts' })) {
+	if (JSON.stringify(clientPackage.exports) !== JSON.stringify({ '.': './src/index.ts' }))
 		throw new Error('generated client exposes service package subpaths')
-	}
-	if (!clientConfig.includes('apps/api/openapi.json') || clientConfig.includes('services/users')) {
+	if (!clientConfig.includes('apps/api/openapi.json') || clientConfig.includes('services/users'))
 		throw new Error('Hey API does not read only the composed gateway document')
-	}
-	if (!generatedClient.includes('usersGetMe') || generatedClient.includes('/api/auth')) {
+	if (!generatedClient.includes('usersGetMe') || generatedClient.includes('/api/auth'))
 		throw new Error('generated client operation inventory is not the flat public domain contract')
-	}
-	if (!browserConsumer.includes("from '@repo/openapi-client'")) {
+	if (!browserConsumer.includes("from '@repo/openapi-client'"))
 		throw new Error('browser consumer does not use the flat client root')
-	}
 	if (
 		!ssrConsumer.includes("usersGetMe } from '@repo/openapi-client'") ||
 		!ssrConsumer.includes('usersGetMe({ baseUrl: url.origin, fetch })')
-	) {
+	)
 		throw new Error('SSR consumer does not inject its request-scoped fetch transport')
-	}
 
 	const evidence = {
 		byteIdentical: true,
@@ -667,6 +849,16 @@ async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2))
 	const generated = await materialize(args.fixture, args.output)
 	console.log(`[gateway-local] generated project: ${generated.project}`)
+	const webHooks = await readFile(join(generated.project, 'apps/web/src/hooks.server.ts'), 'utf8')
+	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)'))
+		throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
+	if (!webHooks.includes('export const handleFetch') || !webHooks.includes('env.GATEWAY_URL'))
+		throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
+	const viteConfig = await readFile(join(generated.project, 'apps/web/vite.config.ts'), 'utf8')
+	if (!viteConfig.includes("'^/api(?:[/?]|$)': { target:"))
+		throw new Error('generated local Vite ingress omits the exact API boundary')
+	if (viteConfig.includes("'/api': { target:"))
+		throw new Error('generated local Vite ingress overmatches paths outside /api')
 
 	await run(
 		'install',
@@ -676,9 +868,8 @@ async function main(): Promise<void> {
 		join(generated.project, 'install.log')
 	)
 	if (args.contract) {
-		if (generated.config.choices.apiClient !== 'hey-api') {
+		if (generated.config.choices.apiClient !== 'hey-api')
 			throw new Error('--contract requires a fixture with apiClient: hey-api')
-		}
 		const contractEvidence = await verifyOpenApiContract(generated.project)
 		console.log(JSON.stringify(contractEvidence, null, 2))
 	}

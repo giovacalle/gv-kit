@@ -6,12 +6,16 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 	const isSqlite = cfg.choices.db === 'sqlite'
 	const isCf = cfg.choices.deploy === 'cf-workers'
 	const hasAuth = cfg.choices.auth.length > 0
+	const isHono = cfg.choices.backend === 'hono'
 	const project = cfg.choices.name
 
 	const entries: FileEntry[] = [
 		{ path: 'packages/db/package.json', content: renderPackageJson({ project, isSqlite, isCf }) },
 		{ path: 'packages/db/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
-		{ path: 'packages/db/drizzle.config.ts', content: renderDrizzleConfig({ isSqlite, isCf }) },
+		{
+			path: 'packages/db/drizzle.config.ts',
+			content: renderDrizzleConfig({ isSqlite, isCf, isHono })
+		},
 		{ path: 'packages/db/src/client.ts', content: renderClient({ isSqlite, isCf }) },
 		{ path: 'packages/db/src/index.ts', content: renderIndex(hasAuth) },
 		{ path: 'packages/db/src/schema/index.ts', content: renderSchemaIndex(hasAuth) },
@@ -114,7 +118,15 @@ function renderTsconfig({
 `
 }
 
-function renderDrizzleConfig({ isSqlite, isCf }: { isSqlite: boolean; isCf: boolean }): string {
+function renderDrizzleConfig({
+	isSqlite,
+	isCf,
+	isHono
+}: {
+	isSqlite: boolean
+	isCf: boolean
+	isHono: boolean
+}): string {
 	if (isSqlite && isCf) {
 		return `import { defineConfig } from 'drizzle-kit'
 
@@ -135,6 +147,9 @@ export default defineConfig({
 `
 	}
 	if (isSqlite) {
+		const databaseUrl = isHono
+			? "process.env.SQLITE_PATH ?? process.env.DATABASE_URL ?? 'file:./local.db'"
+			: "process.env.DATABASE_URL ?? 'file:./local.db'"
 		return `import { defineConfig } from 'drizzle-kit'
 
 export default defineConfig({
@@ -142,7 +157,7 @@ export default defineConfig({
 	out: './migrations',
 	dialect: 'sqlite',
 	dbCredentials: {
-		url: process.env.SQLITE_PATH ?? process.env.DATABASE_URL ?? 'file:./local.db'
+		url: ${databaseUrl}
 	},
 	strict: true,
 	verbose: true

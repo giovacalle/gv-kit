@@ -246,8 +246,7 @@ const REQUIRED_MATERIAL_INTERACTIONS = [
 	},
 	{
 		name: 'hono/api-client-skip',
-		matches: (entry: GatewayMatrixEntry) =>
-			entry.topology === 'hono' && entry.apiClient === 'skip'
+		matches: (entry: GatewayMatrixEntry) => entry.topology === 'hono' && entry.apiClient === 'skip'
 	},
 	{
 		name: 'inside-frontend/api-client-skip',
@@ -426,7 +425,9 @@ async function runSpecializedSeam(
 	entry: GatewayMatrixEntry,
 	entryRoot: string,
 	logPath: string
-): Promise<{ command: CommandEvidence; nestedCommands: CommandEvidence[]; project: string } | undefined> {
+): Promise<
+	{ command: CommandEvidence; nestedCommands: CommandEvidence[]; project: string } | undefined
+> {
 	const common = ['--fixture', entry.fixture, '--output', entryRoot]
 	let script: string | undefined
 	if (entry.highestSeam === 'cloudflare-preview') script = 'scripts/verify-gateway-cloudflare.ts'
@@ -443,9 +444,8 @@ async function runSpecializedSeam(
 	})
 	const project = join(entryRoot, entry.fixture)
 	const nestedCommands = await readCommandEvidence(project).catch(() => [])
-	if (command.outcome === 'passed' && nestedCommands.length === 0) {
+	if (command.outcome === 'passed' && nestedCommands.length === 0)
 		throw new Error(`${entry.id} specialized seam produced no command evidence`)
-	}
 	return { command, nestedCommands, project }
 }
 
@@ -484,9 +484,8 @@ async function workspaceGateAssertion(commands: CommandEvidence[]): Promise<Asse
 		const gates = Object.fromEntries(
 			REQUIRED_WORKSPACE_GATES.map((gate) => {
 				const evidence = commands.find((command) => provesWorkspaceGate(command, gate))
-				if (!evidence || evidence.outcome !== 'passed') {
+				if (!evidence || evidence.outcome !== 'passed')
 					throw new Error(`${gate} gate is missing or did not pass`)
-				}
 				return [gate, evidence.name]
 			})
 		)
@@ -520,41 +519,42 @@ async function verifyOpenApi(
 	}
 	const cleanDiagnostic = /OpenAPI is current \(sha256:[0-9a-f]{64}\)/
 	const driftDiagnostic = /apps\/api\/openapi\.json drifted; run pnpm openapi:compose/
-	return assertion('OpenAPI composition, specific drift rejection, codegen, and typed consumers', async () => {
-		await command('openapi-check-baseline', ['openapi:check'], 0, cleanDiagnostic)
-		await command('openapi-compose-first', ['openapi:compose'])
-		const path = join(project, 'apps/api/openapi.json')
-		const first = await readFile(path, 'utf8')
-		const firstHash = createHash('sha256').update(first).digest('hex')
-		await command('openapi-compose-second', ['openapi:compose'])
-		const second = await readFile(path, 'utf8')
-		const secondHash = createHash('sha256').update(second).digest('hex')
-		if (first !== second) throw new Error('OpenAPI composition is not byte-identical')
-		await writeFile(path, `${second} `)
-		await command('openapi-drift-rejection', ['openapi:check'], 1, driftDiagnostic)
-		await command('openapi-compose-restore', ['openapi:compose'])
-		await command('openapi-check-final', ['openapi:check'], 0, cleanDiagnostic)
-		await command('openapi-codegen', ['codegen'])
-		await command('typed-consumer-check', ['typecheck'])
+	return assertion(
+		'OpenAPI composition, specific drift rejection, codegen, and typed consumers',
+		async () => {
+			await command('openapi-check-baseline', ['openapi:check'], 0, cleanDiagnostic)
+			await command('openapi-compose-first', ['openapi:compose'])
+			const path = join(project, 'apps/api/openapi.json')
+			const first = await readFile(path, 'utf8')
+			const firstHash = createHash('sha256').update(first).digest('hex')
+			await command('openapi-compose-second', ['openapi:compose'])
+			const second = await readFile(path, 'utf8')
+			const secondHash = createHash('sha256').update(second).digest('hex')
+			if (first !== second) throw new Error('OpenAPI composition is not byte-identical')
+			await writeFile(path, `${second} `)
+			await command('openapi-drift-rejection', ['openapi:check'], 1, driftDiagnostic)
+			await command('openapi-compose-restore', ['openapi:compose'])
+			await command('openapi-check-final', ['openapi:check'], 0, cleanDiagnostic)
+			await command('openapi-codegen', ['codegen'])
+			await command('typed-consumer-check', ['typecheck'])
 
-		const packageJson = JSON.parse(
-			await readFile(join(project, 'packages/openapi-client/package.json'), 'utf8')
-		) as { exports?: Record<string, string> }
-		const browser = await readFile(join(project, 'apps/web/src/routes/+layout.ts'), 'utf8')
-		const ssr = await readFile(join(project, 'apps/web/src/routes/users/+page.server.ts'), 'utf8')
-		if (JSON.stringify(packageJson.exports) !== JSON.stringify({ '.': './src/index.ts' })) {
-			throw new Error('OpenAPI client is not flat')
+			const packageJson = JSON.parse(
+				await readFile(join(project, 'packages/openapi-client/package.json'), 'utf8')
+			) as { exports?: Record<string, string> }
+			const browser = await readFile(join(project, 'apps/web/src/routes/+layout.ts'), 'utf8')
+			const ssr = await readFile(join(project, 'apps/web/src/routes/users/+page.server.ts'), 'utf8')
+			if (JSON.stringify(packageJson.exports) !== JSON.stringify({ '.': './src/index.ts' }))
+				throw new Error('OpenAPI client is not flat')
+			if (!browser.includes("from '@repo/openapi-client'"))
+				throw new Error('browser typed consumer missing')
+			if (
+				!ssr.includes("from '@repo/openapi-client'") ||
+				!ssr.includes('usersGetMe({ baseUrl: url.origin, fetch })')
+			)
+				throw new Error('SSR request-scoped typed consumer missing')
+			return { firstHash, secondHash, driftRejected: true, clientExports: packageJson.exports }
 		}
-		if (!browser.includes("from '@repo/openapi-client'"))
-			throw new Error('browser typed consumer missing')
-		if (
-			!ssr.includes("from '@repo/openapi-client'") ||
-			!ssr.includes('usersGetMe({ baseUrl: url.origin, fetch })')
-		) {
-			throw new Error('SSR request-scoped typed consumer missing')
-		}
-		return { firstHash, secondHash, driftRejected: true, clientExports: packageJson.exports }
-	})
+	)
 }
 
 async function snapshotAssertion(entry: GatewayMatrixEntry): Promise<AssertionEvidence> {
@@ -583,12 +583,10 @@ async function topologyAssertion(
 		const apiPackage = await exists(join(project, 'apps/api/package.json'))
 		const authPackage = await exists(join(project, 'services/auth/package.json'))
 		const usersPackage = await exists(join(project, 'services/users/package.json'))
-		if (entry.topology === 'hono' && (!apiPackage || !authPackage || !usersPackage)) {
+		if (entry.topology === 'hono' && (!apiPackage || !authPackage || !usersPackage))
 			throw new Error('Hono scaffold omits the gateway or a private service')
-		}
-		if (entry.topology === 'inside-frontend' && (apiPackage || authPackage || usersPackage)) {
+		if (entry.topology === 'inside-frontend' && (apiPackage || authPackage || usersPackage))
 			throw new Error('gateway topology leaked into inside-frontend output')
-		}
 		return { apiPackage, authPackage, usersPackage }
 	})
 }
@@ -600,19 +598,16 @@ async function skippedApiClientAssertion(
 	if (entry.topology !== 'hono' || entry.apiClient !== 'skip') return []
 	return [
 		await assertion('composed OpenAPI without client-only output', async () => {
-			if (!(await exists(join(project, 'apps/api/openapi.json')))) {
+			if (!(await exists(join(project, 'apps/api/openapi.json'))))
 				throw new Error('composed OpenAPI is missing')
-			}
-			if (await exists(join(project, 'packages/openapi-client'))) {
+			if (await exists(join(project, 'packages/openapi-client')))
 				throw new Error('API client package exists despite apiClient: skip')
-			}
 			const rootPackage = JSON.parse(await readFile(join(project, 'package.json'), 'utf8')) as {
 				scripts?: Record<string, string>
 			}
 			if (rootPackage.scripts?.codegen) throw new Error('client codegen script exists')
-			if (!rootPackage.scripts?.['openapi:compose'] || !rootPackage.scripts['openapi:check']) {
+			if (!rootPackage.scripts?.['openapi:compose'] || !rootPackage.scripts['openapi:check'])
 				throw new Error('OpenAPI composition scripts are missing')
-			}
 			const references: string[] = []
 			for (const file of await collectFiles(project)) {
 				if (!/\.(?:json|md|svelte|ts)$/.test(file)) continue
@@ -621,9 +616,8 @@ async function skippedApiClientAssertion(
 					references.push(relative(project, file))
 				}
 			}
-			if (references.length > 0) {
+			if (references.length > 0)
 				throw new Error(`client-only references remain: ${references.join(', ')}`)
-			}
 			return { composedOpenApi: true, clientPackage: false, clientReferences: [] }
 		})
 	]
@@ -742,22 +736,18 @@ async function cloudflareChecks(
 				(auth.routes?.length ?? 0) > 0 ||
 				auth.workers_dev !== false ||
 				auth.preview_urls !== false
-			) {
+			)
 				throw new Error('auth service has a public trigger')
-			}
 			if (
 				(users.routes?.length ?? 0) > 0 ||
 				users.workers_dev !== false ||
 				users.preview_urls !== false
-			) {
+			)
 				throw new Error('users service has a public trigger')
-			}
-			if (gateway.services?.map(({ binding }) => binding).join(',') !== 'AUTH,USERS') {
+			if (gateway.services?.map(({ binding }) => binding).join(',') !== 'AUTH,USERS')
 				throw new Error('gateway Service Bindings drifted')
-			}
-		} else if (inventory['apps/api'] || inventory['services/auth'] || inventory['services/users']) {
+		} else if (inventory['apps/api'] || inventory['services/auth'] || inventory['services/users'])
 			throw new Error('inside-frontend Cloudflare output contains gateway Workers')
-		}
 		return inventory
 	})
 	for (const configPath of configs.sort()) {
@@ -858,9 +848,8 @@ export async function validateCloudflareWorkflowStructure(
 	const staging = await parse('deploy-staging.yml')
 	const productionSteps = production.jobs?.deploy?.steps
 	const stagingSteps = staging.jobs?.deploy?.steps
-	if (!Array.isArray(productionSteps) || !Array.isArray(stagingSteps)) {
+	if (!Array.isArray(productionSteps) || !Array.isArray(stagingSteps))
 		throw new Error('deploy workflow steps are missing')
-	}
 	orderedStepNames(productionSteps, [
 		'Run production database migrations',
 		...(productionSteps.some((step) => step.name === 'Validate public deployment variables')
@@ -871,9 +860,8 @@ export async function validateCloudflareWorkflowStructure(
 		'Deploy gateway Worker',
 		'Deploy web Worker'
 	])
-	if (staging.jobs?.deploy?.needs !== 'preview-db') {
+	if (staging.jobs?.deploy?.needs !== 'preview-db')
 		throw new Error('staging deploy does not depend on preview-db')
-	}
 	orderedStepNames(stagingSteps, [
 		'Write temporary staging Wrangler configs',
 		'Run preview database migrations',
@@ -913,9 +901,8 @@ export async function validateCloudflareWorkflowStructure(
 	] as const) {
 		for (const step of steps) {
 			for (const [name, value] of Object.entries(expected)) {
-				if (step.env?.[name] !== value) {
+				if (step.env?.[name] !== value)
 					throw new Error(`${stage} ${step.name} does not map ${name}`)
-				}
 			}
 		}
 	}
@@ -929,37 +916,31 @@ export async function validateCloudflareWorkflowStructure(
 	const validation = productionSteps.find(
 		(step) => step.name === 'Validate public deployment variables'
 	)
-	if (publicKeys.length > 0 && !validation) {
+	if (publicKeys.length > 0 && !validation)
 		throw new Error('production public variables have no validation step')
-	}
 	for (const name of publicKeys) {
 		if (
 			!validation?.run?.includes(`test -n "$${name}"`) ||
 			validation.env?.[name] !== `\${{ vars.${name} }}`
-		) {
+		)
 			throw new Error(`production validation does not map ${name} from GitHub variables`)
-		}
 	}
 	const previewConfig = stagingSteps.find((step) => step.id === 'preview_config')
-	if (previewConfig?.env?.STAGING_ALIAS !== '${{ needs.preview-db.outputs.alias }}') {
+	if (previewConfig?.env?.STAGING_ALIAS !== '${{ needs.preview-db.outputs.alias }}')
 		throw new Error('preview config does not use the preview-db alias')
-	}
 	if (entry.db === 'sqlite') {
 		if (
 			previewConfig.env?.PREVIEW_DB_KIND !== 'd1' ||
 			previewConfig.env?.STAGING_D1_DATABASE_NAME !==
 				'${{ needs.preview-db.outputs.d1_database_name }}' ||
-			previewConfig.env?.STAGING_D1_DATABASE_ID !==
-				'${{ needs.preview-db.outputs.d1_database_id }}'
-		) {
+			previewConfig.env?.STAGING_D1_DATABASE_ID !== '${{ needs.preview-db.outputs.d1_database_id }}'
+		)
 			throw new Error('D1 preview config environment is incomplete')
-		}
 	} else if (
 		previewConfig?.env?.PREVIEW_DB_KIND !== 'neon' ||
 		previewConfig.env?.STAGING_DATABASE_URL !== '${{ needs.preview-db.outputs.database_url }}'
-	) {
+	)
 		throw new Error('Neon preview config environment is incomplete')
-	}
 	return {
 		productionSteps: productionSteps.flatMap(({ name }) => (name ? [name] : [])),
 		stagingSteps: stagingSteps.flatMap(({ name }) => (name ? [name] : []))
@@ -988,15 +969,12 @@ async function previewAssertion(
 			if (
 				evidence.database?.kind !== expectedDatabaseKind ||
 				evidence.preview?.cleanupTargets?.database?.kind !== expectedDatabaseKind
-			) {
+			)
 				throw new Error(`${expectedDatabaseKind} preview isolation evidence is missing`)
-			}
-			if (!evidence.preview.cleanupTargets.productionExcluded) {
+			if (!evidence.preview.cleanupTargets.productionExcluded)
 				throw new Error('preview cleanup can target production')
-			}
-			if (Object.values(evidence.preview.dryRuns ?? {}).some((result) => !result.bundleProved)) {
+			if (Object.values(evidence.preview.dryRuns ?? {}).some((result) => !result.bundleProved))
 				throw new Error('a preview Worker dry-run lacks bundle evidence')
-			}
 			return {
 				databaseKind: expectedDatabaseKind,
 				productionExcluded: true,
@@ -1263,10 +1241,7 @@ async function main(): Promise<void> {
 			json,
 			markdown
 		])
-		json = redactArtifactText(`${JSON.stringify(report, null, 2)}\n`, [
-			args.output,
-			resolve('.')
-		])
+		json = redactArtifactText(`${JSON.stringify(report, null, 2)}\n`, [args.output, resolve('.')])
 		await writeSanitizedArtifact(join(args.output, 'report.json'), json, [args.output])
 		await writeSanitizedArtifact(join(args.output, 'report.md'), markdown, [args.output])
 	}

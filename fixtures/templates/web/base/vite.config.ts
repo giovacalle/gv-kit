@@ -9,7 +9,7 @@ export default defineConfig({
 	/*@gvkit:if honoGateway*/
 	server: {
 		proxy: {
-			'/api': { target: '__GATEWAY_URL__' }
+			'^/api(?:[/?]|$)': { target: '__GATEWAY_URL__' }
 		}
 	},
 	/*@gvkit:endif*/

@@ -459,9 +459,13 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		const preparation = findEntry(entries, 'scripts/prepare-cloudflare-preview.mjs')!.content
 		expect(yml).toContain('id: preview_config')
-		expect(yml).toContain(
-			'CLOUDFLARE_WORKERS_SUBDOMAIN: ${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}'
-		)
+		for (const variable of [
+			'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
+			'CLOUDFLARE_PREVIEW_API_DOMAIN',
+			'CLOUDFLARE_PREVIEW_ZONE_NAME'
+		]) {
+			expect(yml).toContain(`${variable}: \${{ vars.${variable} }}`)
+		}
 		expect(yml).toContain('${{ steps.preview_config.outputs.api_origin }}')
 		expect(yml).toContain('${{ steps.preview_config.outputs.web_origin }}')
 		expect(preparation).toContain('API_PUBLIC_ORIGIN: apiOrigin.origin')

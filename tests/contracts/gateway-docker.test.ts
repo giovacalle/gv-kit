@@ -59,9 +59,18 @@ describe('Docker gateway topology', () => {
 		const config = generated('docker/ingress.conf.template')
 
 		expect(config).toContain('server_name ${API_HOST};')
-		expect(config).toMatch(/server_name _;[\s\S]*location \^~ \/api\/[\s\S]*proxy_pass http:\/\/gateway_upstream/)
-		expect(config).toMatch(/server_name _;[\s\S]*location \/[\s\S]*proxy_pass http:\/\/web_upstream/)
-		expect(config).toMatch(/server_name \$\{API_HOST\};[\s\S]*location \/[\s\S]*proxy_pass http:\/\/gateway_upstream/)
+		expect(config).toMatch(
+			/server_name _;[\s\S]*location = \/api[\s\S]*proxy_pass http:\/\/gateway_upstream/
+		)
+		expect(config).toMatch(
+			/server_name _;[\s\S]*location \^~ \/api\/[\s\S]*proxy_pass http:\/\/gateway_upstream/
+		)
+		expect(config).toMatch(
+			/server_name _;[\s\S]*location \/[\s\S]*proxy_pass http:\/\/web_upstream/
+		)
+		expect(config).toMatch(
+			/server_name \$\{API_HOST\};[\s\S]*location \/[\s\S]*proxy_pass http:\/\/gateway_upstream/
+		)
 		expect(config).toContain('proxy_set_header X-Forwarded-Proto ${PUBLIC_SCHEME};')
 	})
 
@@ -75,8 +84,17 @@ describe('Docker gateway topology', () => {
 		expect(environment('web').USERS_URL).toBeUndefined()
 		expect(environment('gateway').AUTH_URL).toBe('http://auth:8787')
 		expect(environment('gateway').USERS_URL).toBe('http://users:8788')
+		expect(environment('gateway').API_CORS_ORIGINS).toBe(
+			'${API_CORS_ORIGINS:-http://localhost:3000}'
+		)
+		expect(environment('gateway').GATEWAY_UPSTREAM_TIMEOUT_MS).toBe(
+			'${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}'
+		)
 		expect(environment('users').AUTH_URL).toBe('http://auth:8787')
-		expect(dependencies('auth')).toHaveProperty('migrate.condition', 'service_completed_successfully')
+		expect(dependencies('auth')).toHaveProperty(
+			'migrate.condition',
+			'service_completed_successfully'
+		)
 		expect(dependencies('users')).toHaveProperty('auth.condition', 'service_healthy')
 		expect(dependencies('gateway')).toHaveProperty('users.condition', 'service_healthy')
 		expect(dependencies('web')).toEqual({ gateway: { condition: 'service_healthy' } })
@@ -96,6 +114,23 @@ describe('Docker gateway topology', () => {
 			expect(dockerfile).toContain(`AS ${name}-runtime`)
 			expect(target(name)).toBe(`${name}-runtime`)
 		}
+	})
+
+	test('packages compiled Paraglide output for Hono Docker workspace deploys', () => {
+		const dockerI18nConfig: GvKitConfig = {
+			...config,
+			choices: { ...choices, i18n: 'paraglide' }
+		}
+		const entries = runGenerators(dockerI18nConfig)
+		const entry = (path: string) => entries.find((candidate) => candidate.path === path)
+		const packageJson = JSON.parse(entry('packages/i18n/package.json')!.content) as {
+			scripts: { build: string }
+		}
+
+		expect(entry('packages/i18n/.npmignore')?.content).toBe('node_modules/\n')
+		expect(packageJson.scripts.build).toContain(
+			"writeFileSync('src/paraglide/.npmignore', '')"
+		)
 	})
 
 	test('containerized Node entrypoints honor HOST while local defaults remain loopback-only', () => {

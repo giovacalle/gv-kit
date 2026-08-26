@@ -116,11 +116,11 @@ SvelteKit SSR uses a request-scoped gateway transport. Cloudflare uses the web W
 - never read auth secrets or query auth tables
 - own deterministic OpenAPI fragments consumed by gateway composition
 
-Each domain service owns a deterministic OpenAPI fragment. The gateway composes those fragments into `apps/api/openapi.json`, the only Hey API input. Browser domain calls import flat operations from `@repo/openapi-client` and use same-origin `/api/*`. Better Auth keeps its own client.
+Each domain service owns a deterministic OpenAPI fragment. The gateway composes those fragments into `apps/api/openapi.json`, the only Hey API input. Browser domain calls import flat operations from `@repo/openapi-client` and use same-origin `/api` and `/api/*`. Better Auth keeps its own client.
 
 Private services call one another directly through Service Bindings or private URLs. They never route internal calls back through the gateway. Cloudflare private services have no route, workers.dev hostname, or production preview URL. Docker private services have no host ports. Local direct ports are loopback-only debugging tools.
 
-Deployments run database migration, private services, gateway, then web. Preview bindings and data resources share one preview alias and never target production.
+Deployments run preview-ingress validation, database migration, private services, gateway, then web. Cloudflare Hono previews use PR-scoped hosts under `CLOUDFLARE_PREVIEW_WEB_DOMAIN` and `CLOUDFLARE_PREVIEW_API_DOMAIN`. Shared proxied wildcard DNS records must already exist in `CLOUDFLARE_PREVIEW_ZONE_NAME`; the workflow verifies them before provisioning. The gateway owns the canonical API route plus the more-specific web `/api` and `/api/*` routes, while the web Worker owns the less-specific web route. Cleanup deletes PR Workers and their routes without deleting shared wildcard DNS.
 
 ### Inside-frontend mode
 

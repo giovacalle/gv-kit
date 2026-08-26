@@ -14,7 +14,9 @@ export function generateMarketingAstro(cfg: GvKitConfig): FileEntry[] {
 			monitoringUmami: cfg.choices.monitoring.includes('umami'),
 			monitoringPosthog: cfg.choices.monitoring.includes('posthog'),
 			deployCfWorkers: cfg.choices.deploy === 'cf-workers',
-			deployDocker: cfg.choices.deploy === 'docker'
+			deployDocker: cfg.choices.deploy === 'docker',
+			honoCfWorkers:
+				cfg.choices.backend === 'hono' && cfg.choices.deploy === 'cf-workers'
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,

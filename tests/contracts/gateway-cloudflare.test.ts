@@ -30,6 +30,65 @@ function planFixture(name: string) {
 	return runGenerators(GvKitConfig.parse(raw))
 }
 
+type CloudflareResponse = Response & {
+	readonly cf?: unknown
+	readonly webSocket?: WebSocket | null
+}
+type CloudflareGatewayModule = {
+	WorkerdResponse: new (
+		body?: unknown,
+		init?: ResponseInit & { cf?: unknown; webSocket?: WebSocket | null }
+	) => CloudflareResponse
+	createGateway(
+		targets: { USERS?: { fetch(request: Request): Promise<Response> } },
+		options: {
+			openApiDocument: {
+				openapi: string
+				info: Record<string, unknown>
+				paths: Record<string, unknown>
+			}
+			canonicalApiOrigin: string
+			corsOrigins: string
+			logger: (line: string) => void
+		}
+	): { fetch(request: Request): Promise<Response> }
+}
+
+async function loadWorkerdGatewayContract(): Promise<CloudflareGatewayModule> {
+	const app = planFixture('hono-cf-workers-passwordless').find(
+		(candidate) => candidate.path === 'apps/api/src/app.ts'
+	)
+	if (!app) throw new Error('generated Cloudflare gateway app is missing')
+
+	const workerdResponse = `
+class WorkerdResponse {
+	body
+	cf
+	headers
+	status
+	statusText
+	webSocket
+	constructor(body = null, init = {}) {
+		this.body = body
+		this.cf = init.cf
+		this.headers = new Headers(init.headers)
+		this.status = init.status ?? 200
+		this.statusText = init.statusText ?? ''
+		this.webSocket = init.webSocket ?? null
+	}
+}
+const Response = WorkerdResponse
+`
+	const honoUrl = import.meta.resolve('hono')
+	const source = `${workerdResponse}${app.content.replace("from 'hono'", `from '${honoUrl}'`)}\nexport { WorkerdResponse }`
+	const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
+	const javascript = transpiler.transformSync(source)
+	const moduleUrl = URL.createObjectURL(new Blob([javascript], { type: 'text/javascript' }))
+	const module = (await import(moduleUrl)) as CloudflareGatewayModule
+	URL.revokeObjectURL(moduleUrl)
+	return module
+}
+
 type Route = { pattern: string; custom_domain?: boolean; zone_name?: string }
 type Service = { binding: string; service: string }
 type Wrangler = {
@@ -55,6 +114,45 @@ function wrangler(entries: ReturnType<typeof planFixture>, path: string): Wrangl
 }
 
 describe('Cloudflare gateway production topology', () => {
+	test('the workerd gateway keeps platform response state while applying gateway headers', async () => {
+		const { createGateway, WorkerdResponse } = await loadWorkerdGatewayContract()
+		const webSocket = {} as WebSocket
+		const cf = { cacheStatus: 'HIT' }
+		const upstream = new WorkerdResponse(null, {
+			status: 101,
+			headers: { 'access-control-allow-origin': '*' },
+			cf,
+			webSocket
+		})
+		const gateway = createGateway(
+			{
+				USERS: {
+					async fetch() {
+						return upstream
+					}
+				}
+			},
+			{
+				openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
+				canonicalApiOrigin: 'https://api.example.test',
+				corsOrigins: 'https://app.example.test',
+				logger: () => undefined
+			}
+		)
+
+		const response = (await gateway.fetch(
+			new Request('https://api.example.test/api/v1/users/socket', {
+				headers: { origin: 'https://app.example.test' }
+			})
+		)) as CloudflareResponse
+
+		expect(response.status).toBe(101)
+		expect(response.webSocket).toBe(webSocket)
+		expect(response.cf).toBe(cf)
+		expect(response.headers.get('x-request-id')).toMatch(/^[0-9a-f-]{36}$/)
+		expect(response.headers.get('access-control-allow-origin')).toBe('https://app.example.test')
+	})
+
 	for (const [fixture, webHost] of [
 		['hono-cf-workers-passwordless', '<domain>'],
 		['astro-cf-workers-full', 'app.<domain>']
@@ -68,6 +166,7 @@ describe('Cloudflare gateway production topology', () => {
 
 			expect(gateway.routes).toEqual([
 				{ pattern: 'api.<domain>', custom_domain: true },
+				{ pattern: `${webHost}/api`, zone_name: '<domain>' },
 				{ pattern: `${webHost}/api/*`, zone_name: '<domain>' }
 			])
 			expect(web.routes).toEqual([{ pattern: webHost, custom_domain: true }])
@@ -218,6 +317,11 @@ describe('Cloudflare gateway production topology', () => {
 		expect(webRule).not.toContain('usersFetch')
 
 		expect(deployRule).toContain('platform.env.GATEWAY')
+		expect(deployRule).toContain('Browser `/api` and `/api/*` traffic')
+		expect(deployRule).toContain('CLOUDFLARE_PREVIEW_WEB_DOMAIN')
+		expect(deployRule).toContain('shared proxied wildcard DNS records')
+		expect(deployRule).toContain('more-specific web `/api` and `/api/*` routes')
+		expect(deployRule).toContain('never shared wildcard DNS')
 		expect(deployRule).toContain('services/<service>/wrangler.jsonc')
 		expect(deployRule).not.toContain('gateway Service Bindings such as `AUTH`')
 		expect(deployRule).not.toContain('apps/api/<service>')
@@ -250,10 +354,19 @@ describe('Cloudflare gateway production topology', () => {
 
 		const production = entry(entries, '.env.cloudflare.example')
 		expect(production).toContain('API_PUBLIC_ORIGIN=https://api.<domain>')
+		expect(production).toContain('API_CORS_ORIGINS=https://<domain>')
+		expect(production).toContain('GATEWAY_UPSTREAM_TIMEOUT_MS=10000')
 		expect(production).toContain('PUBLIC_APP_URL=https://<domain>')
 		expect(production).toContain('BETTER_AUTH_ALLOWED_HOSTS=<domain>,api.<domain>')
 		expect(production).toContain('AUTH_CORS_ORIGINS=https://<domain>')
 		expect(production).not.toMatch(/SECRET|TOKEN|API_KEY|PASSWORD/)
+
+		const gateway = wrangler(entries, 'apps/api/wrangler.jsonc')
+		expect(gateway.vars).toEqual({
+			API_PUBLIC_ORIGIN: 'https://api.<domain>',
+			API_CORS_ORIGINS: 'https://<domain>',
+			GATEWAY_UPSTREAM_TIMEOUT_MS: '10000'
+		})
 
 		const auth = wrangler(entries, 'services/auth/wrangler.jsonc')
 		expect(auth.vars).toEqual({
@@ -294,6 +407,6 @@ describe('Cloudflare gateway production topology', () => {
 			scripts: Record<string, string>
 		}
 		expect(integratedPackage.scripts['cf-typegen']).toBeUndefined()
-		expect(entry(integrated, 'apps/web/src/app.d.ts')).toContain('env: {}')
+		expect(entry(integrated, 'apps/web/src/app.d.ts')).toContain('env: {\n\t\t\t}')
 	})
 })

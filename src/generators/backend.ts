@@ -36,7 +36,10 @@ export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 		entries.push(
 			{ path: 'packages/backend/src/middleware/index.ts', content: MIDDLEWARE_INDEX },
 			{ path: 'packages/backend/src/middleware/logger.ts', content: MIDDLEWARE_LOGGER },
-			{ path: 'packages/backend/src/middleware/error-handler.ts', content: MIDDLEWARE_ERROR_HANDLER },
+			{
+				path: 'packages/backend/src/middleware/error-handler.ts',
+				content: MIDDLEWARE_ERROR_HANDLER
+			},
 			{ path: 'packages/backend/src/middleware/auth/index.ts', content: MIDDLEWARE_AUTH_INDEX },
 			{ path: 'packages/backend/src/middleware/auth/client.ts', content: MIDDLEWARE_AUTH_CLIENT },
 			{ path: 'packages/backend/src/middleware/auth/require.ts', content: MIDDLEWARE_AUTH_REQUIRE }
@@ -112,7 +115,13 @@ function renderPackageJson({
 /*  tsconfig.json                                                      */
 /* ------------------------------------------------------------------ */
 
-function renderTsconfig({ isCf, isSqlite: _isSqlite }: { isCf: boolean; isSqlite: boolean }): string {
+function renderTsconfig({
+	isCf,
+	isSqlite: _isSqlite
+}: {
+	isCf: boolean
+	isSqlite: boolean
+}): string {
 	// Inherit the shared compiler base from `@repo/tooling-typescript` so every
 	// package agrees on strictness + module resolution. cf-workers consumers
 	// pick up `@cloudflare/workers-types`; everything else picks up `node`.
@@ -193,14 +202,34 @@ export { errorHandler } from './error-handler.js'
 
 const MIDDLEWARE_LOGGER = `import type { MiddlewareHandler } from 'hono'
 
-export function logger(): MiddlewareHandler {
+const REQUEST_ID_HEADER = 'x-request-id'
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+
+function requestId(value: string | undefined): string {
+	return value && REQUEST_ID_PATTERN.test(value) ? value : crypto.randomUUID()
+}
+
+export function logger(
+	service: string,
+	writeLog: (line: string) => void = (line) => console.log(line)
+): MiddlewareHandler {
 	return async (c, next) => {
-		const start = Date.now()
+		const id = requestId(c.req.header(REQUEST_ID_HEADER))
+		const startedAt = Date.now()
+		c.header(REQUEST_ID_HEADER, id)
 		await next()
-		const ms = Date.now() - start
-		const { method } = c.req
-		const path = new URL(c.req.url).pathname
-		console.log(\`\${method} \${path} \${c.res.status} \${ms}ms\`)
+		c.header(REQUEST_ID_HEADER, id)
+		writeLog(
+			JSON.stringify({
+				event: 'service_request_completed',
+				requestId: id,
+				service,
+				method: c.req.method,
+				path: new URL(c.req.url).pathname,
+				status: c.res.status,
+				durationMs: Date.now() - startedAt
+			})
+		)
 	}
 }
 `
@@ -287,6 +316,8 @@ export async function getSession<TBindings extends Record<string, any>>(
 	if (cookie) headers.set('cookie', cookie)
 	const authorization = request.headers.get('authorization')
 	if (authorization) headers.set('authorization', authorization)
+	const requestId = request.headers.get('x-request-id')
+	if (requestId) headers.set('x-request-id', requestId)
 	const forwardedHost = request.headers.get('x-forwarded-host') ?? new URL(request.url).host
 	headers.set('x-forwarded-host', forwardedHost)
 	const forwardedProto =

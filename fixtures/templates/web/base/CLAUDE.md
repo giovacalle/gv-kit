@@ -15,7 +15,7 @@ SvelteKit web app deployed to Cloudflare Workers.
 ## API gateway and bindings
 
 <!--@gvkit:if honoGateway-->
-`apps/api/` is the public API gateway. Private backend workers live under `services/<service>/` and never become direct web dependencies. Browser calls use same-origin `/api/*` paths.
+`apps/api/` is the public API gateway. Private backend workers live under `services/<service>/` and never become direct web dependencies. Browser calls use same-origin `/api` and `/api/*` paths.
 
 <!--@gvkit:if apiClientHeyApi-->
 The flat `@repo/openapi-client` package consumes the composed gateway contract. Server loads and actions pass SvelteKit's request-scoped `fetch` to that client.
@@ -23,7 +23,7 @@ The flat `@repo/openapi-client` package consumes the composed gateway contract. 
 This workspace has no generated API client package. Server loads and actions use SvelteKit's request-scoped `fetch` for gateway requests.
 <!--@gvkit:endif-->
 <!--@gvkit:if honoGatewayCfWorkers-->
-The web Worker's only backend Service Binding is `GATEWAY`. `handleFetch` sends same-origin SSR API requests through that binding. Do not bind web directly to auth, users, or another private service.
+The web Worker's only backend Service Binding is `GATEWAY`. Browser API ingress routes directly to the gateway and never executes a SvelteKit `Handle`. `handleFetch` sends only same-origin SSR API requests through the binding. Do not bind web directly to auth, users, or another private service.
 <!--@gvkit:else-->
 `handleFetch` sends same-origin SSR API requests to the private `GATEWAY_URL`. Do not call auth, users, or another private service directly.
 <!--@gvkit:endif-->

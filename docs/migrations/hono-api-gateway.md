@@ -49,7 +49,9 @@ Deploy in this order:
 3. gateway
 4. web
 
-Cloudflare private services must have no routes, set `workers_dev` and `preview_urls` to `false`, and receive calls through Service Bindings. Bind web only to `GATEWAY`; bind the gateway to its service targets. Deploy preview resources with one alias and ensure no preview binding or database points to production.
+Cloudflare private services must have no routes, set `workers_dev` and `preview_urls` to `false`, and receive calls through Service Bindings. Bind web only to `GATEWAY`; bind the gateway to its service targets.
+
+Cloudflare Hono previews require managed parent domains and an active zone. Set `CLOUDFLARE_PREVIEW_WEB_DOMAIN`, `CLOUDFLARE_PREVIEW_API_DOMAIN`, and `CLOUDFLARE_PREVIEW_ZONE_NAME` as GitHub variables. Provision persistent proxied wildcard DNS records for both parent domains before the first preview. The deployment token needs Zone Read and DNS Read so the staging workflow can verify those shared prerequisites before database or Worker provisioning. The gateway then owns the canonical API route and the more-specific web `/api` and `/api/*` routes. The web Worker owns only the less-specific web route. Cleanup deletes PR-scoped Workers and routes, never shared wildcard DNS. Do not use workers.dev or a SvelteKit proxy as a fallback.
 
 Docker ingress must route both the web `/api/*` alias and canonical API host to the gateway. Do not publish auth or domain service ports. Use private Compose URLs for gateway-to-service, service-to-service, and SSR calls.
 
@@ -73,10 +75,10 @@ After the manual edits:
 
 1. Run workspace lint, typecheck, tests, and build.
 2. Regenerate and check `apps/api/openapi.json`, then regenerate the flat client.
-3. Confirm browser calls use the web `/api/*` alias and SSR uses the private gateway transport.
+3. Confirm browser calls use the web `/api` and `/api/*` aliases and SSR uses the private gateway transport.
 4. Confirm private Cloudflare Workers have no public triggers or Docker host ports.
 5. Exercise auth cookies, `/api/v1/*`, health, and runtime OpenAPI through both public ingress paths.
-6. Inspect preview bindings and deployment order before the first preview deployment.
+6. Confirm preview wildcard DNS is proxied, managed-domain variables are explicit, gateway routes are more specific than the web route, and cleanup leaves shared DNS intact.
 
 ## Cloudflare references
 

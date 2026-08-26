@@ -410,7 +410,7 @@ export const app = new OpenAPIHono<{
 	Variables: { user: SessionLike }
 }>()
 
-app.use('*', logger())
+app.use('*', logger('users'))
 app.use('*', errorHandler())
 
 app.get('/healthz', (c) => c.text('ok'))

@@ -19,7 +19,7 @@ import {
 export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 	const entries: FileEntry[] = [
 		{ path: 'CLAUDE.md', content: renderClaudeMd(cfg) },
-		{ path: '.claude/settings.json', content: renderClaudeSettings() },
+		{ path: '.claude/settings.json', content: renderClaudeSettings(cfg) },
 		{ path: '.claude/stack.json', content: renderStackManifest(cfg) }
 	]
 
@@ -27,6 +27,7 @@ export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 		tree: 'root',
 		flags: {
 			auth: cfg.choices.auth.length > 0,
+			insideFrontendBaseline: cfg.choices.backend === 'inside-frontend',
 			cfWorkers: cfg.choices.deploy === 'cf-workers',
 			hono: cfg.choices.backend === 'hono',
 			i18nParaglide: cfg.choices.i18n === 'paraglide'
@@ -217,7 +218,11 @@ function renderStackManifest(cfg: GvKitConfig): string {
 /*  .claude/settings.json                                               */
 /* ------------------------------------------------------------------ */
 
-function renderClaudeSettings(): string {
+function renderClaudeSettings(cfg: GvKitConfig): string {
+	const privateRuntimePath =
+		cfg.choices.backend === 'hono'
+			? 'Read(./services/**/.dev.vars)'
+			: 'Read(./apps/api/**/.dev.vars)'
 	const settings = {
 		permissions: {
 			allow: [
@@ -237,7 +242,7 @@ function renderClaudeSettings(): string {
 				'Read(./apps/web/.dev.vars)',
 				'Read(./apps/marketing/.env)',
 				'Read(./apps/marketing/.env.*)',
-				'Read(./services/**/.dev.vars)'
+				privateRuntimePath
 			]
 		}
 	}

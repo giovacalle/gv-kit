@@ -1,0 +1,5 @@
+{
+	"scripts": {
+		"deploy:staging": "test -n \"$STAGING_ALIAS\" && wrangler deploy --config \"${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}\""
+	}
+}

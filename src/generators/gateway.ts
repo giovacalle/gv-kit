@@ -19,7 +19,9 @@ import {
 	stringifyOpenApi
 } from './openapi-contract.js'
 
+const API_CORS_ORIGINS = 'API_CORS_ORIGINS'
 const API_PUBLIC_ORIGIN = 'API_PUBLIC_ORIGIN'
+const GATEWAY_UPSTREAM_TIMEOUT_MS = 'GATEWAY_UPSTREAM_TIMEOUT_MS'
 
 type Runtime = 'cf-workers' | 'node'
 
@@ -124,9 +126,7 @@ function tsconfig(runtime: Runtime): string {
 			compilerOptions: {
 				noEmit: true,
 				resolveJsonModule: true,
-				...(runtime === 'cf-workers'
-					? { types: ['node', '@cloudflare/workers-types'] }
-					: {})
+				...(runtime === 'cf-workers' ? { types: ['node', '@cloudflare/workers-types'] } : {})
 			},
 			include: ['src/**/*', 'scripts/**/*', '*.d.ts', 'openapi.json']
 		},
@@ -136,7 +136,7 @@ function tsconfig(runtime: Runtime): string {
 }
 
 function appTs(): string {
-	return `import { Hono } from 'hono'
+	return `import { Hono, type Context } from 'hono'
 
 export type OpenApiDocument = {
 	openapi: string
@@ -158,7 +158,29 @@ export type GatewayTargets = {
 export type GatewayOptions = {
 	openApiDocument: OpenApiDocument
 	canonicalApiOrigin: string
+	corsOrigins?: string
+	logger?: (line: string) => void
+	upstreamTimeoutMs?: number
 }
+
+type GatewayVariables = { requestId: string }
+type GatewayContext = Context<{ Variables: GatewayVariables }>
+type PlatformResponse = Response & {
+	readonly cf?: unknown
+	readonly webSocket?: WebSocket | null
+}
+type PlatformResponseInit = ResponseInit & {
+	cf?: unknown
+	webSocket?: WebSocket | null
+}
+
+const DEFAULT_CORS_ORIGINS = ['http://localhost:3000', 'http://localhost:5173']
+const DEFAULT_UPSTREAM_TIMEOUT_MS = 10_000
+const MAX_UPSTREAM_TIMEOUT_MS = 300_000
+const REQUEST_ID_HEADER = 'x-request-id'
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+
+class UpstreamTimeoutError extends Error {}
 
 const routes = [
 	{ prefix: '${AUTH_SERVICE.publicPrefixes[0]}', target: '${AUTH_SERVICE.internalTarget}' },
@@ -169,14 +191,125 @@ function matchesPrefix(pathname: string, prefix: string): boolean {
 	return pathname === prefix || pathname.startsWith(\`\${prefix}/\`)
 }
 
+function requestId(value: string | undefined): string {
+	return value && REQUEST_ID_PATTERN.test(value) ? value : crypto.randomUUID()
+}
+
+function appendVary(headers: Headers, value: string): void {
+	const values = (headers.get('vary') ?? '')
+		.split(',')
+		.map((entry) => entry.trim())
+		.filter(Boolean)
+	if (!values.some((entry) => entry.toLowerCase() === value.toLowerCase())) values.push(value)
+	headers.set('vary', values.join(', '))
+}
+
+function gatewayResponse(
+	response: Response,
+	requestId: string,
+	origin: string | undefined,
+	allowedCorsOrigins: string[],
+	preflight = false
+): Response {
+	const headers = new Headers(response.headers)
+	const serviceCorsHeaders: string[] = []
+	headers.forEach((_value, name) => {
+		if (name.toLowerCase().startsWith('access-control-')) serviceCorsHeaders.push(name)
+	})
+	for (const name of serviceCorsHeaders) headers.delete(name)
+	headers.set(REQUEST_ID_HEADER, requestId)
+	appendVary(headers, 'Origin')
+	if (origin && allowedCorsOrigins.includes(origin)) {
+		headers.set('access-control-allow-origin', origin)
+		headers.set('access-control-allow-credentials', 'true')
+		headers.set('access-control-expose-headers', REQUEST_ID_HEADER)
+		if (preflight) {
+			headers.set('access-control-allow-methods', 'GET, HEAD, PUT, POST, DELETE, PATCH, OPTIONS')
+			headers.set(
+				'access-control-allow-headers',
+				'content-type, x-locale, x-captcha-response, x-request-id'
+			)
+			headers.set('access-control-max-age', '600')
+		}
+	}
+	const platformResponse = response as PlatformResponse
+	const init: PlatformResponseInit = {
+		status: response.status,
+		statusText: response.statusText,
+		headers,
+		cf: platformResponse.cf,
+		webSocket: platformResponse.webSocket
+	}
+	const result = new Response(response.body, init) as PlatformResponse
+	if ('cf' in platformResponse && !('cf' in result)) {
+		Object.defineProperty(result, 'cf', { value: platformResponse.cf })
+	}
+	if ('webSocket' in platformResponse && !('webSocket' in result)) {
+		Object.defineProperty(result, 'webSocket', { value: platformResponse.webSocket })
+	}
+	return result
+}
+
+function corsAllowlist(value: string | undefined): string[] {
+	const origins = (value ? value.split(',') : DEFAULT_CORS_ORIGINS)
+		.map((origin) => origin.trim())
+		.filter(Boolean)
+	if (origins.includes('*')) throw new Error('corsOrigins must not contain a wildcard')
+	const invalidOrigin = origins.find((origin) => canonicalOrigin(origin) !== origin)
+	if (invalidOrigin) throw new Error('corsOrigins must contain only complete HTTP origins')
+	return [...new Set(origins)]
+}
+
+function boundedTimeout(value: number | undefined): number {
+	const timeout = value ?? DEFAULT_UPSTREAM_TIMEOUT_MS
+	const invalid = !Number.isInteger(timeout) || timeout < 1 || timeout > MAX_UPSTREAM_TIMEOUT_MS
+	if (invalid) throw new Error('upstreamTimeoutMs must be an integer between 1 and 300000')
+	return timeout
+}
+
+async function fetchUpstream({
+	target,
+	request,
+	requestId,
+	timeoutMs
+}: {
+	target: GatewayTarget
+	request: Request
+	requestId: string
+	timeoutMs: number
+}): Promise<Response> {
+	const controller = new AbortController()
+	const headers = new Headers(request.headers)
+	headers.set(REQUEST_ID_HEADER, requestId)
+	const forwarded = new Request(request, { headers, signal: controller.signal })
+	let timedOut = false
+	const cancellation = new Promise<never>((_, reject) => {
+		controller.signal.addEventListener('abort', () => reject(controller.signal.reason), {
+			once: true
+		})
+	})
+	const cancelFromCaller = () => controller.abort(request.signal.reason)
+	if (request.signal.aborted) cancelFromCaller()
+	else request.signal.addEventListener('abort', cancelFromCaller, { once: true })
+	const timer = setTimeout(() => {
+		timedOut = true
+		controller.abort(new UpstreamTimeoutError())
+	}, timeoutMs)
+	try {
+		return await Promise.race([target.fetch(forwarded), cancellation])
+	} catch (error) {
+		if (timedOut) throw new UpstreamTimeoutError()
+		throw error
+	} finally {
+		clearTimeout(timer)
+		request.signal.removeEventListener('abort', cancelFromCaller)
+	}
+}
+
 function canonicalOrigin(value: string): string {
 	const url = new URL(value)
-	if (url.origin !== value && \`\${url.origin}/\` !== value) {
-		throw new Error('${API_PUBLIC_ORIGIN} must be an HTTP origin without a path, query, or fragment')
-	}
-	if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-		throw new Error('${API_PUBLIC_ORIGIN} must use http or https')
-	}
+	if (url.origin !== value && \`\${url.origin}/\` !== value) throw new Error('${API_PUBLIC_ORIGIN} must be an HTTP origin without a path, query, or fragment')
+	if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('${API_PUBLIC_ORIGIN} must use http or https')
 	return url.origin
 }
 
@@ -187,25 +320,126 @@ export function createGateway(
 		canonicalApiOrigin: 'http://localhost:${HONO_GATEWAY.development.port}'
 	}
 ) {
-	const app = new Hono()
+	const app = new Hono<{ Variables: GatewayVariables }>()
 	const serverOrigin = canonicalOrigin(options.canonicalApiOrigin)
+	const allowedCorsOrigins = corsAllowlist(options.corsOrigins)
+	const timeoutMs = boundedTimeout(options.upstreamTimeoutMs)
+	const writeLog = options.logger ?? ((line: string) => console.log(line))
 
-	app.get('/api/healthz', (c) => c.text('ok'))
+	const respond = (c: GatewayContext, response: Response, preflight = false) =>
+		gatewayResponse(
+			response,
+			c.get('requestId'),
+			c.req.header('origin'),
+			allowedCorsOrigins,
+			preflight
+		)
+
+	app.use('*', async (c, next) => {
+		const id = requestId(c.req.header(REQUEST_ID_HEADER))
+		const startedAt = Date.now()
+		c.set('requestId', id)
+		await next()
+		writeLog(
+			JSON.stringify({
+				event: 'request_completed',
+				requestId: id,
+				method: c.req.method,
+				path: new URL(c.req.url).pathname,
+				status: c.res.status,
+				durationMs: Date.now() - startedAt
+			})
+		)
+	})
+
+	app.use('/api/*', async (c, next) => {
+		const pathname = new URL(c.req.url).pathname
+		const isPublicPath =
+			pathname === '/api/healthz' ||
+			pathname === '/api/openapi.json' ||
+			routes.some(({ prefix }) => matchesPrefix(pathname, prefix))
+		const isPreflight =
+			c.req.method === 'OPTIONS' &&
+			Boolean(c.req.header('origin')) &&
+			Boolean(c.req.header('access-control-request-method'))
+		if (!isPublicPath || !isPreflight) return next()
+		return respond(c, new Response(null, { status: 204 }), true)
+	})
+
+	app.get('/api/healthz', (c) => respond(c, c.text('ok')))
 	app.get('/api/openapi.json', (c) =>
-		c.json({ ...options.openApiDocument, servers: [{ url: serverOrigin }] })
+		respond(c, c.json({ ...options.openApiDocument, servers: [{ url: serverOrigin }] }))
 	)
 	app.all('*', async (c) => {
 		const pathname = new URL(c.req.url).pathname
 		const route = routes.find(({ prefix }) => matchesPrefix(pathname, prefix))
-		if (!route) return c.text('not found', 404)
+		if (!route) {
+			writeLog(
+				JSON.stringify({
+					event: 'route_not_found',
+					requestId: c.get('requestId'),
+					method: c.req.method,
+					path: pathname
+				})
+			)
+			return respond(c, c.text('not found', 404))
+		}
 
+		writeLog(
+			JSON.stringify({
+				event: 'route_selected',
+				requestId: c.get('requestId'),
+				method: c.req.method,
+				path: pathname,
+				target: route.target
+			})
+		)
 		const target = targets[route.target]
-		if (!target) return c.text('service unavailable', 503)
+		if (!target) {
+			writeLog(
+				JSON.stringify({
+					event: 'target_missing',
+					requestId: c.get('requestId'),
+					method: c.req.method,
+					path: pathname,
+					target: route.target
+				})
+			)
+			return respond(c, c.text('service unavailable', 503))
+		}
 
 		try {
-			return await target.fetch(c.req.raw)
-		} catch {
-			return c.text('bad gateway', 502)
+			const response = await fetchUpstream({
+				target,
+				request: c.req.raw,
+				requestId: c.get('requestId'),
+				timeoutMs
+			})
+			return respond(c, response)
+		} catch (error) {
+			if (error instanceof UpstreamTimeoutError) {
+				writeLog(
+					JSON.stringify({
+						event: 'upstream_timeout',
+						requestId: c.get('requestId'),
+						method: c.req.method,
+						path: pathname,
+						target: route.target,
+						timeoutMs
+					})
+				)
+				return respond(c, c.text('gateway timeout', 504))
+			}
+			writeLog(
+				JSON.stringify({
+					event: 'transport_failure',
+					requestId: c.get('requestId'),
+					method: c.req.method,
+					path: pathname,
+					target: route.target
+				})
+			)
+			return respond(c, c.text('bad gateway', 502))
 		}
 	})
 
@@ -224,7 +458,9 @@ export default {
 	fetch(request, env) {
 		return createGateway(env, {
 			openApiDocument,
-			canonicalApiOrigin: env.${API_PUBLIC_ORIGIN}
+			canonicalApiOrigin: env.${API_PUBLIC_ORIGIN},
+			corsOrigins: env.${API_CORS_ORIGINS},
+			upstreamTimeoutMs: Number(env.${GATEWAY_UPSTREAM_TIMEOUT_MS})
 		}).fetch(request, env)
 	}
 } satisfies ExportedHandler<Env>
@@ -263,7 +499,12 @@ const app = createGateway(
 		${AUTH_SERVICE.internalTarget}: httpTarget(process.env.${AUTH_SERVICE.transport.node.targetEnvironmentVariable} ?? 'http://${AUTH_SERVICE.transport.node.hostname}:${AUTH_SERVICE.development.port}'),
 		${USERS_SERVICE.internalTarget}: httpTarget(process.env.${USERS_SERVICE.transport.node.targetEnvironmentVariable} ?? 'http://${USERS_SERVICE.transport.node.hostname}:${USERS_SERVICE.development.port}')
 	},
-	{ openApiDocument, canonicalApiOrigin }
+	{
+		openApiDocument,
+		canonicalApiOrigin,
+		corsOrigins: process.env.${API_CORS_ORIGINS},
+		upstreamTimeoutMs: Number(process.env.${GATEWAY_UPSTREAM_TIMEOUT_MS} ?? 10000)
+	}
 )
 const hostname = process.env.HOST ?? '${HONO_GATEWAY.development.ip}'
 const port = Number(process.env.PORT ?? ${HONO_GATEWAY.development.port})
@@ -285,10 +526,13 @@ function wranglerJsonc(project: string, webHost: string): string {
 	// Replace <domain> with the project's apex domain.
 	"routes": [
 		{ "pattern": "api.<domain>", "custom_domain": true },
+		{ "pattern": "${webHost}/api", "zone_name": "<domain>" },
 		{ "pattern": "${webHost}/api/*", "zone_name": "<domain>" }
 	],
 	"vars": {
-		"${API_PUBLIC_ORIGIN}": "https://api.<domain>"
+		"${API_PUBLIC_ORIGIN}": "https://api.<domain>",
+		"${API_CORS_ORIGINS}": "https://${webHost}",
+		"${GATEWAY_UPSTREAM_TIMEOUT_MS}": "10000"
 	},
 	"services": [
 		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" },
@@ -376,17 +620,11 @@ function resolveParameterReference(
 ): JsonValue {
 	const prefix = '#/components/parameters/'
 	const encodedName = reference.startsWith(prefix) ? reference.slice(prefix.length) : ''
-	if (!encodedName || encodedName.includes('/') || /~(?:[^01]|$)/.test(encodedName)) {
-		throw new Error('fragment "' + owner + '" uses unsupported parameter reference "' + reference + '" at ' + location)
-	}
-	if (seen.has(reference)) {
-		throw new Error('fragment "' + owner + '" has cyclic parameter reference "' + reference + '" at ' + location)
-	}
+	if (!encodedName || encodedName.includes('/') || /~(?:[^01]|$)/.test(encodedName)) throw new Error('fragment "' + owner + '" uses unsupported parameter reference "' + reference + '" at ' + location)
+	if (seen.has(reference)) throw new Error('fragment "' + owner + '" has cyclic parameter reference "' + reference + '" at ' + location)
 	const name = encodedName.replaceAll('~1', '/').replaceAll('~0', '~')
 	const definition = parameterComponents?.[name]
-	if (definition === undefined) {
-		throw new Error('fragment "' + owner + '" cannot resolve parameter reference "' + reference + '" at ' + location)
-	}
+	if (definition === undefined) throw new Error('fragment "' + owner + '" cannot resolve parameter reference "' + reference + '" at ' + location)
 	if (isObject(definition) && typeof definition.$ref === 'string') {
 		return resolveParameterReference(
 			definition.$ref,
@@ -396,9 +634,7 @@ function resolveParameterReference(
 			new Set([...seen, reference])
 		)
 	}
-	if (!directParameterId(definition)) {
-		throw new Error('fragment "' + owner + '" cannot determine parameter identity for "' + reference + '" at ' + location)
-	}
+	if (!directParameterId(definition)) throw new Error('fragment "' + owner + '" cannot determine parameter identity for "' + reference + '" at ' + location)
 	return definition
 }
 
@@ -433,9 +669,7 @@ function validateParameters(
 		const descriptor = parameterDescriptor(parameter, parameterComponents, location + '[' + index + ']', owner)
 		if (!descriptor.identity) continue
 		const current = identities.get(descriptor.identity)
-		if (current && !sameJson(current, descriptor.definition)) {
-			throw new Error('parameter collision at ' + location + '.' + descriptor.identity)
-		}
+		if (current && !sameJson(current, descriptor.definition)) throw new Error('parameter collision at ' + location + '.' + descriptor.identity)
 		identities.set(descriptor.identity, descriptor.definition)
 	}
 }
@@ -447,9 +681,7 @@ function mergeParameters(
 	parameterComponents: Record<string, JsonValue> | undefined,
 	owner: string
 ): JsonValue[] {
-	if (!Array.isArray(existing) || !Array.isArray(incoming)) {
-		throw new Error('parameter collision at ' + location)
-	}
+	if (!Array.isArray(existing) || !Array.isArray(incoming)) throw new Error('parameter collision at ' + location)
 	const merged = structuredClone(existing)
 	const identities = new Map<string, JsonValue>()
 	for (const [index, parameter] of merged.entries()) {
@@ -464,9 +696,7 @@ function mergeParameters(
 			owner
 		)
 		const current = descriptor.identity ? identities.get(descriptor.identity) : undefined
-		if (current && !sameJson(current, descriptor.definition)) {
-			throw new Error('parameter collision at ' + location + '.' + descriptor.identity)
-		}
+		if (current && !sameJson(current, descriptor.definition)) throw new Error('parameter collision at ' + location + '.' + descriptor.identity)
 		if (!current && !merged.some((candidate) => sameJson(candidate, parameter))) {
 			merged.push(structuredClone(parameter))
 			if (descriptor.identity) identities.set(descriptor.identity, descriptor.definition)
@@ -481,50 +711,32 @@ export function composeOpenApi(fragments: readonly LoadedFragment[]): OpenApiDoc
 	const operationOwners = new Map<string, string>()
 	const pathIdentities = new Map<string, string>()
 	for (const fragment of [...fragments].sort((left, right) => compareText(left.owner, right.owner))) {
-		if (fragment.document.servers !== undefined) {
-			throw new Error('fragment "' + fragment.owner + '" must not declare servers')
-		}
-		if (fragment.document.openapi !== '3.0.0') {
-			throw new Error('fragment "' + fragment.owner + '" must use OpenAPI 3.0.0')
-		}
-		if (Object.keys(fragment.document.components?.callbacks ?? {}).length > 0) {
-			throw new Error('fragment "' + fragment.owner + '" uses unsupported callbacks at components.callbacks')
-		}
-		if (Object.keys(fragment.document.components?.links ?? {}).length > 0) {
-			throw new Error('fragment "' + fragment.owner + '" uses unsupported Link Objects at components.links')
-		}
+		if (fragment.document.servers !== undefined) throw new Error('fragment "' + fragment.owner + '" must not declare servers')
+		if (fragment.document.openapi !== '3.0.0') throw new Error('fragment "' + fragment.owner + '" must use OpenAPI 3.0.0')
+		if (Object.keys(fragment.document.components?.callbacks ?? {}).length > 0) throw new Error('fragment "' + fragment.owner + '" uses unsupported callbacks at components.callbacks')
+		if (Object.keys(fragment.document.components?.links ?? {}).length > 0) throw new Error('fragment "' + fragment.owner + '" uses unsupported Link Objects at components.links')
 		for (const [name, response] of Object.entries(fragment.document.components?.responses ?? {})) {
 			rejectResponseLinks(response, 'components.responses.' + name, fragment.owner)
 		}
 		for (const [group, entries] of Object.entries(fragment.document.components ?? {})) {
 			const target = (components[group] ??= {})
 			for (const [name, value] of Object.entries(entries)) {
-				if (target[name] !== undefined && !sameJson(target[name], value)) {
-					throw new Error('component collision at components.' + group + '.' + name)
-				}
+				if (target[name] !== undefined && !sameJson(target[name], value)) throw new Error('component collision at components.' + group + '.' + name)
 				if (target[name] === undefined) target[name] = structuredClone(value)
 			}
 		}
 		for (const [path, incoming] of Object.entries(fragment.document.paths)) {
-			if (!path.startsWith('/api/v1/') || path.startsWith('/api/auth/')) {
-				throw new Error('fragment "' + fragment.owner + '" path "' + path + '" must use /api/v1')
-			}
+			if (!path.startsWith('/api/v1/') || path.startsWith('/api/auth/')) throw new Error('fragment "' + fragment.owner + '" path "' + path + '" must use /api/v1')
 			const pathIdentity = path.replaceAll(/\\{[^}]+\\}/g, '{}')
 			const equivalentPath = pathIdentities.get(pathIdentity)
-			if (equivalentPath && equivalentPath !== path) {
-				throw new Error('path collision between templates "' + equivalentPath + '" and "' + path + '"')
-			}
+			if (equivalentPath && equivalentPath !== path) throw new Error('path collision between templates "' + equivalentPath + '" and "' + path + '"')
 			pathIdentities.set(pathIdentity, path)
-			if (incoming.$ref !== undefined) {
-				throw new Error(
+			if (incoming.$ref !== undefined) throw new Error(
 					'fragment "' + fragment.owner + '" uses unsupported Path Item $ref at paths.' + path + '.$ref'
 				)
-			}
-			if (incoming.servers !== undefined) {
-				throw new Error(
+			if (incoming.servers !== undefined) throw new Error(
 					'fragment "' + fragment.owner + '" must not declare servers at paths.' + path + '.servers'
 				)
-			}
 			validateParameters(
 				incoming.parameters,
 				'paths.' + path + '.parameters',
@@ -533,19 +745,13 @@ export function composeOpenApi(fragments: readonly LoadedFragment[]): OpenApiDoc
 			)
 			for (const [method, operation] of Object.entries(incoming)) {
 				if (!methods.has(method)) continue
-				if (!isObject(operation) || typeof operation.operationId !== 'string') {
-					throw new Error('missing operationId at paths.' + path + '.' + method)
-				}
-				if (operation.callbacks !== undefined) {
-					throw new Error(
+				if (!isObject(operation) || typeof operation.operationId !== 'string') throw new Error('missing operationId at paths.' + path + '.' + method)
+				if (operation.callbacks !== undefined) throw new Error(
 						'fragment "' + fragment.owner + '" uses unsupported callbacks at paths.' + path + '.' + method + '.callbacks'
 					)
-				}
-				if (operation.servers !== undefined) {
-					throw new Error(
+				if (operation.servers !== undefined) throw new Error(
 						'fragment "' + fragment.owner + '" must not declare servers at paths.' + path + '.' + method + '.servers'
 					)
-				}
 				validateParameters(
 					operation.parameters,
 					'paths.' + path + '.' + method + '.parameters',
@@ -562,13 +768,9 @@ export function composeOpenApi(fragments: readonly LoadedFragment[]): OpenApiDoc
 					}
 				}
 				const operationId = operation.operationId
-				if (!operationId.startsWith(fragment.operationIdPrefix)) {
-					throw new Error('operationId "' + operationId + '" must start with "' + fragment.operationIdPrefix + '"')
-				}
+				if (!operationId.startsWith(fragment.operationIdPrefix)) throw new Error('operationId "' + operationId + '" must start with "' + fragment.operationIdPrefix + '"')
 				const owner = operationOwners.get(operationId)
-				if (owner) {
-					throw new Error('duplicate operationId "' + operationId + '" in "' + owner + '" and "' + fragment.owner + '"')
-				}
+				if (owner) throw new Error('duplicate operationId "' + operationId + '" in "' + owner + '" and "' + fragment.owner + '"')
 				operationOwners.set(operationId, fragment.owner)
 			}
 			const current = paths[path]
@@ -619,9 +821,7 @@ async function main(): Promise<void> {
 	const hash = createHash('sha256').update(rendered).digest('hex')
 	if (process.argv.includes('--check')) {
 		const checked = await readFile(outputPath, 'utf8').catch(() => '')
-		if (checked !== rendered) {
-			throw new Error('apps/api/openapi.json drifted; run pnpm openapi:compose')
-		}
+		if (checked !== rendered) throw new Error('apps/api/openapi.json drifted; run pnpm openapi:compose')
 		console.log('OpenAPI is current (sha256:' + hash + ')')
 		return
 	}
@@ -662,6 +862,22 @@ Each domain service owns a public OpenAPI fragment. Run pnpm openapi:compose aft
 fragment, then run pnpm openapi:check to verify the checked apps/api/openapi.json artifact.
 The checked document has no deployment server. At runtime, /api/openapi.json adds exactly
 one server from the explicit ${API_PUBLIC_ORIGIN} environment variable.
+
+## Operational behavior
+
+Every request receives one \`x-request-id\`. The gateway forwards it to the selected service,
+returns it in the response, and includes it in structured gateway and service logs. Routing logs
+contain only the request ID, method, path, target, outcome, status, and duration; they do not include
+headers, cookies, query strings, or bodies.
+
+\`${API_CORS_ORIGINS}\` is a comma-separated list of complete browser origins allowed to call
+the canonical API origin with credentials. Wildcards are rejected. Same-origin web requests use the
+web alias and do not depend on CORS.
+
+\`${GATEWAY_UPSTREAM_TIMEOUT_MS}\` sets the bounded private-service timeout in milliseconds and
+defaults to 10000 on Node. Missing targets return \`503\`, transport failures return \`502\`, and
+timeouts return \`504\`. Upstream responses otherwise pass through without retries, aggregation,
+caching, authorization, or trusted-user headers.
 
 ## Local development
 

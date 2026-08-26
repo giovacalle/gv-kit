@@ -21,16 +21,6 @@ const localize: Handle = ({ event, resolve }) =>
 	})
 /*@gvkit:endif*/
 
-/*@gvkit:if honoGatewayCfWorkers*/
-const forwardApiAlias: Handle = ({ event, resolve }) => {
-	const isApiPath =
-		event.url.pathname === '/api' || event.url.pathname.startsWith('/api/')
-	const gateway = event.platform?.env?.__GATEWAY_TARGET__
-	if (!isApiPath || !gateway) return resolve(event)
-	return gateway.fetch(event.request)
-}
-
-/*@gvkit:endif*/
 /*@gvkit:if auth*/
 const attachUser: Handle = async ({ event, resolve }) => {
 	event.locals.user = await getSessionUser(event)
@@ -61,9 +51,6 @@ export const handleFetch: HandleFetch = async ({ event, request, fetch }) => {
 }
 /*@gvkit:endif*/
 export const handle: Handle = sequence(
-	/*@gvkit:if honoGatewayCfWorkers*/
-	forwardApiAlias,
-	/*@gvkit:endif*/
 	/*@gvkit:if i18nParaglide*/
 	localize,
 	/*@gvkit:endif*/

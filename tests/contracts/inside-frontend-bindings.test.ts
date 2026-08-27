@@ -16,9 +16,95 @@ const insideFixtures = readdirSync(fixturesDir)
 	}))
 	.filter((x) => x.cfg.choices.backend === 'inside-frontend')
 
+const integratedGuidancePlans = (['skip', 'resend', 'notifuse'] as const).flatMap((email) =>
+	[
+		{ label: 'local', deploy: 'skip' },
+		{ label: 'Docker', deploy: 'docker' },
+		{ label: 'Cloudflare', deploy: 'cf-workers' }
+	].map(({ label, deploy }) => ({
+		label: `${label} with ${email}`,
+		deploy,
+		entries: runGenerators(
+			GvKitConfig.parse({
+				configVersion: 2,
+				choices: {
+					name: `integrated-${deploy}-${email}`,
+					frontend: 'sveltekit',
+					marketing: 'inside-web',
+					backend: 'inside-frontend',
+					i18n: 'paraglide',
+					monitoring: [],
+					db: deploy === 'cf-workers' ? 'sqlite' : 'postgres',
+					apiClient: 'skip',
+					auth: [],
+					email,
+					aiTooling: ['claude', 'codex', 'opencode'],
+					deploy
+				}
+			})
+		)
+	}))
+)
+
+const integratedArchitecturePaths = [
+	'.ai/rules/',
+	'.claude/agents/',
+	'.claude/stack.json',
+	'apps/web/',
+	'packages/backend/',
+	'packages/db/',
+	'packages/i18n/'
+]
+
+function generatedGuidance(entries: ReturnType<typeof runGenerators>): string {
+	return entries
+		.filter(({ path }) => path.endsWith('.md') || path === '.claude/settings.json')
+		.map(({ content }) => content)
+		.join('\n')
+}
+
 describe('inside-frontend topology', () => {
+	for (const { label, deploy, entries } of integratedGuidancePlans) {
+		test(`${label} guidance resolves integrated architecture paths without split-backend instructions`, () => {
+			const guidance = generatedGuidance(entries)
+			const planPaths = entries.map(({ path }) => path)
+
+			expect(guidance).not.toMatch(
+				/apps\/api|private[- ]service|service binding|AUTH.{0,30}binding|binding.{0,30}AUTH|gateway|public HTTP/i
+			)
+			for (const reference of integratedArchitecturePaths) {
+				expect(guidance, reference).toContain(`\`${reference}\``)
+				expect(
+					planPaths.some((path) => path === reference || path.startsWith(reference)),
+					reference
+				).toBe(true)
+			}
+
+			for (const reference of ['apps/web/wrangler.jsonc', 'apps/web/src/app.d.ts']) {
+				if (deploy === 'cf-workers') {
+					expect(guidance, reference).toContain(`\`${reference}\``)
+					expect(planPaths, reference).toContain(reference)
+				} else {
+					expect(guidance, reference).not.toContain(`\`${reference}\``)
+				}
+			}
+		})
+	}
+	test('Umami retains the pre-gateway placeholder contract', () => {
+		const fixture = insideFixtures.find(({ cfg }) => cfg.choices.monitoring.includes('umami'))
+		if (!fixture) throw new Error('inside-frontend Umami fixture is missing')
+		const appHtml = runGenerators(fixture.cfg).find(
+			(entry) => entry.path === 'apps/web/src/app.html'
+		)
+		if (!appHtml) throw new Error('generated web app template is missing')
+
+		expect(appHtml.content).toContain('src="https://umami.example.com/script.js"')
+		expect(appHtml.content).toContain('data-website-id="__UMAMI_WEBSITE_ID__"')
+		expect(appHtml.content).not.toContain('PUBLIC_UMAMI_')
+	})
+
 	for (const email of ['resend', 'notifuse'] as const) {
-		test(`Astro plus Cloudflare plus ${email} retains pre-gateway shared output`, () => {
+		test(`Astro plus Cloudflare plus ${email} emits topology-correct shared output`, () => {
 			const cfg = GvKitConfig.parse({
 				configVersion: 2,
 				choices: {
@@ -51,8 +137,8 @@ describe('inside-frontend topology', () => {
 			expect(scripts['deploy:staging']).toBe(
 				'test -n "$STAGING_ALIAS" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --name demo-marketing-$STAGING_ALIAS'
 			)
-			expect(mailerReadme.content).toContain('consumers (e.g. `apps/api/auth`)')
-			expect(mailerReadme.content).not.toContain('consumers (e.g. `services/auth`)')
+			expect(mailerReadme.content).not.toContain('apps/api/auth')
+			expect(mailerReadme.content).not.toContain('services/auth')
 		})
 	}
 

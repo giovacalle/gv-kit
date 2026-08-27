@@ -175,7 +175,11 @@ async function loadGeneratedGateway() {
 	const module = (await import(moduleUrl)) as {
 		createGateway(
 			targets: Record<string, never>,
-			options: { openApiDocument: OpenApiDocument; canonicalApiOrigin: string }
+			options: {
+				openApiDocument: OpenApiDocument
+				canonicalApiOrigin: string
+				publicOrigins?: string
+			}
 		): { fetch(request: Request): Promise<Response> }
 	}
 	URL.revokeObjectURL(moduleUrl)
@@ -319,7 +323,15 @@ describe('gateway OpenAPI composition', () => {
 			'parameter collision at paths./api/v1/example.parameters.header:x-request-id'
 		)
 
-		const withComponents = (owner: string, schemaType: string, parameterType: string) => {
+		const withComponents = ({
+			owner,
+			schemaType,
+			parameterType
+		}: {
+			owner: string
+			schemaType: string
+			parameterType: string
+		}) => {
 			const value = document({
 				path: `/api/v1/${owner}`,
 				operationId: `${owner}Get`
@@ -334,14 +346,14 @@ describe('gateway OpenAPI composition', () => {
 		}
 		expect(() =>
 			compose([
-				withComponents('example', 'string', 'string'),
-				withComponents('other', 'number', 'string')
+				withComponents({ owner: 'example', schemaType: 'string', parameterType: 'string' }),
+				withComponents({ owner: 'other', schemaType: 'number', parameterType: 'string' })
 			])
 		).toThrow('component collision at components.schemas.Shared')
 		expect(() =>
 			compose([
-				withComponents('example', 'string', 'string'),
-				withComponents('other', 'string', 'number')
+				withComponents({ owner: 'example', schemaType: 'string', parameterType: 'string' }),
+				withComponents({ owner: 'other', schemaType: 'string', parameterType: 'number' })
 			])
 		).toThrow('component collision at components.parameters.Shared')
 	})
@@ -447,22 +459,35 @@ describe('gateway OpenAPI composition', () => {
 })
 
 describe('gateway runtime OpenAPI', () => {
-	test('adds exactly one configured canonical server and ignores request host headers', async () => {
+	test('adds exactly one configured canonical server and rejects unknown public hosts', async () => {
 		const { createGateway } = await loadGeneratedGateway()
 		const checked = JSON.parse(entry('apps/api/openapi.json')) as OpenApiDocument
 		for (const canonicalApiOrigin of [
 			'http://localhost:8786',
 			'https://preview-42.api.example.test'
 		]) {
-			const gateway = createGateway({}, { openApiDocument: checked, canonicalApiOrigin })
+			const gateway = createGateway({}, {
+				openApiDocument: checked,
+				canonicalApiOrigin,
+				publicOrigins: canonicalApiOrigin
+			})
 			const response = await gateway.fetch(
+				new Request(`${canonicalApiOrigin}/api/openapi.json`, {
+					headers: {
+						'x-forwarded-host': 'attacker.example',
+						'x-forwarded-proto': 'http'
+					}
+				})
+			)
+			const rejected = await gateway.fetch(
 				new Request('https://attacker.example/api/openapi.json', {
-					headers: { host: 'attacker.example', 'x-forwarded-host': 'attacker.example' }
+					headers: { 'x-forwarded-host': new URL(canonicalApiOrigin).host }
 				})
 			)
 			const runtime = (await response.json()) as OpenApiDocument
 			expect(runtime.servers).toEqual([{ url: canonicalApiOrigin }])
 			expect(runtime.paths).toEqual(checked.paths)
+			expect(rejected.status).toBe(421)
 		}
 		expect(checked.servers).toBeUndefined()
 	})

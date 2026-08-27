@@ -23,6 +23,8 @@ type GatewayModule = {
 				paths: Record<string, unknown>
 			}
 			canonicalApiOrigin: string
+			publicOrigins?: string
+			trustedIngressSecret?: string
 			corsOrigins?: string
 			logger?: (line: string) => void
 			upstreamTimeoutMs?: number
@@ -130,6 +132,7 @@ describe('dual-origin gateway authentication', () => {
 			{
 				openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
 				canonicalApiOrigin: 'https://api.example.test',
+				publicOrigins: 'https://app.example.test,https://api.example.test',
 				corsOrigins: 'https://app.example.test,https://preview.example.test',
 				logger: () => undefined
 			}
@@ -223,14 +226,21 @@ describe('dual-origin gateway authentication', () => {
 				['set-cookie', 'session=two; Path=/; HttpOnly; SameSite=Lax']
 			]
 		})
-		const gateway = createGateway({
-			AUTH: {
-				async fetch(request) {
-					forwarded = request
-					return upstream
+		const gateway = createGateway(
+			{
+				AUTH: {
+					async fetch(request) {
+						forwarded = request
+						return upstream
+					}
 				}
+			},
+			{
+				openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
+				canonicalApiOrigin: 'https://api.example.test',
+				publicOrigins: 'https://app.example.test,https://api.example.test'
 			}
-		})
+		)
 		const request = new Request('https://app.example.test/api/auth/sign-in/email-otp', {
 			method: 'POST',
 			headers: {
@@ -286,17 +296,80 @@ describe('dual-origin gateway authentication', () => {
 		)
 	})
 
-	test('the Node gateway preserves public host and protocol for Better Auth', () => {
-		const entries = planFixture('hono-skip-auth-emailotp')
-		const gateway = entries.find((entry) => entry.path === 'apps/api/src/index.ts')!.content
+	test('the gateway derives forwarding metadata only from approved public origins', async () => {
+		const { createGateway } = await loadGeneratedGateway()
+		const forwarded: Request[] = []
+		const gateway = createGateway(
+			{
+				AUTH: {
+					async fetch(request) {
+						forwarded.push(request)
+						return new Response('auth')
+					}
+				}
+			},
+			{
+				openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
+				canonicalApiOrigin: 'https://api.example.test',
+				publicOrigins: 'https://app.example.test,https://api.example.test',
+				trustedIngressSecret: 'trusted-ingress-secret',
+				logger: () => undefined
+			}
+		)
 
-		expect(gateway).toMatch(
-			/request\.headers\.get\('x-forwarded-host'\)\s*\?\? request\.headers\.get\('host'\)\s*\?\? incoming\.host/
+		const forgedUnknown = await gateway.fetch(
+			new Request('http://evil.example.test/api/auth/get-session', {
+				headers: {
+					'x-forwarded-host': 'app.example.test',
+					'x-forwarded-proto': 'https'
+				}
+			})
 		)
-		expect(gateway).toMatch(
-			/request\.headers\.get\('x-forwarded-proto'\)\s*\?\? incoming\.protocol\.slice\(0, -1\)/
+		const approvedWeb = await gateway.fetch(
+			new Request('https://app.example.test/api/auth/get-session', {
+				headers: {
+					'x-forwarded-host': 'evil.example.test',
+					'x-forwarded-proto': 'http'
+				}
+			})
 		)
-		expect(gateway).toContain("redirect: 'manual'")
+		const approvedApi = await gateway.fetch(
+			new Request('https://api.example.test/api/auth/get-session')
+		)
+		const schemeMismatchedWeb = await gateway.fetch(
+			new Request('http://app.example.test/api/auth/get-session')
+		)
+		const schemeMismatchedApi = await gateway.fetch(
+			new Request('http://api.example.test/api/auth/get-session')
+		)
+		const trustedSsr = await gateway.fetch(
+			new Request('http://gateway.internal/api/auth/get-session', {
+				headers: {
+					'x-forwarded-host': 'app.example.test',
+					'x-forwarded-proto': 'https',
+					'x-gateway-ingress-secret': 'trusted-ingress-secret'
+				}
+			})
+		)
+
+		expect(forgedUnknown.status).toBe(421)
+		expect(await forgedUnknown.text()).toBe('misdirected request')
+		expect(approvedWeb.status).toBe(200)
+		expect(approvedApi.status).toBe(200)
+		expect(schemeMismatchedWeb.status).toBe(421)
+		expect(schemeMismatchedApi.status).toBe(421)
+		expect(trustedSsr.status).toBe(200)
+		expect(
+			forwarded.map((request) => ({
+				host: request.headers.get('x-forwarded-host'),
+				proto: request.headers.get('x-forwarded-proto')
+			}))
+		).toEqual([
+			{ host: 'app.example.test', proto: 'https' },
+			{ host: 'api.example.test', proto: 'https' },
+			{ host: 'app.example.test', proto: 'https' }
+		])
+		expect(forwarded.at(-1)?.headers.get('x-gateway-ingress-secret')).toBeNull()
 	})
 
 	test('private session validation preserves the authoritative public origin', () => {

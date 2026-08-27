@@ -54,6 +54,8 @@ export function generateFrontendSveltekit(cfg: GvKitConfig): FileEntry[] {
 			insideFrontendAuthNoEmailOtp:
 				isInsideFrontend && hasAuth && !cfg.choices.auth.includes('emailOTP'),
 			honoGateway: cfg.choices.backend === 'hono',
+			honoGatewayDocker:
+				cfg.choices.backend === 'hono' && cfg.choices.deploy === 'docker',
 			honoAuth: cfg.choices.backend === 'hono' && hasAuth,
 			honoAuthEmailOtp:
 				cfg.choices.backend === 'hono' && hasAuth && cfg.choices.auth.includes('emailOTP'),

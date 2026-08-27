@@ -24,6 +24,9 @@ export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 		{ path: '.env.example', content: renderEnvExample(cfg) },
 		{ path: 'LICENSE', content: LICENSE_MIT }
 	]
+	if (cfg.choices.backend === 'hono') {
+		entries.push({ path: 'scripts/local.mjs', content: renderLocalScript(cfg) })
+	}
 	if (cfg.choices.backend === 'hono' && cfg.choices.deploy === 'cf-workers') {
 		entries.push({ path: '.env.cloudflare.example', content: renderCloudflareEnvExample(cfg) })
 	}
@@ -32,7 +35,7 @@ export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 
 function renderRootPackageJson(cfg: GvKitConfig): string {
 	const scripts: Record<string, string> = {
-		dev: 'turbo run dev',
+		dev: cfg.choices.backend === 'hono' ? 'node scripts/local.mjs dev' : 'turbo run dev',
 		build: 'turbo run build',
 		test: 'turbo run test',
 		typecheck: 'turbo run typecheck',
@@ -42,6 +45,7 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 	}
 	if (cfg.choices.backend === 'hono') {
 		const gatewayPackage = honoPackageIdentity(cfg.choices.name, HONO_GATEWAY)
+		scripts['local:prepare'] = 'node scripts/local.mjs prepare'
 		scripts['openapi:compose'] = `pnpm --filter ${gatewayPackage} openapi:compose`
 		scripts['openapi:check'] = `pnpm --filter ${gatewayPackage} openapi:check`
 	}
@@ -163,9 +167,9 @@ function renderTurboJson(cfg: GvKitConfig): string {
 		dev: {
 			...(cfg.choices.backend === 'hono' ? { dependsOn: ['^build'] } : {}),
 			cache: false,
-			persistent: true,
-			...(cfg.choices.backend === 'hono' ? { env: ['API_PUBLIC_ORIGIN'] } : {})
-		}
+			persistent: true
+		},
+		...(cfg.choices.backend === 'hono' ? renderHonoDevTasks(cfg) : {})
 	}
 
 	if (cfg.choices.deploy === 'cf-workers') {
@@ -190,6 +194,134 @@ function renderTurboJson(cfg: GvKitConfig): string {
 			2
 		) + '\n'
 	)
+}
+
+function renderHonoDevTasks(cfg: GvKitConfig) {
+	const task = (env: string[]) => ({ dependsOn: ['^build'], cache: false, persistent: true, env })
+	const databaseEnv = cfg.choices.db === 'postgres' ? 'DATABASE_URL' : 'SQLITE_PATH'
+	const authEnv = [databaseEnv]
+	if (cfg.choices.auth.length > 0) {
+		authEnv.push('BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS')
+	}
+	if (cfg.choices.auth.includes('google')) {
+		authEnv.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
+	}
+	if (cfg.choices.email === 'resend') authEnv.push('RESEND_API_KEY', 'FROM_EMAIL')
+	if (cfg.choices.email === 'notifuse') {
+		authEnv.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
+	}
+	if (cfg.choices.auth.includes('emailOTP')) authEnv.push('TURNSTILE_SECRET_KEY')
+
+	const webEnv: string[] = [HONO_GATEWAY.transport.node.targetEnvironmentVariable]
+	if (cfg.choices.deploy !== 'cf-workers') webEnv.push('GATEWAY_TRUSTED_INGRESS_SECRET')
+	if (cfg.choices.marketing === 'astro') webEnv.push('PUBLIC_APP_URL')
+	if (cfg.choices.auth.includes('emailOTP')) webEnv.push('PUBLIC_TURNSTILE_SITE_KEY')
+
+	const tasks: Record<string, ReturnType<typeof task>> = {
+		[`${honoPackageIdentity(cfg.choices.name, HONO_GATEWAY)}#dev`]: task([
+			'API_PUBLIC_ORIGIN',
+			'GATEWAY_PUBLIC_ORIGINS',
+			...(cfg.choices.deploy === 'cf-workers' ? [] : ['GATEWAY_TRUSTED_INGRESS_SECRET']),
+			'API_CORS_ORIGINS',
+			'GATEWAY_UPSTREAM_TIMEOUT_MS',
+			AUTH_SERVICE.transport.node.targetEnvironmentVariable,
+			USERS_SERVICE.transport.node.targetEnvironmentVariable
+		]),
+		[`${honoPackageIdentity(cfg.choices.name, AUTH_SERVICE)}#dev`]: task(authEnv),
+		[`${honoPackageIdentity(cfg.choices.name, USERS_SERVICE)}#dev`]: task([
+			databaseEnv,
+			AUTH_SERVICE.transport.node.targetEnvironmentVariable
+		]),
+		[`${cfg.choices.name}-web#dev`]: task(webEnv)
+	}
+	if (cfg.choices.marketing === 'astro') {
+		tasks[`${cfg.choices.name}-marketing#dev`] = task([
+			'PUBLIC_MARKETING_URL',
+			'PUBLIC_APP_URL'
+		])
+	}
+	return tasks
+}
+
+function renderLocalScript(cfg: GvKitConfig): string {
+	const required = [
+		'API_PUBLIC_ORIGIN',
+		'GATEWAY_PUBLIC_ORIGINS',
+		...(cfg.choices.deploy === 'cf-workers' ? [] : ['GATEWAY_TRUSTED_INGRESS_SECRET']),
+		'API_CORS_ORIGINS',
+		'GATEWAY_UPSTREAM_TIMEOUT_MS',
+		HONO_GATEWAY.transport.node.targetEnvironmentVariable,
+		AUTH_SERVICE.transport.node.targetEnvironmentVariable,
+		USERS_SERVICE.transport.node.targetEnvironmentVariable
+	]
+	if (cfg.choices.db === 'postgres') required.push('DATABASE_URL')
+	if (cfg.choices.auth.length > 0) {
+		required.push('BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS')
+	}
+	if (cfg.choices.auth.includes('google')) {
+		required.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
+	}
+	if (cfg.choices.auth.includes('emailOTP')) required.push('TURNSTILE_SECRET_KEY')
+	if (cfg.choices.marketing === 'astro') {
+		required.push('PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL')
+	}
+	if (cfg.choices.auth.includes('emailOTP')) required.push('PUBLIC_TURNSTILE_SITE_KEY')
+
+	const prepareTask =
+		cfg.choices.deploy === 'cf-workers' && cfg.choices.db === 'sqlite'
+			? 'db:prepare:local'
+			: 'db:push'
+	const prepareArgs = [
+		'--filter',
+		'@repo/db',
+		prepareTask,
+		...(prepareTask === 'db:push' ? ['--force'] : [])
+	]
+	return `import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { loadEnvFile } from 'node:process'
+
+const envPath = resolve('.env')
+if (!existsSync(envPath)) {
+	console.error('[local] Missing .env. Run \`cp .env.example .env\`, fill the required values, then retry.')
+	process.exit(1)
+}
+loadEnvFile(resolve('.env'))
+
+let localDatabasePath
+if (process.env.SQLITE_PATH?.startsWith('file:./')) {
+	localDatabasePath = resolve(process.env.SQLITE_PATH.slice(5))
+	mkdirSync(dirname(localDatabasePath), { recursive: true })
+	process.env.SQLITE_PATH = \`file:\${localDatabasePath}\`
+}
+
+const required = ${JSON.stringify(required)}
+const missing = required.filter((name) => !process.env[name]?.trim())
+if (missing.length > 0) {
+	console.error(\`[local] Missing required values in .env: \${missing.join(', ')}. Fill them and retry.\`)
+	process.exit(1)
+}
+
+const commands = {
+	dev: ['exec', 'turbo', 'run', 'dev', '--filter=./apps/*', '--filter=./services/*'],
+	prepare: ${JSON.stringify(prepareArgs)}
+}
+const action = process.argv[2]
+const args = commands[action]
+if (!args) {
+	console.error('[local] Expected one command: dev or prepare.')
+	process.exit(1)
+}
+
+const result = spawnSync('pnpm', args, { env: process.env, stdio: 'inherit' })
+if (result.error) throw result.error
+if (action === 'prepare' && localDatabasePath && !existsSync(localDatabasePath)) {
+	console.error('[local] Database preparation did not create the configured SQLite database.')
+	process.exit(1)
+}
+process.exit(result.status ?? 1)
+`
 }
 
 function renderRootTsconfig(cfg: GvKitConfig): string {
@@ -232,7 +364,7 @@ ${wranglerTypes}.DS_Store
 .env.local
 .env.*.local
 **/.dev.vars
-*.local
+${cfg.choices.backend === 'hono' && cfg.choices.db === 'sqlite' && cfg.choices.deploy !== 'cf-workers' ? '.data/\n' : ''}*.local
 *.tsbuildinfo
 `
 }
@@ -274,6 +406,16 @@ function renderReadme(cfg: GvKitConfig): string {
 		stackLines.push(`- Deploy: ${deployLabel}`)
 	}
 
+	const quickstart =
+		cfg.choices.backend === 'hono'
+			? `pnpm install
+cp .env.example .env
+# Fill the required values in .env.
+pnpm local:prepare
+pnpm dev`
+			: `pnpm install
+pnpm dev`
+
 	return `# ${name}
 
 Type-safe full-stack monorepo with sensible defaults — install, run, ship.
@@ -281,8 +423,7 @@ Type-safe full-stack monorepo with sensible defaults — install, run, ship.
 ## Quickstart
 
 \`\`\`bash
-pnpm install
-pnpm dev
+${quickstart}
 \`\`\`
 
 ## Common commands
@@ -298,8 +439,11 @@ pnpm dev
 
 ## Environment
 
-Copy \`.env.example\` to \`.env\` and fill in any secrets your services need.
-For workers, secrets go through \`wrangler secret put <NAME>\` rather than \`.env\`.
+${
+		cfg.choices.backend === 'hono'
+			? 'Copy `.env.example` to `.env`, fill the required values, then run `pnpm local:prepare` once. Root `pnpm dev` loads this file and starts the complete local topology with Turbo strict environment filtering. Production Worker secrets go through `wrangler secret put <NAME>` rather than `.env`.'
+			: 'Copy `.env.example` to `.env` and fill in any secrets your services need.\nFor workers, secrets go through `wrangler secret put <NAME>` rather than `.env`.'
+	}
 ${renderPublicOrigins(cfg)}
 ${renderCloudflareDatabaseSetup(cfg)}
 
@@ -420,7 +564,9 @@ function renderCloudflareEnvExample(cfg: GvKitConfig): string {
 API_PUBLIC_ORIGIN=https://api.<domain>
 ${
 	cfg.choices.backend === 'hono'
-		? `# Browser origins allowed to call the canonical API origin with credentials.
+		? `# Public origins accepted by the gateway boundary.
+GATEWAY_PUBLIC_ORIGINS=https://${webHost},https://api.<domain>
+# Browser origins allowed to call the canonical API origin with credentials.
 API_CORS_ORIGINS=https://${webHost}
 # Explicit bounded private-service timeout in milliseconds.
 GATEWAY_UPSTREAM_TIMEOUT_MS=10000
@@ -456,13 +602,19 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push('# Auth (better-auth)')
 		lines.push('BETTER_AUTH_SECRET=')
 		if (isHono) {
-			const productionWebHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
-			lines.push(
-				`BETTER_AUTH_ALLOWED_HOSTS=localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786,${productionWebHost},api.<domain>,<preview-web-host>,<preview-api-host>`
-			)
-			lines.push(
-				`AUTH_CORS_ORIGINS=http://localhost:3000,http://localhost:5173,https://${productionWebHost},https://<preview-web-host>`
-			)
+			if (cfg.choices.deploy === 'docker') {
+				lines.push(
+					'BETTER_AUTH_ALLOWED_HOSTS=localhost:3000,api.localhost:3000,localhost:8786,127.0.0.1:8786'
+				)
+				lines.push(
+					'AUTH_CORS_ORIGINS=http://localhost:3000,http://api.localhost:3000'
+				)
+			} else {
+				lines.push(
+					'BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,localhost:8786,127.0.0.1:8786'
+				)
+				lines.push('AUTH_CORS_ORIGINS=http://localhost:5173')
+			}
 		} else {
 			lines.push('BETTER_AUTH_URL=http://localhost:5173')
 			lines.push('BETTER_AUTH_TRUSTED_ORIGINS=http://localhost:5173')
@@ -483,8 +635,8 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push('DATABASE_URL=postgres://user:pass@localhost:5432/' + cfg.choices.name)
 	} else if (cfg.choices.db === 'sqlite' && isHono && !isCf) {
 		lines.push('')
-		lines.push('# SQLite (services use libsql — defaults to file:./local.db each)')
-		lines.push('# SQLITE_PATH=file:./local.db')
+		lines.push('# SQLite (one root-relative database shared by local services)')
+		lines.push('SQLITE_PATH=file:./.data/local.db')
 	}
 
 	if (cfg.choices.email === 'resend') {
@@ -525,12 +677,23 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push('')
 		lines.push('# Public gateway ingress')
 		lines.push('# Canonical API origin advertised by the gateway OpenAPI endpoint')
-		lines.push('API_PUBLIC_ORIGIN=http://localhost:8786')
-		lines.push(`# Browser API alias: http://localhost:${webAliasPort}/api/*`)
-		const productionWebHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
 		lines.push(
-			`API_CORS_ORIGINS=http://localhost:${webAliasPort},https://${productionWebHost},https://<preview-web-host>`
+			cfg.choices.deploy === 'docker'
+				? 'API_PUBLIC_ORIGIN=http://api.localhost:3000'
+				: 'API_PUBLIC_ORIGIN=http://localhost:8786'
 		)
+		lines.push('# Public origins accepted by the gateway boundary')
+		lines.push(
+			cfg.choices.deploy === 'docker'
+				? 'GATEWAY_PUBLIC_ORIGINS=http://localhost:3000,http://api.localhost:3000,http://localhost:8786,http://127.0.0.1:8786'
+				: `GATEWAY_PUBLIC_ORIGINS=http://localhost:${webAliasPort},http://localhost:8786,http://127.0.0.1:8786`
+		)
+		if (!isCf) {
+			lines.push('# Shared only by the private Node SSR transport and gateway')
+			lines.push('GATEWAY_TRUSTED_INGRESS_SECRET=')
+		}
+		lines.push(`# Browser API alias: http://localhost:${webAliasPort}/api/*`)
+		lines.push(`API_CORS_ORIGINS=http://localhost:${webAliasPort}`)
 		lines.push('GATEWAY_UPSTREAM_TIMEOUT_MS=10000')
 		lines.push('')
 		lines.push('# Private gateway and service targets')

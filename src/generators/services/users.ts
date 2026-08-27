@@ -24,10 +24,6 @@ function deriveRuntime(deploy: GvKitConfig['choices']['deploy']): Runtime {
 	return deploy === 'cf-workers' ? 'cf-workers' : 'node'
 }
 
-/**
- * Emit the private `services/users/` Worker. It reaches auth state only through
- * the deploy-aware middleware and the auth service's `/internal/session` endpoint.
- */
 export function generateUsersService(cfg: GvKitConfig): FileEntry[] {
 	const project = cfg.choices.name
 	const usesSqlite = cfg.choices.db === 'sqlite'
@@ -150,7 +146,7 @@ function pkgJson({
 		devDependencies['@cloudflare/workers-types'] = '^5.20260825.1'
 		devDependencies['@types/node'] = '^24.0.0'
 		scripts['cf-typegen'] = CLOUDFLARE_TYPEGEN_SCRIPT
-		scripts.dev = 'pnpm cf-typegen && wrangler dev'
+		scripts.dev = 'pnpm cf-typegen && wrangler dev --persist-to ../../.wrangler/state'
 		scripts.build = 'wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'

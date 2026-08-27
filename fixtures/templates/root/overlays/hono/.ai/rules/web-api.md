@@ -49,11 +49,13 @@ For same-origin `/api` and `/api/*` SSR requests, `handleFetch` in `hooks.server
 
 Preserve method, path, query, request headers, cookies, body streams, redirects, status, and response headers when changing this transport.
 
+<!--@gvkit:if auth-->
 ## Auth uses Better Auth
 
-Use `authClient` from `$lib/auth/client.ts` and keep its base URL unset. Browser auth calls use the same-origin `/api/auth/*` gateway alias. Session loading in `$lib/server/load-session.ts` uses `event.fetch`, so SSR follows the same private gateway transport as other API calls.
+Use the official Better Auth client, `authClient` from `$lib/auth/client.ts`, and keep its base URL unset. Browser auth calls use the same-origin `/api/auth/*` gateway alias. Session loading in `$lib/server/load-session.ts` uses `event.fetch`, so SSR follows the same private gateway transport as owned API requests.
 
-Do not create an auth fetch wrapper or SvelteKit auth facade.
+Do not send owned API operations through Better Auth. Do not create an auth fetch wrapper or SvelteKit auth facade.
+<!--@gvkit:endif-->
 
 ## Anti-patterns
 
@@ -68,5 +70,7 @@ Do not create an auth fetch wrapper or SvelteKit auth facade.
 | Add `src/lib/api/<service>.ts` wrappers | Use request-scoped `fetch` at the consuming boundary |
 <!--@gvkit:endif-->
 | Bind the web Worker to a private domain service | Bind web only to `GATEWAY` for SSR |
-| Write a `lib/api/auth.ts` wrapper | Use `authClient` from `$lib/auth/client` |
+<!--@gvkit:if auth-->
+| Write a `lib/api/auth.ts` wrapper | Use the official Better Auth client from `$lib/auth/client` |
+<!--@gvkit:endif-->
 | Add a SvelteKit `/api` or `/api/*` proxy | Keep browser ingress on the more-specific Cloudflare gateway routes |

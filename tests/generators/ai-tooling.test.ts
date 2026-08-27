@@ -37,6 +37,65 @@ function content(entries: ReturnType<typeof generateAiTooling>, path: string): s
 	return hit.content
 }
 
+const AI_TOOLING_SELECTIONS = [
+	['claude'],
+	['codex'],
+	['opencode'],
+	['claude', 'codex'],
+	['claude', 'opencode'],
+	['codex', 'opencode'],
+	['claude', 'codex', 'opencode']
+] as const
+
+const CLIENT_ONLY_GUIDANCE =
+	/packages\/openapi-client|@repo\/openapi-client|usersGetMe(?:Options)?|Hey API|TanStack Query|domain-prefixed operations|flat gateway client|web-query\.md/
+
+function markdownGuidance(entries: ReturnType<typeof runGenerators>): string {
+	return entries
+		.filter(({ path }) => path.endsWith('.md'))
+		.map(({ content }) => content)
+		.join('\n')
+}
+
+type CapabilityPathReference = {
+	reference: string
+	resolvedPath: string
+}
+
+function capabilityPathInventory(
+	entries: ReturnType<typeof runGenerators>
+): CapabilityPathReference[] {
+	const aliases = new Map([
+		['apps/api/openapi.json', 'apps/api/openapi.json'],
+		['packages/openapi-client', 'packages/openapi-client'],
+		['packages/openapi-client/', 'packages/openapi-client'],
+		['.ai/rules/web-api.md', '.ai/rules/web-api.md'],
+		['.ai/rules/web-query.md', '.ai/rules/web-query.md'],
+		['hooks.server.ts', 'apps/web/src/hooks.server.ts'],
+		['$lib/auth/client.ts', 'apps/web/src/lib/auth/client.ts'],
+		['$lib/server/load-session.ts', 'apps/web/src/lib/server/load-session.ts']
+	])
+	const inventory = new Map<string, CapabilityPathReference>()
+	for (const entry of entries.filter(({ path }) => path.endsWith('.md'))) {
+		for (const match of entry.content.matchAll(/`([^`]+)`/g)) {
+			const reference = match[1]!
+			const resolvedPath = aliases.get(reference)
+			if (resolvedPath) inventory.set(reference, { reference, resolvedPath })
+		}
+	}
+	return [...inventory.values()].sort((a, b) => a.reference.localeCompare(b.reference))
+}
+
+function expectCapabilityPathsToResolve(entries: ReturnType<typeof runGenerators>): void {
+	const planPaths = entries.map(({ path }) => path)
+	for (const { reference, resolvedPath } of capabilityPathInventory(entries)) {
+		expect(
+			planPaths.some((path) => path === resolvedPath || path.startsWith(`${resolvedPath}/`)),
+			reference
+		).toBe(true)
+	}
+}
+
 describe('generateAiTooling — decision matrix', () => {
 	test('empty selection emits nothing', () => {
 		const entries = generateAiTooling(makeCfg([]))
@@ -111,21 +170,11 @@ describe('generateAiTooling — decision matrix', () => {
 })
 
 describe('generateAiTooling — Astro marketing guidance', () => {
-	const subsets = [
-		['claude'],
-		['codex'],
-		['opencode'],
-		['claude', 'codex'],
-		['claude', 'opencode'],
-		['codex', 'opencode'],
-		['claude', 'codex', 'opencode']
-	] as const
-
 	test('empty AI selection still emits nothing in Astro mode', () => {
 		expect(generateAiTooling(makeCfg([], { marketing: 'astro' }))).toEqual([])
 	})
 
-	for (const selected of subsets) {
+	for (const selected of AI_TOOLING_SELECTIONS) {
 		test(`Astro + ${selected.join('+')} emits one canonical rule and only native specialists`, () => {
 			const entries = generateAiTooling(makeCfg([...selected], { marketing: 'astro' }))
 			const p = paths(entries)
@@ -250,6 +299,46 @@ describe('generated Hono gateway guidance', () => {
 			}
 		})
 	}
+
+	for (const selected of AI_TOOLING_SELECTIONS) {
+		test(`Hono without a generated client gates client guidance for ${selected.join('+')}`, () => {
+			const entries = runGenerators(makeCfg([...selected], { apiClient: 'skip' }))
+			const guidance = markdownGuidance(entries)
+
+			expect(entries.some(({ path }) => path.startsWith('packages/openapi-client/'))).toBe(false)
+			expect(entries.some(({ path }) => path === '.ai/rules/web-query.md')).toBe(false)
+			expect(guidance).not.toMatch(CLIENT_ONLY_GUIDANCE)
+			expect(guidance).toContain('`apps/api/openapi.json`')
+			expect(guidance).toContain('same-origin `/api/*`')
+			expect(guidance).toContain('request-scoped `fetch`')
+			expect(guidance).toContain('`GATEWAY` Service Binding')
+			expect(guidance).toContain('official Better Auth client')
+			expectCapabilityPathsToResolve(entries)
+		})
+	}
+
+	test('Hono with Hey API retains flat-client and separate auth guidance', () => {
+		const entries = runGenerators(
+			makeCfg(['claude', 'codex', 'opencode'], { apiClient: 'hey-api' })
+		)
+		const guidance = markdownGuidance(entries)
+		const inventory = capabilityPathInventory(entries)
+
+		expect(guidance).toContain('flat `@repo/openapi-client` package')
+		expect(guidance).toContain('domain-prefixed operations')
+		expect(guidance).toContain("request-scoped `fetch`")
+		expect(guidance).toContain('official Better Auth client')
+		expect(guidance).toContain('Do not send owned API operations through Better Auth')
+		expect(inventory).toContainEqual({
+			reference: 'packages/openapi-client/',
+			resolvedPath: 'packages/openapi-client'
+		})
+		expect(inventory).toContainEqual({
+			reference: '.ai/rules/web-query.md',
+			resolvedPath: '.ai/rules/web-query.md'
+		})
+		expectCapabilityPathsToResolve(entries)
+	})
 })
 
 describe('generateAiTooling — content gating', () => {

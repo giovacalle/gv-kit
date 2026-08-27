@@ -81,20 +81,82 @@ describe('generateRoot — Astro project shape', () => {
 
 	test('Hono auth documents host and CORS allowlists without a public auth URL', () => {
 		const entries = generateRoot(
-			makeCfg({ marketing: 'inside-web', auth: ['emailOTP'], email: 'resend' })
+			makeCfg({
+				marketing: 'inside-web',
+				auth: ['emailOTP'],
+				email: 'resend',
+				deploy: 'skip'
+			})
 		)
 		const turbo = JSON.parse(content(entries, 'turbo.json')) as {
-			tasks: { build: { env?: string[] } }
+			tasks: Record<string, { dependsOn?: string[]; env?: string[] }>
 		}
-		expect(turbo.tasks.build.env).toEqual(['PUBLIC_TURNSTILE_SITE_KEY'])
+		expect(turbo.tasks.build?.env).toEqual(['PUBLIC_TURNSTILE_SITE_KEY'])
+		expect(turbo.tasks['@demo/api-gateway#dev']?.dependsOn).toEqual(['^build'])
+		expect(turbo.tasks['@demo/api-gateway#dev']?.env).toEqual([
+			'API_PUBLIC_ORIGIN',
+			'GATEWAY_PUBLIC_ORIGINS',
+			'GATEWAY_TRUSTED_INGRESS_SECRET',
+			'API_CORS_ORIGINS',
+			'GATEWAY_UPSTREAM_TIMEOUT_MS',
+			'AUTH_URL',
+			'USERS_URL'
+		])
+		expect(turbo.tasks['@demo/auth-worker#dev']?.env).toEqual([
+			'SQLITE_PATH',
+			'BETTER_AUTH_SECRET',
+			'BETTER_AUTH_ALLOWED_HOSTS',
+			'AUTH_CORS_ORIGINS',
+			'RESEND_API_KEY',
+			'FROM_EMAIL',
+			'TURNSTILE_SECRET_KEY'
+		])
+		expect(turbo.tasks['@demo/users-worker#dev']?.env).toEqual(['SQLITE_PATH', 'AUTH_URL'])
+		expect(turbo.tasks['demo-web#dev']?.env).toEqual([
+			'GATEWAY_URL',
+			'GATEWAY_TRUSTED_INGRESS_SECRET',
+			'PUBLIC_TURNSTILE_SITE_KEY'
+		])
 		const env = content(entries, '.env.example')
 		expect(env).not.toContain('PUBLIC_AUTH_URL')
 		expect(env).toContain('API_PUBLIC_ORIGIN=http://localhost:8786')
-		expect(env).toContain('BETTER_AUTH_ALLOWED_HOSTS=')
-		expect(env).toContain('<domain>,api.<domain>,<preview-web-host>,<preview-api-host>')
-		expect(env).toContain('AUTH_CORS_ORIGINS=')
+		expect(env).toContain(
+			'BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,localhost:8786,127.0.0.1:8786'
+		)
+		expect(env).toContain('AUTH_CORS_ORIGINS=http://localhost:5173')
+		expect(env).not.toContain('<preview-web-host>')
 		expect(env).toContain('PUBLIC_TURNSTILE_SITE_KEY=')
 		expect(env).toContain('FROM_EMAIL=')
+		expect(env).toContain('SQLITE_PATH=file:./.data/local.db')
+	})
+
+	test('Hono root commands load, validate, and prepare the generated local environment', () => {
+		const entries = generateRoot(
+			makeCfg({ marketing: 'inside-web', auth: ['emailOTP'], email: 'resend', deploy: 'skip' })
+		)
+		const pkg = JSON.parse(content(entries, 'package.json')) as {
+			scripts: Record<string, string>
+		}
+		const local = content(entries, 'scripts/local.mjs')
+		const readme = content(entries, 'README.md')
+
+		expect(pkg.scripts.dev).toBe('node scripts/local.mjs dev')
+		expect(pkg.scripts.typecheck).toBe('turbo run typecheck')
+		expect(pkg.scripts['local:prepare']).toBe('node scripts/local.mjs prepare')
+		expect(local).toContain("loadEnvFile(resolve('.env'))")
+		expect(local).toContain('Missing .env. Run `cp .env.example .env`')
+		expect(local).toContain('"API_PUBLIC_ORIGIN"')
+		expect(local).toContain('"GATEWAY_PUBLIC_ORIGINS"')
+		expect(local).toContain('"GATEWAY_TRUSTED_INGRESS_SECRET"')
+		expect(local).toContain('"BETTER_AUTH_SECRET"')
+		expect(local).toContain('"TURNSTILE_SECRET_KEY"')
+		expect(local).toContain("dev: ['exec', 'turbo', 'run', 'dev'")
+		expect(local).toContain("'--filter=./apps/*', '--filter=./services/*'")
+		expect(local).not.toContain('typecheck')
+		expect(local).not.toContain('--env-mode=loose')
+		expect(readme).toContain('cp .env.example .env')
+		expect(readme).toContain('pnpm local:prepare')
+		expect(readme).toContain('pnpm dev')
 	})
 
 	test('non-Cloudflare Hono auth uses gateway ingress allowlists', () => {
@@ -129,7 +191,11 @@ describe('generateRoot — Astro project shape', () => {
 		const env = content(entries, '.env.example')
 		expect(env).toContain('PUBLIC_APP_URL=http://localhost:3000')
 		expect(env).toContain('# Browser API alias: http://localhost:3000/api/*')
-		expect(env).toContain('API_PUBLIC_ORIGIN=http://localhost:8786')
+		expect(env).toContain('API_PUBLIC_ORIGIN=http://api.localhost:3000')
+		expect(env).toContain(
+			'GATEWAY_PUBLIC_ORIGINS=http://localhost:3000,http://api.localhost:3000,http://localhost:8786,http://127.0.0.1:8786'
+		)
+		expect(env).toContain('GATEWAY_TRUSTED_INGRESS_SECRET=')
 		expect(env).toContain('GATEWAY_URL=http://127.0.0.1:8786')
 		expect(env).toContain('AUTH_URL=http://127.0.0.1:8787')
 		expect(env).toContain('USERS_URL=http://127.0.0.1:8788')

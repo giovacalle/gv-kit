@@ -101,13 +101,6 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 		)
 	}
 
-	if (runtime === 'cf-workers') {
-		entries.push({
-			path: honoServicePath(AUTH_SERVICE, '.dev.vars'),
-			content: devVars({ usesSqlite, wantsGoogle, wantsEmailOTP, email })
-		})
-	}
-
 	return entries
 }
 
@@ -163,7 +156,7 @@ function pkgJson({
 		devDependencies['@cloudflare/workers-types'] = '^5.20260825.1'
 		devDependencies['@types/node'] = '^24.0.0'
 		scripts['cf-typegen'] = CLOUDFLARE_TYPEGEN_SCRIPT
-		scripts.dev = `${prepareMailer}pnpm cf-typegen && wrangler dev`
+		scripts.dev = `${prepareMailer}pnpm cf-typegen && wrangler dev --persist-to ../../.wrangler/state`
 		scripts.build = 'wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
@@ -296,44 +289,6 @@ function wranglerJsonc({
 	"observability": { "enabled": true }${dbBlock}
 }
 `
-}
-
-function devVars({
-	usesSqlite,
-	wantsGoogle,
-	wantsEmailOTP,
-	email
-}: {
-	usesSqlite: boolean
-	wantsGoogle: boolean
-	wantsEmailOTP: boolean
-	email: EmailChoice
-}): string {
-	const lines = [
-		'# Local-only placeholders. Wrangler reads this ignored file for `wrangler dev`.',
-		'# Install real secret values with `wrangler secret put <NAME>` before deployment.',
-		'BETTER_AUTH_ALLOWED_HOSTS=localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786',
-		'AUTH_CORS_ORIGINS=http://localhost:3000,http://localhost:5173',
-		'BETTER_AUTH_SECRET=local-only-better-auth-secret-at-least-32-characters'
-	]
-	if (!usesSqlite) lines.push('DATABASE_URL=postgres://user:pass@localhost:5432/local')
-	if (wantsGoogle) {
-		lines.push('GOOGLE_CLIENT_ID=local-only-google-client-id')
-		lines.push('GOOGLE_CLIENT_SECRET=local-only-google-client-secret')
-	}
-	if (wantsEmailOTP) {
-		lines.push('TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA')
-		if (email === 'resend') {
-			lines.push('RESEND_API_KEY=local-only-resend-api-key')
-			lines.push('FROM_EMAIL=local@example.test')
-		}
-		if (email === 'notifuse') {
-			lines.push('NOTIFUSE_API_KEY=local-only-notifuse-api-key')
-			lines.push('NOTIFUSE_WORKSPACE_ID=local-only-notifuse-workspace')
-			lines.push('NOTIFUSE_BASE_URL=http://127.0.0.1:3000')
-		}
-	}
-	return `${lines.join('\n')}\n`
 }
 
 function envDts({

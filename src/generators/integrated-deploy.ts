@@ -16,10 +16,6 @@ export function generateIntegratedDeploy(cfg: GvKitConfig): FileEntry[] {
 	}
 }
 
-/* ------------------------------------------------------------------ */
-/*  cf-workers                                                         */
-/* ------------------------------------------------------------------ */
-
 function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 	const project = cfg.choices.name
 	const db = cfg.choices.db
@@ -30,7 +26,7 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		},
 		{
 			path: '.github/workflows/deploy-staging.yml',
-			content: deployStagingWorkflow(project, db, cfg)
+			content: deployStagingWorkflow({ project, db, cfg })
 		},
 		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) }
 	]
@@ -154,11 +150,15 @@ ${publicVariableChecks ? `${publicVariableChecks}\n` : ''}          pnpm turbo r
 `
 }
 
-function deployStagingWorkflow(
-	project: string,
-	db: GvKitConfig['choices']['db'],
+function deployStagingWorkflow({
+	project,
+	db,
+	cfg
+}: {
+	project: string
+	db: GvKitConfig['choices']['db']
 	cfg: GvKitConfig
-): string {
+}): string {
 	const hasMarketing = cfg.choices.marketing === 'astro'
 	const previewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
 	const stagingConfigStep = writeStagingWranglerConfigStep(db)
@@ -590,10 +590,6 @@ function neonPreviewDbCleanupStep(project: string): string {
           NEON_API_KEY: \${{ secrets.NEON_API_KEY }}`
 }
 
-/* ------------------------------------------------------------------ */
-/*  docker                                                             */
-/* ------------------------------------------------------------------ */
-
 interface DockerOpts {
 	project: string
 	isHono: boolean
@@ -775,10 +771,6 @@ CMD ["pnpm", "exec", "drizzle-kit", "migrate"]
 ${marketingRuntime}
 `
 }
-
-/* ------------------------------------------------------------------ */
-/*  docker-compose.yml                                                 */
-/* ------------------------------------------------------------------ */
 
 function dockerCompose(opts: DockerOpts): string {
 	const services: string[] = []

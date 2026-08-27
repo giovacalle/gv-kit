@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { generateAiTooling } from '../../src/generators/ai-tooling.js'
 import { generateFrontendSveltekit } from '../../src/generators/frontend-sveltekit.js'
+import { generateRoot } from '../../src/generators/root.js'
 import type { FileEntry } from '../../src/lib/files.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
@@ -252,6 +254,44 @@ describe('generateFrontendSveltekit — variable substitution', () => {
 			expect(e.content).not.toContain('__COMPAT_DATE__')
 			expect(e.content).not.toContain('__AUTH_URL__')
 		}
+	})
+})
+
+describe('generateFrontendSveltekit — monitoring boundary', () => {
+	test('Hono Umami retains placeholder behavior without becoming a gateway runtime requirement', () => {
+		const cfg = makeCfg({ marketing: 'astro', monitoring: ['umami', 'posthog'] })
+		const appHtml = findEntry(generateFrontendSveltekit(cfg), 'apps/web/src/app.html')!.content
+		const rootEntries = generateRoot(cfg)
+		const envExample = findEntry(rootEntries, '.env.example')!.content
+		const webGuidance = findEntry(
+			generateAiTooling(cfg),
+			'.ai/rules/web-svelte.md'
+		)!.content
+		const turbo = JSON.parse(findEntry(rootEntries, 'turbo.json')!.content) as {
+			tasks: Record<string, { env?: string[] }>
+		}
+		const webDevEnv = turbo.tasks['demo-web#dev']!.env
+		const gatewayDevEnv = turbo.tasks['@demo/api-gateway#dev']!.env
+		const marketingDevEnv = turbo.tasks['demo-marketing#dev']!.env
+
+		expect(appHtml).toContain('src="https://umami.example.com/script.js"')
+		expect(appHtml).toContain('data-website-id="__UMAMI_WEBSITE_ID__"')
+		expect(appHtml).not.toContain('PUBLIC_UMAMI_')
+		expect(webDevEnv).toContain('GATEWAY_URL')
+		expect(webDevEnv).not.toContain('PUBLIC_UMAMI_HOST')
+		expect(webDevEnv).not.toContain('PUBLIC_UMAMI_WEBSITE_ID')
+		expect(webDevEnv).not.toContain('PUBLIC_POSTHOG_KEY')
+		expect(webDevEnv).not.toContain('PUBLIC_POSTHOG_HOST')
+		expect(envExample).toContain('PUBLIC_UMAMI_WEBSITE_ID=')
+		expect(envExample).toContain('PUBLIC_UMAMI_HOST=')
+		expect(envExample).toContain('PUBLIC_POSTHOG_KEY=')
+		expect(envExample).toContain('PUBLIC_POSTHOG_HOST=https://eu.i.posthog.com')
+		expect(webGuidance).toContain(
+			'Wrappers around **third-party SDKs** with their own I/O surface (analytics, captcha, payments, transactional email)'
+		)
+		expect(gatewayDevEnv).toContain('API_PUBLIC_ORIGIN')
+		expect(gatewayDevEnv).toContain('GATEWAY_PUBLIC_ORIGINS')
+		expect(marketingDevEnv).toEqual(['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL'])
 	})
 })
 

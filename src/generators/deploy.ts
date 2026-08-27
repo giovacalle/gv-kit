@@ -27,10 +27,6 @@ export function generateDeploy(cfg: GvKitConfig): FileEntry[] {
 	}
 }
 
-/* ------------------------------------------------------------------ */
-/*  cf-workers                                                         */
-/* ------------------------------------------------------------------ */
-
 const WRANGLER_VERSION = '4.125.0'
 
 function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
@@ -43,7 +39,7 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		},
 		{
 			path: '.github/workflows/deploy-staging.yml',
-			content: deployStagingWorkflow(project, db, cfg)
+			content: deployStagingWorkflow({ project, db, cfg })
 		},
 		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) },
 		{
@@ -103,8 +99,22 @@ function cloudflarePreviewNameScript(): string {
 	return `import { createHash } from 'node:crypto'
 
 const MAX_WORKERS_DEV_NAME_LENGTH = 63
+const MAX_PREVIEW_ALIAS_LENGTH = 48
+
+export function validateCloudflarePreviewAlias(alias) {
+	if (typeof alias !== 'string' || !/^pr-[1-9][0-9]*$/.test(alias)) throw new Error('Preview alias must use the canonical pr-<positive integer> format')
+	if (alias.length > MAX_PREVIEW_ALIAS_LENGTH) throw new Error('Preview alias exceeds ' + MAX_PREVIEW_ALIAS_LENGTH + ' characters')
+	return alias
+}
+
+export function cloudflarePreviewAlias(previewId) {
+	const id = String(previewId)
+	if (!/^[1-9][0-9]*$/.test(id)) throw new Error('Preview id must be a positive integer')
+	return validateCloudflarePreviewAlias('pr-' + id)
+}
 
 export function cloudflarePreviewName(productionName, alias) {
+	validateCloudflarePreviewAlias(alias)
 	const directName = productionName + '-' + alias
 	if (directName.length <= MAX_WORKERS_DEV_NAME_LENGTH) return directName
 
@@ -117,8 +127,10 @@ export function cloudflarePreviewName(productionName, alias) {
 	return prefix + suffix
 }
 
-const [productionName, alias] = process.argv.slice(2)
-if (productionName && alias) console.log(cloudflarePreviewName(productionName, alias))
+const [command, value] = process.argv.slice(2)
+if (command === '--from-id' && value) console.log(cloudflarePreviewAlias(value))
+else if (command === '--validate' && value) console.log(validateCloudflarePreviewAlias(value))
+else if (command && value) console.log(cloudflarePreviewName(command, value))
 `
 }
 
@@ -384,6 +396,7 @@ for (const { config, configPath, normalizedPath, productionName } of sources) {
 		config.vars = {
 			...(config.vars ?? {}),
 			API_PUBLIC_ORIGIN: apiOrigin.origin,
+			GATEWAY_PUBLIC_ORIGINS: [webOrigin.origin, apiOrigin.origin, ...localOrigins].join(','),
 			API_CORS_ORIGINS: [webOrigin.origin, ...localOrigins].join(',')
 		}
 	}
@@ -508,12 +521,16 @@ function honoDeploymentSteps({
 	cfg,
 	stage,
 	env,
-	phase = 'all'
+	phase = 'all',
+	marketingEnv = '',
+	marketingVariableChecks = ''
 }: {
 	cfg: GvKitConfig
 	stage: CloudflareDeployStage
 	env: string
 	phase?: 'all' | 'gateway' | 'private' | 'public'
+	marketingEnv?: string
+	marketingVariableChecks?: string
 }): string {
 	const project = cfg.choices.name
 	const targets = [
@@ -540,26 +557,35 @@ function honoDeploymentSteps({
 		{ label: 'web', packageName: `${project}-web`, phase: 'public' }
 	].filter((target) => phase === 'all' || target.phase === phase)
 	return targets
-		.map(
-			({ label, packageName, secretsFile }) => `      - name: Deploy ${label} Worker
+		.map(({ label, packageName, secretsFile }) => {
+			const isMarketing = label === 'marketing'
+			return `      - name: Deploy ${label} Worker
         run: |
-          if [ "$DEPLOY_ALL" = "true" ]; then
+${isMarketing && marketingVariableChecks ? `${marketingVariableChecks}\n` : ''}          if [ "$DEPLOY_ALL" = "true" ]; then
             pnpm turbo run build --filter=${packageName}
             pnpm --filter ${packageName} deploy:${stage}
           else
             pnpm turbo run deploy:${stage} --affected --filter=${packageName}
           fi
         env:
-${env}${secretsFile ? `\n          STAGING_SECRETS_FILE: ${secretsFile}` : ''}`
-		)
+${env}${isMarketing ? marketingEnv : ''}${secretsFile ? `\n          STAGING_SECRETS_FILE: ${secretsFile}` : ''}`
+		})
 		.join('\n\n')
 }
 
 function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
+	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
 	const publicKeys = marketingPublicEnvKeys(cfg)
+	const nonMonitoringPublicKeys = publicKeys.filter((key) => !monitoringKeys.includes(key))
 	const publicOriginRequirements = workflowVariableRequirements(publicKeys)
-	const publicOriginEnv = workflowVariableEnv(publicKeys)
-	const publicVariableChecks = publicKeys.map((key) => `          test -n "$${key}"`).join('\n')
+	const publicOriginEnv = workflowVariableEnv(nonMonitoringPublicKeys)
+	const monitoringEnv = workflowVariableEnv(monitoringKeys)
+	const publicVariableChecks = nonMonitoringPublicKeys
+		.map((key) => `          test -n "$${key}"`)
+		.join('\n')
+	const monitoringVariableChecks = monitoringKeys
+		.map((key) => `          test -n "$${key}"`)
+		.join('\n')
 	const deployEnv = `          DEPLOY_ALL: \${{ github.event_name == 'workflow_dispatch' || steps.scm.outputs.deploy_all == 'true' }}
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -567,7 +593,13 @@ function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
           TURBO_SCM_HEAD: \${{ steps.scm.outputs.head }}${publicOriginEnv}`
 	const deploymentSteps =
 		cfg.choices.backend === 'hono'
-			? honoDeploymentSteps({ cfg, stage: 'production', env: deployEnv })
+			? honoDeploymentSteps({
+					cfg,
+					stage: 'production',
+					env: deployEnv,
+					marketingEnv: monitoringEnv,
+					marketingVariableChecks: monitoringVariableChecks
+				})
 			: `      - name: Deploy affected Workers
         run: |
 ${publicVariableChecks ? `${publicVariableChecks}\n` : ''}          pnpm turbo run deploy:production --affected
@@ -693,25 +725,33 @@ function previewPrivateSecretsStep(cfg: GvKitConfig, db: GvKitConfig['choices'][
 ${env}`
 }
 
-function deployStagingWorkflow(
-	project: string,
-	db: GvKitConfig['choices']['db'],
+function deployStagingWorkflow({
+	project,
+	db,
+	cfg
+}: {
+	project: string
+	db: GvKitConfig['choices']['db']
 	cfg: GvKitConfig
-): string {
+}): string {
 	const hasMarketing = cfg.choices.marketing === 'astro'
 	const isHono = cfg.choices.backend === 'hono'
-	const previewIngressGate = isHono ? honoPreviewIngressGateJob() : ''
+	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
+	const previewPublicKeys = cfg.choices.auth.includes('emailOTP')
+		? ['PUBLIC_TURNSTILE_SITE_KEY']
+		: []
+	const previewIngressGate = isHono ? honoPreviewIngressGateJob({ publicKeys: previewPublicKeys }) : ''
 	const basePreviewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
 	const previewDbJob = isHono
 		? basePreviewDbJob.replace('  preview-db:\n', '  preview-db:\n    needs: preview-ingress\n')
 		: basePreviewDbJob
 	const stagingConfigStep = writeStagingWranglerConfigStep({ db })
-	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
 	const requiredVariables = [
 		'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
 		'CLOUDFLARE_PREVIEW_API_DOMAIN',
 		'CLOUDFLARE_PREVIEW_ZONE_NAME',
-		...monitoringKeys
+		...monitoringKeys,
+		...previewPublicKeys
 	]
 	const publicOriginRequirement = workflowVariableRequirements(requiredVariables)
 	const authSecretRequirements = isHono
@@ -720,11 +760,14 @@ function deployStagingWorkflow(
 				.join('\n') + '\n'
 		: ''
 	const monitoringEnv = workflowVariableEnv(monitoringKeys)
-	const publicOriginEnv = hasMarketing
-		? `
+	const previewPublicEnv = workflowVariableEnv(previewPublicKeys)
+	const publicOriginEnv = `${
+		hasMarketing
+			? `
           PUBLIC_MARKETING_URL: \${{ steps.preview_config.outputs.marketing_origin }}
-          PUBLIC_APP_URL: \${{ steps.preview_config.outputs.web_origin }}${monitoringEnv}`
-		: ''
+          PUBLIC_APP_URL: \${{ steps.preview_config.outputs.web_origin }}`
+			: ''
+	}${previewPublicEnv}`
 	const deployEnv = `          DEPLOY_ALL: \${{ github.event.action != 'synchronize' }}
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -739,7 +782,13 @@ function deployStagingWorkflow(
 		? honoDeploymentSteps({ cfg, stage: 'staging', env: deployEnv, phase: 'gateway' })
 		: ''
 	const publicDeployments = isHono
-		? honoDeploymentSteps({ cfg, stage: 'staging', env: deployEnv, phase: 'public' })
+		? honoDeploymentSteps({
+				cfg,
+				stage: 'staging',
+				env: deployEnv,
+				phase: 'public',
+				marketingEnv: monitoringEnv
+			})
 		: `      - name: Deploy affected Workers (staging)
         run: pnpm turbo run deploy:staging --affected
         env:
@@ -770,7 +819,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: staging-\${{ github.event.pull_request.number || github.ref }}
+  group: staging-pr-\${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -789,7 +838,7 @@ ${previewDbJob}
         with:
           fetch-depth: 0
           filter: blob:none
-          ref: \${{ github.event.pull_request.head.sha }}
+          ref: \${{ github.event.pull_request.head.sha || github.sha }}
       - id: meta
         run: |
           echo "alias=\${{ needs.preview-db.outputs.alias }}" >> $GITHUB_OUTPUT
@@ -821,6 +870,7 @@ ${gatewayDeployment}
 ${publicDeployments}
 
       - uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request'
         with:
           header: staging-deploy
           message: |
@@ -868,14 +918,22 @@ function previewMigrationEnv(db: GvKitConfig['choices']['db']): string {
 		: `          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
 }
 
-function honoPreviewIngressGateJob(): string {
+function honoPreviewIngressGateJob({ publicKeys }: { publicKeys: string[] }): string {
+	const publicVariableValidation =
+		publicKeys.length === 0
+			? ''
+			: `      - name: Validate preview public variables
+        run: |
+${publicKeys.map((key) => `          test -n "$${key}"`).join('\n')}
+        env:${workflowVariableEnv(publicKeys)}
+`
 	return `  preview-ingress:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v4
-      - name: Verify managed preview ingress
+${publicVariableValidation}      - name: Verify managed preview ingress
         run: node scripts/verify-cloudflare-preview-ingress.mjs
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -885,13 +943,9 @@ function honoPreviewIngressGateJob(): string {
 `
 }
 
-const PREVIEW_ALIAS_SCRIPT = `raw="pr-\${{ github.event.pull_request.number || github.run_id }}"
-          alias=$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g' | cut -c1-48)
-          if ! printf '%s' "$alias" | grep -Eq '^[a-z][a-z0-9-]{0,47}$'; then
-            echo "Could not derive a safe preview alias" >&2
-            exit 1
-          fi
-          echo "alias=$alias" >> "$GITHUB_OUTPUT"`
+const PREVIEW_ALIAS_SCRIPT = `alias=$(node scripts/cloudflare-preview-name.mjs --from-id "\${{ github.event.pull_request.number || github.run_id }}")
+          echo "alias=$alias" >> "$GITHUB_OUTPUT"
+          printf '%s\\n' "gh workflow run cleanup-staging.yml -f alias=$alias" >> "$GITHUB_STEP_SUMMARY"`
 
 function d1PreviewDbJob(project: string): string {
 	return `  preview-db:
@@ -903,6 +957,7 @@ function d1PreviewDbJob(project: string): string {
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v4
       - id: meta
         run: |
           ${PREVIEW_ALIAS_SCRIPT}
@@ -941,6 +996,7 @@ function neonPreviewDbJob(project: string): string {
     permissions:
       contents: read
     steps:
+      - uses: actions/checkout@v4
       - id: meta
         run: |
           ${PREVIEW_ALIAS_SCRIPT}
@@ -960,9 +1016,9 @@ function neonPreviewDbJob(project: string): string {
 function cleanupStagingWorkflow(project: string, db: GvKitConfig['choices']['db']): string {
 	const previewDbCleanupStep =
 		db === 'sqlite' ? d1PreviewDbCleanupStep(project) : neonPreviewDbCleanupStep(project)
-	return `# Tear down a staging deploy when its PR closes (merged or rejected).
-# Worker names are discovered from checked-in wrangler.jsonc files and suffixed
-# with the preview alias. Source branches and production Workers are unchanged.
+	return `# Tear down a PR preview when it closes or a manual preview by canonical alias.
+# Cleanup always inventories Workers from the trusted default branch. Source
+# branches, production Workers, and shared wildcard DNS records are unchanged.
 ${db === 'postgres' ? '# Neon preview branch cleanup uses NEON_API_KEY and NEON_PROJECT_ID.\n' : ''}
 
 name: cleanup-staging
@@ -970,9 +1026,15 @@ name: cleanup-staging
 on:
   pull_request:
     types: [closed]
+  workflow_dispatch:
+    inputs:
+      alias:
+        description: Canonical preview alias reported by deploy-staging (pr-<positive integer>)
+        required: true
+        type: string
 
 concurrency:
-  group: staging-\${{ github.event.pull_request.number || github.ref }}
+  group: staging-\${{ inputs.alias || format('pr-{0}', github.event.pull_request.number) }}
   cancel-in-progress: true
 
 jobs:
@@ -982,33 +1044,30 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - id: checkout_head
+      - name: Checkout trusted preview inventory
         uses: actions/checkout@v4
-        continue-on-error: true
         with:
           fetch-depth: 1
-          ref: \${{ github.event.pull_request.head.sha }}
-      - id: checkout_base
-        if: steps.checkout_head.outcome != 'success'
-        uses: actions/checkout@v4
-        continue-on-error: true
-        with:
-          fetch-depth: 1
-          ref: \${{ github.event.pull_request.base.sha }}
-      - name: Require preview inventory checkout
-        if: steps.checkout_head.outcome != 'success' && steps.checkout_base.outcome != 'success'
+          ref: \${{ github.event.repository.default_branch }}
+      - name: Require trusted preview inventory
         run: |
-          echo "Could not check out PR head or base; preview cleanup cannot inventory resources." >&2
-          exit 1
+          if [ ! -f scripts/cloudflare-preview-name.mjs ] || [ ! -f scripts/cleanup-cloudflare-preview-workers.sh ]; then
+            echo "Trusted default-branch code is incomplete; preview cleanup cannot inventory resources." >&2
+            exit 1
+          fi
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      - id: branch
+      - id: alias
+        name: Validate preview alias
         run: |
-          ${PREVIEW_ALIAS_SCRIPT}
+          alias=$(node scripts/cloudflare-preview-name.mjs --validate "$RAW_PREVIEW_ALIAS")
+          echo "alias=$alias" >> "$GITHUB_OUTPUT"
+        env:
+          RAW_PREVIEW_ALIAS: \${{ inputs.alias || format('pr-{0}', github.event.pull_request.number) }}
 
       - name: Delete staging Workers
-        run: sh scripts/cleanup-cloudflare-preview-workers.sh "\${{ steps.branch.outputs.alias }}"
+        run: sh scripts/cleanup-cloudflare-preview-workers.sh "\${{ steps.alias.outputs.alias }}"
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -1016,6 +1075,7 @@ jobs:
 ${previewDbCleanupStep}
 
       - uses: marocchino/sticky-pull-request-comment@v2
+        if: github.event_name == 'pull_request'
         with:
           header: staging-deploy
           message: |
@@ -1029,7 +1089,7 @@ function d1PreviewDbCleanupStep(project: string): string {
 	return `      - name: Delete preview D1 database
         run: |
           set -euo pipefail
-          db_name="${project}-db-\${{ steps.branch.outputs.alias }}"
+          db_name="${project}-db-\${{ steps.alias.outputs.alias }}"
           db_id=$(npx wrangler@${WRANGLER_VERSION} d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
           if [ -z "$db_id" ]; then
             echo "Preview D1 database $db_name is missing or already deleted."
@@ -1046,7 +1106,7 @@ function neonPreviewDbCleanupStep(project: string): string {
 	return `      - name: Delete preview Neon branch
         run: |
           set -euo pipefail
-          branch_name="${project}-db-\${{ steps.branch.outputs.alias }}"
+          branch_name="${project}-db-\${{ steps.alias.outputs.alias }}"
           if ! branches_json=$(curl -fsS -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches"); then
             echo "Could not list Neon branches." >&2
             exit 1
@@ -1062,10 +1122,6 @@ function neonPreviewDbCleanupStep(project: string): string {
           NEON_PROJECT_ID: \${{ vars.NEON_PROJECT_ID }}
           NEON_API_KEY: \${{ secrets.NEON_API_KEY }}`
 }
-
-/* ------------------------------------------------------------------ */
-/*  docker                                                             */
-/* ------------------------------------------------------------------ */
 
 interface DockerOpts {
 	project: string
@@ -1273,10 +1329,6 @@ ${marketingRuntime}
 `
 }
 
-/* ------------------------------------------------------------------ */
-/*  docker-compose.yml                                                 */
-/* ------------------------------------------------------------------ */
-
 function dockerCompose(opts: DockerOpts): string {
 	const services: string[] = []
 	if (opts.isPostgres) services.push(postgresService())
@@ -1343,9 +1395,11 @@ function authService(opts: DockerOpts): string {
 	if (opts.hasAuth) {
 		env.push('      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}')
 		env.push(
-			'      BETTER_AUTH_ALLOWED_HOSTS: ${BETTER_AUTH_ALLOWED_HOSTS:-localhost:3000,localhost:8786,127.0.0.1:8786}'
+			'      BETTER_AUTH_ALLOWED_HOSTS: ${BETTER_AUTH_ALLOWED_HOSTS:-localhost:3000,api.localhost:3000,localhost:8786,127.0.0.1:8786}'
 		)
-		env.push('      AUTH_CORS_ORIGINS: ${AUTH_CORS_ORIGINS:-http://localhost:3000}')
+		env.push(
+			'      AUTH_CORS_ORIGINS: ${AUTH_CORS_ORIGINS:-http://localhost:3000,http://api.localhost:3000}'
+		)
 	}
 	if (opts.wantsGoogle) {
 		env.push('      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}')
@@ -1430,7 +1484,9 @@ function gatewayService(opts: DockerOpts): string {
       - "${HONO_GATEWAY.development.port}:${HONO_GATEWAY.development.port}"
     environment:
       PORT: "${HONO_GATEWAY.development.port}"
-      API_PUBLIC_ORIGIN: \${API_PUBLIC_ORIGIN:-http://localhost:${HONO_GATEWAY.development.port}}
+      API_PUBLIC_ORIGIN: \${API_PUBLIC_ORIGIN:-http://api.localhost:3000}
+      GATEWAY_PUBLIC_ORIGINS: \${GATEWAY_PUBLIC_ORIGINS:-http://localhost:3000,http://api.localhost:3000,http://localhost:${HONO_GATEWAY.development.port},http://127.0.0.1:${HONO_GATEWAY.development.port}}
+      GATEWAY_TRUSTED_INGRESS_SECRET: \${GATEWAY_TRUSTED_INGRESS_SECRET:?set GATEWAY_TRUSTED_INGRESS_SECRET in .env}
       API_CORS_ORIGINS: \${API_CORS_ORIGINS:-http://localhost:3000}
       GATEWAY_UPSTREAM_TIMEOUT_MS: \${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}
       ${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(AUTH_SERVICE)}
@@ -1452,7 +1508,8 @@ function ingressService(): string {
     environment:
       API_HOST: \${API_HOST:-api.localhost}
       PUBLIC_SCHEME: \${PUBLIC_SCHEME:-http}
-      NGINX_ENVSUBST_FILTER: "^(API_HOST|PUBLIC_SCHEME)$"
+      GATEWAY_TRUSTED_INGRESS_SECRET: \${GATEWAY_TRUSTED_INGRESS_SECRET:?set GATEWAY_TRUSTED_INGRESS_SECRET in .env}
+      NGINX_ENVSUBST_FILTER: "^(API_HOST|PUBLIC_SCHEME|GATEWAY_TRUSTED_INGRESS_SECRET)$"
     volumes:
       - ./docker/ingress.conf.template:/etc/nginx/templates/default.conf.template:ro
     depends_on:
@@ -1486,6 +1543,7 @@ server {
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Gateway-Ingress-Secret \${GATEWAY_TRUSTED_INGRESS_SECRET};
 		proxy_set_header X-Request-ID $request_id;
 	}
 
@@ -1494,6 +1552,7 @@ server {
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Gateway-Ingress-Secret \${GATEWAY_TRUSTED_INGRESS_SECRET};
 		proxy_set_header X-Request-ID $request_id;
 	}
 
@@ -1515,6 +1574,7 @@ server {
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Gateway-Ingress-Secret \${GATEWAY_TRUSTED_INGRESS_SECRET};
 		proxy_set_header X-Request-ID $request_id;
 	}
 }
@@ -1535,7 +1595,8 @@ function webService(opts: DockerOpts): string {
 
 	if (opts.isHono) {
 		env.push(
-			`      ${HONO_GATEWAY.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(HONO_GATEWAY)}`
+			`      ${HONO_GATEWAY.transport.node.targetEnvironmentVariable}: ${dockerServiceOrigin(HONO_GATEWAY)}`,
+			'      GATEWAY_TRUSTED_INGRESS_SECRET: ${GATEWAY_TRUSTED_INGRESS_SECRET:?set GATEWAY_TRUSTED_INGRESS_SECRET in .env}'
 		)
 	} else {
 		env.push(...dbEnvLines(opts, '      '))

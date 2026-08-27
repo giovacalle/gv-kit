@@ -10,7 +10,6 @@ const SERVICE_GENERATORS = {
 	users: generateUsersService
 } satisfies Record<HonoServiceIdentity, (cfg: GvKitConfig) => FileEntry[]>
 
-/** Emit one gateway application and its private services for Hono plans. */
 export function generateApi(cfg: GvKitConfig): FileEntry[] {
 	if (cfg.choices.backend !== 'hono') return []
 	return [

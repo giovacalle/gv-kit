@@ -348,7 +348,11 @@ async function runCommand(options: RunOptions): Promise<CommandEvidence> {
 		options.displayCommand ?? `${options.program} ${options.args.join(' ')}`,
 		[options.cwd]
 	)
-	await writeSanitizedArtifact(options.logPath, `$ ${command}\n\n${output}`, [options.cwd])
+	await writeSanitizedArtifact({
+		path: options.logPath,
+		content: `$ ${command}\n\n${output}`,
+		roots: [options.cwd]
+	})
 	const expectedExitCode = options.expectedExitCode ?? 0
 	const passed =
 		exitCode === expectedExitCode &&
@@ -421,11 +425,15 @@ function pnpmArgs(...args: string[]): string[] {
 	return [`pnpm@${PNPM_VERSION}`, ...args]
 }
 
-async function runSpecializedSeam(
-	entry: GatewayMatrixEntry,
-	entryRoot: string,
+async function runSpecializedSeam({
+	entry,
+	entryRoot,
+	logPath
+}: {
+	entry: GatewayMatrixEntry
+	entryRoot: string
 	logPath: string
-): Promise<
+}): Promise<
 	{ command: CommandEvidence; nestedCommands: CommandEvidence[]; project: string } | undefined
 > {
 	const common = ['--fixture', entry.fixture, '--output', entryRoot]
@@ -457,11 +465,15 @@ function provesWorkspaceGate(command: CommandEvidence, gate: WorkspaceGate): boo
 	return command.name === gate || command.name === `workspace-${gate}`
 }
 
-async function runStandardCommands(
-	project: string,
-	logs: string,
+async function runStandardCommands({
+	project,
+	logs,
+	commands
+}: {
+	project: string
+	logs: string
 	commands: CommandEvidence[]
-): Promise<void> {
+}): Promise<void> {
 	for (const task of REQUIRED_WORKSPACE_GATES) {
 		if (commands.some((command) => command.outcome === 'failed')) break
 		if (commands.some((command) => provesWorkspaceGate(command, task))) continue
@@ -493,17 +505,26 @@ async function workspaceGateAssertion(commands: CommandEvidence[]): Promise<Asse
 	})
 }
 
-async function verifyOpenApi(
-	project: string,
-	logs: string,
+async function verifyOpenApi({
+	project,
+	logs,
+	commands
+}: {
+	project: string
+	logs: string
 	commands: CommandEvidence[]
-): Promise<AssertionEvidence> {
-	const command = async (
-		name: string,
-		args: string[],
+}): Promise<AssertionEvidence> {
+	const recordOpenApiCommand = async ({
+		name,
+		args,
 		expectedExitCode = 0,
+		expectedOutput
+	}: {
+		name: string
+		args: string[]
+		expectedExitCode?: number
 		expectedOutput?: RegExp
-	) => {
+	}) => {
 		const result = await runCommand({
 			name,
 			program: 'corepack',
@@ -522,21 +543,36 @@ async function verifyOpenApi(
 	return assertion(
 		'OpenAPI composition, specific drift rejection, codegen, and typed consumers',
 		async () => {
-			await command('openapi-check-baseline', ['openapi:check'], 0, cleanDiagnostic)
-			await command('openapi-compose-first', ['openapi:compose'])
+			await recordOpenApiCommand({
+				name: 'openapi-check-baseline',
+				args: ['openapi:check'],
+				expectedExitCode: 0,
+				expectedOutput: cleanDiagnostic
+			})
+			await recordOpenApiCommand({ name: 'openapi-compose-first', args: ['openapi:compose'] })
 			const path = join(project, 'apps/api/openapi.json')
 			const first = await readFile(path, 'utf8')
 			const firstHash = createHash('sha256').update(first).digest('hex')
-			await command('openapi-compose-second', ['openapi:compose'])
+			await recordOpenApiCommand({ name: 'openapi-compose-second', args: ['openapi:compose'] })
 			const second = await readFile(path, 'utf8')
 			const secondHash = createHash('sha256').update(second).digest('hex')
 			if (first !== second) throw new Error('OpenAPI composition is not byte-identical')
 			await writeFile(path, `${second} `)
-			await command('openapi-drift-rejection', ['openapi:check'], 1, driftDiagnostic)
-			await command('openapi-compose-restore', ['openapi:compose'])
-			await command('openapi-check-final', ['openapi:check'], 0, cleanDiagnostic)
-			await command('openapi-codegen', ['codegen'])
-			await command('typed-consumer-check', ['typecheck'])
+			await recordOpenApiCommand({
+				name: 'openapi-drift-rejection',
+				args: ['openapi:check'],
+				expectedExitCode: 1,
+				expectedOutput: driftDiagnostic
+			})
+			await recordOpenApiCommand({ name: 'openapi-compose-restore', args: ['openapi:compose'] })
+			await recordOpenApiCommand({
+				name: 'openapi-check-final',
+				args: ['openapi:check'],
+				expectedExitCode: 0,
+				expectedOutput: cleanDiagnostic
+			})
+			await recordOpenApiCommand({ name: 'openapi-codegen', args: ['codegen'] })
+			await recordOpenApiCommand({ name: 'typed-consumer-check', args: ['typecheck'] })
 
 			const packageJson = JSON.parse(
 				await readFile(join(project, 'packages/openapi-client/package.json'), 'utf8')
@@ -706,18 +742,25 @@ async function residueAssertion(
 
 type WranglerConfig = {
 	name: string
+	main?: string
+	assets?: unknown
 	workers_dev?: boolean
 	preview_urls?: boolean
 	routes?: unknown[]
 	services?: Array<{ binding: string; service: string }>
 }
 
-async function cloudflareChecks(
-	entry: GatewayMatrixEntry,
-	project: string,
-	logs: string,
+async function cloudflareChecks({
+	entry,
+	project,
+	logs,
+	commands
+}: {
+	entry: GatewayMatrixEntry
+	project: string
+	logs: string
 	commands: CommandEvidence[]
-): Promise<AssertionEvidence[]> {
+}): Promise<AssertionEvidence[]> {
 	if (entry.deploy !== 'cf-workers') return []
 	const configs = (await collectFiles(project)).filter(
 		(path) => basename(path) === 'wrangler.jsonc'
@@ -752,6 +795,8 @@ async function cloudflareChecks(
 	})
 	for (const configPath of configs.sort()) {
 		if (commands.some((command) => command.outcome === 'failed')) break
+		const config = parseJsonc<WranglerConfig>(await readFile(configPath, 'utf8'))
+		if (config.main === undefined && config.assets === undefined) continue
 		const directory = relative(project, dirname(configPath))
 		const slug = directory.replaceAll('/', '-') || 'root'
 		commands.push(
@@ -777,12 +822,17 @@ async function cloudflareChecks(
 	return [topology]
 }
 
-async function dockerChecks(
-	entry: GatewayMatrixEntry,
-	project: string,
-	logs: string,
+async function dockerChecks({
+	entry,
+	project,
+	logs,
+	commands
+}: {
+	entry: GatewayMatrixEntry
+	project: string
+	logs: string
 	commands: CommandEvidence[]
-): Promise<AssertionEvidence[]> {
+}): Promise<AssertionEvidence[]> {
 	if (entry.deploy !== 'docker') return []
 	commands.push(
 		await runCommand({
@@ -995,7 +1045,11 @@ async function verifyEntry(entry: GatewayMatrixEntry, output: string): Promise<E
 	const assertions: AssertionEvidence[] = []
 	console.log(`[gateway-matrix] ${entry.id}: ${entry.highestSeam}`)
 
-	const specialized = await runSpecializedSeam(entry, entryRoot, join(logs, 'highest-seam.log'))
+	const specialized = await runSpecializedSeam({
+		entry,
+		entryRoot,
+		logPath: join(logs, 'highest-seam.log')
+	})
 	let project = join(entryRoot, 'workspace')
 	if (specialized) {
 		commands.push(...specialized.nestedCommands, specialized.command)
@@ -1004,19 +1058,19 @@ async function verifyEntry(entry: GatewayMatrixEntry, output: string): Promise<E
 		await materialize(entry, project)
 	}
 	if (commands.every((command) => command.outcome === 'passed')) {
-		await runStandardCommands(project, logs, commands)
+		await runStandardCommands({ project, logs, commands })
 	}
 	assertions.push(await workspaceGateAssertion(commands))
 	assertions.push(await snapshotAssertion(entry))
 	assertions.push(await topologyAssertion(entry, project))
 	assertions.push(...(await skippedApiClientAssertion(entry, project)))
 	if (entry.apiClient === 'hey-api' && commands.every((command) => command.outcome === 'passed')) {
-		assertions.push(await verifyOpenApi(project, logs, commands))
+		assertions.push(await verifyOpenApi({ project, logs, commands }))
 	}
 	if (entry.highestSeam !== 'cloudflare-preview') {
-		assertions.push(...(await cloudflareChecks(entry, project, logs, commands)))
+		assertions.push(...(await cloudflareChecks({ entry, project, logs, commands })))
 	}
-	assertions.push(...(await dockerChecks(entry, project, logs, commands)))
+	assertions.push(...(await dockerChecks({ entry, project, logs, commands })))
 	assertions.push(...(await previewAssertion(entry, project)))
 	await pruneUnretainedArtifacts(project)
 	assertions.push(await residueAssertion(entry, project))
@@ -1242,8 +1296,16 @@ async function main(): Promise<void> {
 			markdown
 		])
 		json = redactArtifactText(`${JSON.stringify(report, null, 2)}\n`, [args.output, resolve('.')])
-		await writeSanitizedArtifact(join(args.output, 'report.json'), json, [args.output])
-		await writeSanitizedArtifact(join(args.output, 'report.md'), markdown, [args.output])
+		await writeSanitizedArtifact({
+			path: join(args.output, 'report.json'),
+			content: json,
+			roots: [args.output]
+		})
+		await writeSanitizedArtifact({
+			path: join(args.output, 'report.md'),
+			content: markdown,
+			roots: [args.output]
+		})
 	}
 	const failed = results.filter((result) => result.outcome === 'failed')
 	if (failed.length > 0)

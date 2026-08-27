@@ -11,7 +11,7 @@
 		"apiClient": "skip",
 		"auth": [],
 		"email": "skip",
-		"aiTooling": [],
+		"aiTooling": ["claude", "codex", "opencode"],
 		"deploy": "docker"
 	}
 }

@@ -63,21 +63,31 @@ describe('gateway generated-workspace verification matrix', () => {
 		const raw = parseJsonc(
 			readFileSync(join(root, 'fixtures', `${matrixEntry!.fixture}.jsonc`), 'utf8')
 		)
-		const plan = buildScaffoldPlan(GvKitConfig.parse(raw))
+		const config = GvKitConfig.parse(raw)
+		const plan = buildScaffoldPlan(config)
 		const rootPackage = JSON.parse(
 			plan.find(({ path }) => path === 'package.json')!.content
 		) as { scripts: Record<string, string> }
+		const webGuidance = plan.find(({ path }) => path === '.ai/rules/web-svelte.md')!.content
 		const generatedText = plan
 			.filter(({ path }) => /\.(?:json|md|svelte|ts)$/.test(path))
 			.map(({ content }) => content)
 			.join('\n')
 
+		expect(config.choices.aiTooling.length).toBeGreaterThan(0)
+		expect(config.choices.auth).toEqual([])
 		expect(plan.some(({ path }) => path === 'apps/api/openapi.json')).toBe(true)
 		expect(plan.some(({ path }) => path.startsWith('packages/openapi-client/'))).toBe(false)
 		expect(rootPackage.scripts['openapi:compose']).toBeDefined()
 		expect(rootPackage.scripts['openapi:check']).toBeDefined()
 		expect(rootPackage.scripts.codegen).toBeUndefined()
 		expect(generatedText).not.toMatch(/@repo\/openapi-client|packages\/openapi-client/)
+		expect(generatedText).not.toMatch(
+			/\$lib\/auth\/client(?:\.ts)?|src\/lib\/auth\/client\.ts|src\/routes\/login\/\+page\.svelte/
+		)
+		expect(webGuidance).not.toMatch(
+			/Better Auth|authClient|AuthContext|setAuthContext|auth-context|auth gating/
+		)
 	})
 
 	test('covers the highest supported seam for every target', () => {
@@ -190,7 +200,10 @@ describe('gateway generated-workspace verification matrix', () => {
 		const matrix = readFileSync(join(root, 'scripts/verify-gateway-scaffold-matrix.ts'), 'utf8')
 		const cloudflare = readFileSync(join(root, 'scripts/verify-gateway-cloudflare.ts'), 'utf8')
 		expect(matrix).toContain('normal install, lint, typecheck, test, and build gates')
-		expect(matrix).toContain('runStandardCommands(project, logs, commands)')
+		expect(matrix).toContain('runStandardCommands({ project, logs, commands })')
+		expect(matrix).toContain(
+			'if (config.main === undefined && config.assets === undefined) continue'
+		)
 		expect(cloudflare).toContain('freshWorkspaceInputsUnchanged: true')
 		expect(cloudflare).not.toContain('installTypegenVerificationSubstitute')
 		expect(cloudflare).not.toContain('Verification-only config-derived bindings')
@@ -198,7 +211,12 @@ describe('gateway generated-workspace verification matrix', () => {
 
 	test('local auth verification cannot inherit external email credentials', () => {
 		const local = readFileSync(join(root, 'scripts/verify-gateway-local.ts'), 'utf8')
-		expect(local).toContain("RESEND_API_KEY: ''")
-		expect(local).toContain("NOTIFUSE_API_KEY: ''")
+		expect(local).toContain("'RESEND_API_KEY'")
+		expect(local).toContain("'NOTIFUSE_API_KEY'")
+		expect(local).toContain(
+			'for (const name of LOCAL_ENVIRONMENT_NAMES) delete environment[name]'
+		)
+		expect(local).toContain("['cf-workers', 'docker', 'skip']")
+		expect(local).toContain("deploy === 'docker' ? 'http://localhost:3000'")
 	})
 })

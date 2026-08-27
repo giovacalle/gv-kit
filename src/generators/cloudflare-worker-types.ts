@@ -12,11 +12,7 @@ export const CLOUDFLARE_TYPES_BOOTSTRAP_FILE = 'worker-configuration.bootstrap.d
 export const CLOUDFLARE_TYPEGEN_SCRIPT =
 	`wrangler types --include-runtime=false && rm -f ${CLOUDFLARE_TYPES_BOOTSTRAP_FILE}`
 
-/**
- * Emit a binding-only bootstrap for clean installs. The bootstrap uses Cloudflare's
- * published runtime types but never occupies or claims Wrangler's default output.
- * `pnpm cf-typegen` lets Wrangler create worker-configuration.d.ts, then removes the bootstrap.
- */
+// Keep the bootstrap off Wrangler's default path so cf-typegen can replace it.
 export function renderCloudflareBootstrapTypes(wranglerJsonc: string): string {
 	const config = parseJsonc<WranglerTypeConfig>(wranglerJsonc)
 	const bindings = new Map<string, string>()

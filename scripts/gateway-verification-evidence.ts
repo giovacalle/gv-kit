@@ -33,7 +33,7 @@ export function redactArtifactText(input: string, roots: string[] = []): string 
 		.replace(/\bpostgres(?:ql)?:\/\/[^\s"'`]+/gi, 'postgres://[REDACTED]')
 		.replace(
 			/((?:[A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)|DATABASE_URL)[ \t]*[:=][ \t]*["']?)([^\s"',}\n]{8,})/g,
-			(_match, prefix: string, value: string) =>
+			(_match, ...[prefix = '', value = '']: string[]) =>
 				/^(?:\[REDACTED\]|\$\{|<|process\.env|(?:[A-Za-z_$][A-Za-z0-9_$]*\.)?env\.|string\b)/.test(
 					value
 				)
@@ -63,11 +63,15 @@ export function unsafeArtifactFindings(input: string): string[] {
 	return checks.filter(([, pattern]) => pattern.test(input)).map(([name]) => name)
 }
 
-export async function writeSanitizedArtifact(
-	path: string,
-	content: string,
-	roots: string[] = []
-): Promise<void> {
+export async function writeSanitizedArtifact({
+	path,
+	content,
+	roots = []
+}: {
+	path: string
+	content: string
+	roots?: string[]
+}): Promise<void> {
 	await mkdir(dirname(path), { recursive: true })
 	await writeFile(path, redactArtifactText(content, roots))
 }
@@ -85,7 +89,11 @@ export async function appendCommandEvidence(
 		.then((content) => JSON.parse(content) as VerificationCommandEvidence[])
 		.catch(() => [])
 	records.push({ ...record, logPath: evidencePath(project, record.logPath) })
-	await writeSanitizedArtifact(path, `${JSON.stringify(records, null, 2)}\n`, [project])
+	await writeSanitizedArtifact({
+		path,
+		content: `${JSON.stringify(records, null, 2)}\n`,
+		roots: [project]
+	})
 }
 
 export async function readCommandEvidence(project: string): Promise<VerificationCommandEvidence[]> {

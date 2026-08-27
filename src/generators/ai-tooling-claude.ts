@@ -219,10 +219,8 @@ function renderStackManifest(cfg: GvKitConfig): string {
 /* ------------------------------------------------------------------ */
 
 function renderClaudeSettings(cfg: GvKitConfig): string {
-	const privateRuntimePath =
-		cfg.choices.backend === 'hono'
-			? 'Read(./services/**/.dev.vars)'
-			: 'Read(./apps/api/**/.dev.vars)'
+	const privateRuntimePaths =
+		cfg.choices.backend === 'hono' ? ['Read(./services/**/.dev.vars)'] : []
 	const settings = {
 		permissions: {
 			allow: [
@@ -242,7 +240,7 @@ function renderClaudeSettings(cfg: GvKitConfig): string {
 				'Read(./apps/web/.dev.vars)',
 				'Read(./apps/marketing/.env)',
 				'Read(./apps/marketing/.env.*)',
-				privateRuntimePath
+				...privateRuntimePaths
 			]
 		}
 	}

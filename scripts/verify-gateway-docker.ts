@@ -9,11 +9,22 @@ import { appendCommandEvidence, writeSanitizedArtifact } from './gateway-verific
 
 const PNPM_VERSION = '11.1.1'
 let webOrigin = 'http://localhost:3000'
-const API_ORIGIN = 'http://127.0.0.1:8786'
+let apiOrigin = 'http://api.localhost:3000'
+const DIRECT_API_ORIGIN = 'http://127.0.0.1:8786'
 const API_HOST = 'api.localhost'
 
 type CookieJar = { header: string; setCookies: string[] }
 type CommandResult = { code: number; output: string }
+type DockerCommandOptions = {
+	program: string
+	args: string[]
+	cwd: string
+	env: NodeJS.ProcessEnv
+}
+type RecordedDockerCommandOptions = DockerCommandOptions & {
+	name: string
+	logPath: string
+}
 
 function parseArgs(argv: string[]): { fixture: string; output: string } {
 	let fixture = 'hono-docker-emailotp-only'
@@ -49,12 +60,12 @@ async function materialize(fixture: string, output: string) {
 	return { config, project, binPath }
 }
 
-async function command(
-	program: string,
-	args: string[],
-	cwd: string,
-	env: NodeJS.ProcessEnv
-): Promise<CommandResult> {
+async function command({
+	program,
+	args,
+	cwd,
+	env
+}: DockerCommandOptions): Promise<CommandResult> {
 	const child = spawn(program, args, {
 		cwd,
 		env: { ...process.env, ...env },
@@ -70,18 +81,22 @@ async function command(
 	return { code, output }
 }
 
-async function run(
-	name: string,
-	program: string,
-	args: string[],
-	cwd: string,
-	env: NodeJS.ProcessEnv,
-	logPath: string
-): Promise<string> {
+async function run({
+	name,
+	program,
+	args,
+	cwd,
+	env,
+	logPath
+}: RecordedDockerCommandOptions): Promise<string> {
 	const started = performance.now()
-	const result = await command(program, args, cwd, env)
+	const result = await command({ program, args, cwd, env })
 	const rendered = `${program} ${args.join(' ')}`
-	await writeSanitizedArtifact(logPath, `$ ${rendered}\n\n${result.output}`, [cwd])
+	await writeSanitizedArtifact({
+		path: logPath,
+		content: `$ ${rendered}\n\n${result.output}`,
+		roots: [cwd]
+	})
 	await appendCommandEvidence(cwd, {
 		name,
 		command: rendered,
@@ -145,7 +160,15 @@ function redactedCookies(jar: CookieJar) {
 	})
 }
 
-async function postJson(url: string, body: unknown, headers: Record<string, string>) {
+async function postJson({
+	url,
+	body,
+	headers
+}: {
+	url: string
+	body: unknown
+	headers: Record<string, string>
+}) {
 	return fetch(url, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', ...headers },
@@ -154,14 +177,27 @@ async function postJson(url: string, body: unknown, headers: Record<string, stri
 	})
 }
 
-async function waitForOtp(project: string, env: NodeJS.ProcessEnv, email: string): Promise<string> {
+async function waitForOtp({
+	project,
+	env,
+	email
+}: {
+	project: string
+	env: NodeJS.ProcessEnv
+	email: string
+}): Promise<string> {
 	const started = performance.now()
 	const deadline = Date.now() + 20_000
 	const escaped = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 	const pattern = new RegExp(`\\[auth\\] OTP for ${escaped}: (\\d{6})`)
 	let lastOutput = ''
 	while (Date.now() < deadline) {
-		const result = await command('docker', composeArgs('logs', '--no-color', 'auth'), project, env)
+		const result = await command({
+			program: 'docker',
+			args: composeArgs('logs', '--no-color', 'auth'),
+			cwd: project,
+			env
+		})
 		lastOutput = result.output
 		const otp = result.output.match(pattern)?.[1]
 		if (otp) {
@@ -169,11 +205,14 @@ async function waitForOtp(project: string, env: NodeJS.ProcessEnv, email: string
 				project,
 				`otp-poll-${email.startsWith('docker-web') ? 'web' : 'api'}.log`
 			)
-			await writeSanitizedArtifact(
-				logPath,
-				result.output.replace(/(\[auth\] OTP for [^:]+: )\d{6}/g, '$1[REDACTED]'),
-				[project]
-			)
+			await writeSanitizedArtifact({
+				path: logPath,
+				content: result.output.replace(
+					/(\[auth\] OTP for [^:]+: )\d{6}/g,
+					'$1[REDACTED]'
+				),
+				roots: [project]
+			})
 			await appendCommandEvidence(project, {
 				name: `compose-auth-log-poll-${email.startsWith('docker-web') ? 'web' : 'api'}`,
 				command: 'docker compose logs --no-color auth (poll)',
@@ -187,7 +226,11 @@ async function waitForOtp(project: string, env: NodeJS.ProcessEnv, email: string
 		}
 		await Bun.sleep(250)
 	}
-	await writeSanitizedArtifact(join(project, 'otp-poll-timeout.log'), lastOutput, [project])
+	await writeSanitizedArtifact({
+		path: join(project, 'otp-poll-timeout.log'),
+		content: lastOutput,
+		roots: [project]
+	})
 	await appendCommandEvidence(project, {
 		name: 'compose-auth-log-poll',
 		command: 'docker compose logs --no-color auth (poll)',
@@ -199,24 +242,29 @@ async function waitForOtp(project: string, env: NodeJS.ProcessEnv, email: string
 	throw new Error(`Timed out waiting for the container OTP for ${email}`)
 }
 
-async function signIn(
-	project: string,
-	env: NodeJS.ProcessEnv,
-	origin: string,
+async function signIn({
+	project,
+	env,
+	origin,
+	email
+}: {
+	project: string
+	env: NodeJS.ProcessEnv
+	origin: string
 	email: string
-): Promise<CookieJar> {
-	const send = await postJson(
-		`${origin}/api/auth/email-otp/send-verification-otp`,
-		{ email, type: 'sign-in' },
-		{ origin, 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' }
-	)
+}): Promise<CookieJar> {
+	const send = await postJson({
+		url: `${origin}/api/auth/email-otp/send-verification-otp`,
+		body: { email, type: 'sign-in' },
+		headers: { origin, 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' }
+	})
 	if (!send.ok) throw new Error(`OTP send failed at ${origin}: ${send.status} ${await send.text()}`)
-	const otp = await waitForOtp(project, env, email)
-	const response = await postJson(
-		`${origin}/api/auth/sign-in/email-otp`,
-		{ email, otp },
-		{ origin }
-	)
+	const otp = await waitForOtp({ project, env, email })
+	const response = await postJson({
+		url: `${origin}/api/auth/sign-in/email-otp`,
+		body: { email, otp },
+		headers: { origin }
+	})
 	if (!response.ok)
 		throw new Error(`OTP sign-in failed at ${origin}: ${response.status} ${await response.text()}`)
 	const jar = cookieJar(response)
@@ -226,7 +274,15 @@ async function signIn(
 	return jar
 }
 
-async function session(origin: string, jar: CookieJar, email: string) {
+async function session({
+	origin,
+	jar,
+	email
+}: {
+	origin: string
+	jar: CookieJar
+	email: string
+}) {
 	const response = await fetch(`${origin}/api/auth/get-session`, {
 		headers: { cookie: jar.header }
 	})
@@ -236,17 +292,33 @@ async function session(origin: string, jar: CookieJar, email: string) {
 	return { status: response.status, email: body.user.email }
 }
 
-async function verifyRuntime(project: string, env: NodeJS.ProcessEnv, inventory: unknown) {
-	const directHealth = await requestWhenReady(`${API_ORIGIN}/api/healthz`)
+async function verifyRuntime({
+	project,
+	env,
+	inventory
+}: {
+	project: string
+	env: NodeJS.ProcessEnv
+	inventory: unknown
+}) {
+	const directHealth = await requestWhenReady(`${DIRECT_API_ORIGIN}/api/healthz`)
 	const webAliasHealth = await requestWhenReady(`${webOrigin}/api/healthz`)
 	const exactWebAlias = await fetch(`${webOrigin}/api`)
-	const canonicalHostHealth = await requestWhenReady(
-		`${webOrigin.replace('localhost', '127.0.0.1')}/api/healthz`,
-		{
-			headers: { host: `${API_HOST}:${new URL(webOrigin).port}` }
+	const canonicalHostHealth = await requestWhenReady(`${apiOrigin}/api/healthz`)
+	const unknownDirectHost = await fetch(`${DIRECT_API_ORIGIN}/api/auth/get-session`, {
+		headers: {
+			host: 'evil.example.test',
+			'x-forwarded-host': new URL(apiOrigin).host,
+			'x-forwarded-proto': 'http'
 		}
-	)
-	const openApiResponse = await fetch(`${API_ORIGIN}/api/openapi.json`)
+	})
+	const approvedWebWithForgedForwarding = await fetch(`${webOrigin}/api/auth/get-session`, {
+		headers: { 'x-forwarded-host': 'evil.example.test', 'x-forwarded-proto': 'https' }
+	})
+	const approvedApiWithForgedForwarding = await fetch(`${apiOrigin}/api/auth/get-session`, {
+		headers: { 'x-forwarded-host': 'evil.example.test', 'x-forwarded-proto': 'https' }
+	})
+	const openApiResponse = await fetch(`${apiOrigin}/api/openapi.json`)
 	const openApi = (await openApiResponse.json()) as { servers?: { url: string }[] }
 	if (
 		directHealth.status !== 200 ||
@@ -256,22 +328,26 @@ async function verifyRuntime(project: string, env: NodeJS.ProcessEnv, inventory:
 		throw new Error('One or more gateway ingress health checks failed')
 	if (exactWebAlias.status !== 404 || !exactWebAlias.headers.get('x-request-id'))
 		throw new Error('Exact web-origin /api boundary did not reach the gateway')
-	if (JSON.stringify(openApi.servers) !== JSON.stringify([{ url: API_ORIGIN }]))
+	if (JSON.stringify(openApi.servers) !== JSON.stringify([{ url: apiOrigin }]))
 		throw new Error('Runtime OpenAPI did not advertise the explicit independent API origin')
+	if (unknownDirectHost.status !== 421 || (await unknownDirectHost.text()) !== 'misdirected request')
+		throw new Error('Forged forwarding headers approved an unknown Docker direct host')
+	if (approvedWebWithForgedForwarding.status !== 200 || approvedApiWithForgedForwarding.status !== 200)
+		throw new Error('Caller forwarding headers overrode an approved Docker public host')
 
 	const suffix = Date.now()
 	const webEmail = `docker-web-${suffix}@example.test`
 	const apiEmail = `docker-api-${suffix}@example.test`
-	const webJar = await signIn(project, env, webOrigin, webEmail)
-	const apiJar = await signIn(project, env, API_ORIGIN, apiEmail)
+	const webJar = await signIn({ project, env, origin: webOrigin, email: webEmail })
+	const apiJar = await signIn({ project, env, origin: apiOrigin, email: apiEmail })
 	if (webJar.header === apiJar.header) throw new Error('Web and API origins shared a cookie jar')
-	const webSession = await session(webOrigin, webJar, webEmail)
-	const apiSession = await session(API_ORIGIN, apiJar, apiEmail)
+	const webSession = await session({ origin: webOrigin, jar: webJar, email: webEmail })
+	const apiSession = await session({ origin: apiOrigin, jar: apiJar, email: apiEmail })
 
 	const webUsers = await fetch(`${webOrigin}/api/v1/users/me`, {
 		headers: { cookie: webJar.header }
 	})
-	const apiUsers = await fetch(`${API_ORIGIN}/api/v1/users/me`, {
+	const apiUsers = await fetch(`${apiOrigin}/api/v1/users/me`, {
 		headers: { cookie: apiJar.header }
 	})
 	if (!webUsers.ok || !apiUsers.ok)
@@ -299,10 +375,15 @@ async function verifyRuntime(project: string, env: NodeJS.ProcessEnv, inventory:
 			},
 			webAlias: { url: `${webOrigin}/api/healthz`, status: webAliasHealth.status },
 			canonicalApiHost: {
-				host: `${API_HOST}:${new URL(webOrigin).port}`,
+				host: new URL(apiOrigin).host,
 				status: canonicalHostHealth.status
 			},
-			independentApi: { url: `${API_ORIGIN}/api/healthz`, status: directHealth.status }
+			independentApi: { url: `${DIRECT_API_ORIGIN}/api/healthz`, status: directHealth.status },
+			publicHostMatrix: {
+				approvedWebWithForgedForwarding: approvedWebWithForgedForwarding.status,
+				approvedApiWithForgedForwarding: approvedApiWithForgedForwarding.status,
+				unknownDirectWithApprovedForwarding: unknownDirectHost.status
+			}
 		},
 		cookies: {
 			web: redactedCookies(webJar),
@@ -345,9 +426,9 @@ async function assertCleanup(project: string, env: NodeJS.ProcessEnv) {
 	] as const
 	for (const check of checks) {
 		const started = performance.now()
-		const result = await command('docker', [...check.args], project, env)
+		const result = await command({ program: 'docker', args: [...check.args], cwd: project, env })
 		const logPath = join(project, `${check.name}.log`)
-		await writeSanitizedArtifact(logPath, result.output, [project])
+		await writeSanitizedArtifact({ path: logPath, content: result.output, roots: [project] })
 		const passed = result.code === 0 && !result.output.trim()
 		await appendCommandEvidence(project, {
 			name: check.name,
@@ -367,6 +448,7 @@ async function main(): Promise<void> {
 	const generated = await materialize(args.fixture, args.output)
 	const webPort = await runtimeWebPort()
 	webOrigin = `http://localhost:${webPort}`
+	apiOrigin = `http://${API_HOST}:${webPort}`
 	if (webPort !== 3000) {
 		await writeFile(
 			join(generated.project, 'compose.verify.yml'),
@@ -395,16 +477,20 @@ async function main(): Promise<void> {
 		NOTIFUSE_API_KEY: 'docker-notifuse-key',
 		NOTIFUSE_WORKSPACE_ID: 'docker-workspace',
 		NOTIFUSE_BASE_URL: 'https://notifuse.example.test',
-		ORIGIN: webOrigin,
-		BETTER_AUTH_ALLOWED_HOSTS: `localhost:${webPort},127.0.0.1:8786,api.localhost:${webPort}`,
-		AUTH_CORS_ORIGINS: webOrigin,
-		API_CORS_ORIGINS: webOrigin,
+		...(webPort === 3000
+			? {}
+			: {
+					ORIGIN: webOrigin,
+					BETTER_AUTH_ALLOWED_HOSTS: `localhost:${webPort},api.localhost:${webPort},localhost:8786,127.0.0.1:8786`,
+					AUTH_CORS_ORIGINS: `${webOrigin},${apiOrigin}`,
+					API_CORS_ORIGINS: webOrigin,
+					API_PUBLIC_ORIGIN: apiOrigin,
+					GATEWAY_PUBLIC_ORIGINS: `${webOrigin},${apiOrigin},http://localhost:8786,http://127.0.0.1:8786`
+				}),
+		GATEWAY_TRUSTED_INGRESS_SECRET: 'docker-only-gateway-ingress-secret',
 		GATEWAY_UPSTREAM_TIMEOUT_MS: '10000',
 		TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA',
-		PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
-		API_PUBLIC_ORIGIN: API_ORIGIN,
-		API_HOST,
-		PUBLIC_SCHEME: 'http'
+		PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA'
 	}
 	console.log(`[gateway-docker] generated project: ${generated.project}`)
 	const webHooks = await readFile(join(generated.project, 'apps/web/src/hooks.server.ts'), 'utf8')
@@ -422,38 +508,38 @@ async function main(): Promise<void> {
 	let evidence: unknown
 	let cleanup: unknown
 	try {
-		await run(
-			'install',
-			'corepack',
-			[`pnpm@${PNPM_VERSION}`, 'install', '--no-frozen-lockfile'],
-			generated.project,
+		await run({
+			name: 'install',
+			program: 'corepack',
+			args: [`pnpm@${PNPM_VERSION}`, 'install', '--no-frozen-lockfile'],
+			cwd: generated.project,
 			env,
-			join(generated.project, 'install.log')
-		)
-		await run(
-			'database-generate',
-			'corepack',
-			[`pnpm@${PNPM_VERSION}`, '--filter', '@repo/db', 'db:generate'],
-			generated.project,
+			logPath: join(generated.project, 'install.log')
+		})
+		await run({
+			name: 'database-generate',
+			program: 'corepack',
+			args: [`pnpm@${PNPM_VERSION}`, '--filter', '@repo/db', 'db:generate'],
+			cwd: generated.project,
 			env,
-			join(generated.project, 'database-generate.log')
-		)
-		await run(
-			'compose-pre-cleanup',
-			'docker',
-			composeArgs('down', '--volumes', '--remove-orphans'),
-			generated.project,
+			logPath: join(generated.project, 'database-generate.log')
+		})
+		await run({
+			name: 'compose-pre-cleanup',
+			program: 'docker',
+			args: composeArgs('down', '--volumes', '--remove-orphans'),
+			cwd: generated.project,
 			env,
-			join(generated.project, 'pre-cleanup.log')
-		)
-		const configJson = await run(
-			'compose-config',
-			'docker',
-			composeArgs('config', '--format', 'json'),
-			generated.project,
+			logPath: join(generated.project, 'pre-cleanup.log')
+		})
+		const configJson = await run({
+			name: 'compose-config',
+			program: 'docker',
+			args: composeArgs('config', '--format', 'json'),
+			cwd: generated.project,
 			env,
-			join(generated.project, 'compose-config.log')
-		)
+			logPath: join(generated.project, 'compose-config.log')
+		})
 		const parsed = JSON.parse(configJson) as {
 			services: Record<string, { ports?: unknown; depends_on?: unknown }>
 			networks: Record<string, unknown>
@@ -473,17 +559,17 @@ async function main(): Promise<void> {
 			join(generated.project, 'compose-inventory.json'),
 			`${JSON.stringify(inventory, null, 2)}\n`
 		)
-		await run(
-			'compose-build-and-up',
-			'docker',
-			composeArgs('up', '--build', '-d'),
-			generated.project,
+		await run({
+			name: 'compose-build-and-up',
+			program: 'docker',
+			args: composeArgs('up', '--build', '-d'),
+			cwd: generated.project,
 			env,
-			join(generated.project, 'compose-up.log')
-		)
+			logPath: join(generated.project, 'compose-up.log')
+		})
 		const runtimeStarted = performance.now()
 		try {
-			evidence = await verifyRuntime(generated.project, env, inventory)
+			evidence = await verifyRuntime({ project: generated.project, env, inventory })
 			await appendCommandEvidence(generated.project, {
 				name: 'dual-ingress-http-runtime',
 				command: 'generated Docker dual-ingress HTTP runtime checks',
@@ -503,25 +589,28 @@ async function main(): Promise<void> {
 			})
 			throw error
 		}
-		await writeSanitizedArtifact(
-			join(generated.project, 'evidence.json'),
-			`${JSON.stringify(evidence, null, 2)}\n`,
-			[generated.project]
-		)
+		await writeSanitizedArtifact({
+			path: join(generated.project, 'evidence.json'),
+			content: `${JSON.stringify(evidence, null, 2)}\n`,
+			roots: [generated.project]
+		})
 	} finally {
 		const runtimeLogsStarted = performance.now()
-		const runtimeLogs = await command(
-			'docker',
-			composeArgs('logs', '--no-color'),
-			generated.project,
+		const runtimeLogs = await command({
+			program: 'docker',
+			args: composeArgs('logs', '--no-color'),
+			cwd: generated.project,
 			env
-		)
+		})
 		const runtimeLogPath = join(generated.project, 'runtime.log')
-		await writeSanitizedArtifact(
-			runtimeLogPath,
-			runtimeLogs.output.replace(/(\[auth\] OTP for [^:]+: )\d{6}/g, '$1[REDACTED]'),
-			[generated.project]
-		)
+		await writeSanitizedArtifact({
+			path: runtimeLogPath,
+			content: runtimeLogs.output.replace(
+				/(\[auth\] OTP for [^:]+: )\d{6}/g,
+				'$1[REDACTED]'
+			),
+			roots: [generated.project]
+		})
 		await appendCommandEvidence(generated.project, {
 			name: 'compose-runtime-logs',
 			command: 'docker compose logs --no-color',
@@ -531,18 +620,18 @@ async function main(): Promise<void> {
 			exitCode: runtimeLogs.code
 		})
 		const downStarted = performance.now()
-		const down = await command(
-			'docker',
-			composeArgs('down', '--volumes', '--remove-orphans', '--rmi', 'local'),
-			generated.project,
+		const down = await command({
+			program: 'docker',
+			args: composeArgs('down', '--volumes', '--remove-orphans', '--rmi', 'local'),
+			cwd: generated.project,
 			env
-		)
+		})
 		const cleanupLogPath = join(generated.project, 'cleanup.log')
-		await writeSanitizedArtifact(
-			cleanupLogPath,
-			`$ docker compose down --volumes --remove-orphans --rmi local\n\n${down.output}`,
-			[generated.project]
-		)
+		await writeSanitizedArtifact({
+			path: cleanupLogPath,
+			content: `$ docker compose down --volumes --remove-orphans --rmi local\n\n${down.output}`,
+			roots: [generated.project]
+		})
 		await appendCommandEvidence(generated.project, {
 			name: 'compose-down-and-image-cleanup',
 			command: 'docker compose down --volumes --remove-orphans --rmi local',

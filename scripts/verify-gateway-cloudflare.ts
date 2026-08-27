@@ -52,6 +52,15 @@ type CommandResult = {
 	exitCode: number
 }
 
+type CloudflareCommandOptions = {
+	name: string
+	executable: string
+	args: string[]
+	cwd: string
+	logPath: string
+	extraEnv?: Record<string, string>
+}
+
 function parseArgs(argv: string[]): { fixture: string; output: string; stagingAlias: string } {
 	let fixture = 'hono-cf-workers-passwordless'
 	let output = resolve('.scratch/gateway-cloudflare')
@@ -63,22 +72,45 @@ function parseArgs(argv: string[]): { fixture: string; output: string; stagingAl
 		else if (arg === '--staging-alias') stagingAlias = argv[++index] ?? stagingAlias
 		else throw new Error(`Unknown argument: ${arg}`)
 	}
-	if (!/^[a-z][a-z0-9-]{0,47}$/.test(stagingAlias))
-		throw new Error('--staging-alias must be a sanitized Cloudflare preview alias')
+	if (!/^pr-[1-9][0-9]*$/.test(stagingAlias) || stagingAlias.length > 48)
+		throw new Error('--staging-alias must be a canonical bounded Cloudflare preview alias')
 	return { fixture, output, stagingAlias }
 }
 
-async function run(
-	name: string,
-	command: string,
-	args: string[],
-	cwd: string,
-	logPath: string,
-	extraEnv: Record<string, string> = {}
-): Promise<CommandResult> {
+async function assertRejectedPreviewAlias({
+	project,
+	alias
+}: {
+	project: string
+	alias: string
+}): Promise<{ alias: string; rejected: true }> {
+	const child = spawn('node', ['scripts/cloudflare-preview-name.mjs', '--validate', alias], {
+		cwd: project,
+		stdio: ['ignore', 'pipe', 'pipe']
+	})
+	let output = ''
+	child.stdout.on('data', (chunk) => (output += chunk.toString()))
+	child.stderr.on('data', (chunk) => (output += chunk.toString()))
+	const code = await new Promise<number>((done, reject) => {
+		child.on('error', reject)
+		child.on('close', (status) => done(status ?? 1))
+	})
+	if (code === 0) throw new Error(`unsafe preview alias was accepted: ${alias}`)
+	if (!/Preview alias/.test(output)) throw new Error(`preview alias rejection was not explicit: ${alias}`)
+	return { alias, rejected: true }
+}
+
+async function run({
+	name,
+	executable,
+	args,
+	cwd,
+	logPath,
+	extraEnv = {}
+}: CloudflareCommandOptions): Promise<CommandResult> {
 	const started = performance.now()
 	assertPermittedWranglerInvocation(args)
-	const child = spawn(command, args, {
+	const child = spawn(executable, args, {
 		cwd,
 		env: {
 			...process.env,
@@ -97,8 +129,12 @@ async function run(
 		child.on('error', reject)
 		child.on('close', (status) => done(status ?? 1))
 	})
-	const renderedCommand = `${command} ${args.join(' ')}`
-	await writeSanitizedArtifact(logPath, `$ ${renderedCommand}\n\n${output}`, [cwd])
+	const renderedCommand = `${executable} ${args.join(' ')}`
+	await writeSanitizedArtifact({
+		path: logPath,
+		content: `$ ${renderedCommand}\n\n${output}`,
+		roots: [cwd]
+	})
 	const record = {
 		name,
 		command: renderedCommand,
@@ -139,11 +175,15 @@ async function materialize(
 	return { config, project }
 }
 
-async function readWrangler(
-	project: string,
-	directory: string,
+async function readWrangler({
+	project,
+	directory,
 	file = 'wrangler.jsonc'
-): Promise<WranglerConfig> {
+}: {
+	project: string
+	directory: string
+	file?: string
+}): Promise<WranglerConfig> {
 	return parseJsonc(await readFile(join(project, directory, file), 'utf8'))
 }
 
@@ -251,6 +291,11 @@ function assertPreviewTopology({
 	const localHosts = 'localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786'
 	const localOrigins =
 		'http://localhost:3000,http://localhost:5173,http://localhost:8786,http://127.0.0.1:8786'
+	if (
+		preview.gateway.vars?.GATEWAY_PUBLIC_ORIGINS !==
+		`${webOrigin},${apiOrigin},${localOrigins}`
+	)
+		throw new Error('gateway preview public-origin allowlist contains the wrong origins')
 	if (preview.gateway.vars?.API_CORS_ORIGINS !== `${webOrigin},${localOrigins}`)
 		throw new Error('gateway preview CORS contains the wrong origins')
 	if (preview.gateway.vars?.GATEWAY_UPSTREAM_TIMEOUT_MS !== '10000')
@@ -409,6 +454,7 @@ async function assertTypegenContract(project: string): Promise<Record<string, st
 			'AUTH',
 			'USERS',
 			'API_PUBLIC_ORIGIN',
+			'GATEWAY_PUBLIC_ORIGINS',
 			'API_CORS_ORIGINS',
 			'GATEWAY_UPSTREAM_TIMEOUT_MS'
 		],
@@ -460,13 +506,13 @@ async function main(): Promise<void> {
 	if (!webHooks.includes('export const handleFetch'))
 		throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
 
-	await run(
-		'install',
-		'corepack',
-		[`pnpm@${PNPM_VERSION}`, 'install', '--no-frozen-lockfile'],
-		project,
-		join(project, 'install.log')
-	)
+	await run({
+		name: 'install',
+		executable: 'corepack',
+		args: [`pnpm@${PNPM_VERSION}`, 'install', '--no-frozen-lockfile'],
+		cwd: project,
+		logPath: join(project, 'install.log')
+	})
 
 	const workspaceChecks: CommandResult[] = []
 	const workspacePublicEnv = hasMarketing
@@ -477,14 +523,14 @@ async function main(): Promise<void> {
 		: {}
 	for (const task of ['lint', 'typecheck', 'test', 'build']) {
 		workspaceChecks.push(
-			await run(
-				`workspace-${task}`,
-				'corepack',
-				[`pnpm@${PNPM_VERSION}`, task],
-				project,
-				join(project, `${task}.log`),
-				workspacePublicEnv
-			)
+			await run({
+				name: `workspace-${task}`,
+				executable: 'corepack',
+				args: [`pnpm@${PNPM_VERSION}`, task],
+				cwd: project,
+				logPath: join(project, `${task}.log`),
+				extraEnv: workspacePublicEnv
+			})
 		)
 	}
 	if (
@@ -497,7 +543,10 @@ async function main(): Promise<void> {
 
 	const configs = Object.fromEntries(
 		await Promise.all(
-			workers.map(async (worker) => [worker.name, await readWrangler(project, worker.directory)])
+			workers.map(async (worker) => [
+				worker.name,
+				await readWrangler({ project, directory: worker.directory })
+			])
 		)
 	) as WranglerConfigs
 	assertTopology(configs)
@@ -506,10 +555,10 @@ async function main(): Promise<void> {
 
 	const dryRuns: Record<string, { command: string; output: string }> = {}
 	for (const worker of workers) {
-		const result = await run(
-			`production-wrangler-dry-run-${worker.name}`,
-			'corepack',
-			[
+		const result = await run({
+			name: `production-wrangler-dry-run-${worker.name}`,
+			executable: 'corepack',
+			args: [
 				`pnpm@${PNPM_VERSION}`,
 				'--dir',
 				worker.directory,
@@ -520,14 +569,18 @@ async function main(): Promise<void> {
 				'--outdir',
 				'.wrangler/verify-dry-run'
 			],
-			project,
-			join(project, `wrangler-${worker.name}-dry-run.log`)
-		)
+			cwd: project,
+			logPath: join(project, `wrangler-${worker.name}-dry-run.log`)
+		})
 		dryRuns[worker.name] = result
 	}
 
 	const stagingWorkflow = await readFile(
 		join(project, '.github/workflows/deploy-staging.yml'),
+		'utf8'
+	)
+	const cleanupWorkflow = await readFile(
+		join(project, '.github/workflows/cleanup-staging.yml'),
 		'utf8'
 	)
 	if (
@@ -536,6 +589,74 @@ async function main(): Promise<void> {
 		!stagingWorkflow.includes('node scripts/verify-cloudflare-preview-ingress.mjs')
 	)
 		throw new Error('managed preview ingress is not verified before database provisioning')
+	for (const marker of [
+		'workflow_dispatch:',
+		'alias:',
+		'required: true',
+		'ref: ${{ github.event.repository.default_branch }}',
+		'node scripts/cloudflare-preview-name.mjs --validate "$RAW_PREVIEW_ALIAS"',
+		'sh scripts/cleanup-cloudflare-preview-workers.sh "${{ steps.alias.outputs.alias }}"'
+	]) {
+		if (!cleanupWorkflow.includes(marker))
+			throw new Error(`preview cleanup lifecycle omits ${marker}`)
+	}
+	if (
+		cleanupWorkflow.includes('github.event.pull_request.head.sha') ||
+		cleanupWorkflow.includes('github.event.pull_request.base.sha')
+	)
+		throw new Error('preview cleanup checks out PR-controlled code')
+	if (!stagingWorkflow.includes('gh workflow run cleanup-staging.yml -f alias=$alias'))
+		throw new Error('manual previews do not report their deterministic cleanup invocation')
+	if (
+		stagingWorkflow.indexOf('gh workflow run cleanup-staging.yml') >
+		stagingWorkflow.indexOf('Create or reuse')
+	)
+		throw new Error('preview cleanup invocation is reported after resource provisioning starts')
+	if (config.choices.auth.includes('emailOTP')) {
+		for (const marker of [
+			'#   - PUBLIC_TURNSTILE_SITE_KEY',
+			'test -n "$PUBLIC_TURNSTILE_SITE_KEY"',
+			'PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}'
+		]) {
+			if (!stagingWorkflow.includes(marker))
+				throw new Error(`email-OTP preview Turnstile contract omits ${marker}`)
+		}
+		if (
+			stagingWorkflow.indexOf('Validate preview public variables') >
+			stagingWorkflow.indexOf('preview-db:')
+		)
+			throw new Error('email-OTP preview validates Turnstile after resource provisioning starts')
+	}
+	const cleanupScript = await readFile(
+		join(project, 'scripts/cleanup-cloudflare-preview-workers.sh'),
+		'utf8'
+	)
+	for (const marker of [
+		'find "$@" -name wrangler.jsonc',
+		'node scripts/cloudflare-preview-name.mjs "$base_name" "$alias"',
+		'npx wrangler@4.125.0 delete --name "$worker_name" --force',
+		'Shared wildcard DNS records'
+	]) {
+		if (!cleanupScript.includes(marker)) throw new Error(`preview cleanup inventory omits ${marker}`)
+	}
+	if (/dns_records|api\.cloudflare\.com|wrangler[^\n]*dns/i.test(cleanupScript))
+		throw new Error('preview cleanup can delete shared wildcard DNS')
+
+	const manualAliasResult = await run({
+		name: 'derive-manual-preview-alias',
+		executable: 'node',
+		args: ['scripts/cloudflare-preview-name.mjs', '--from-id', '987654321'],
+		cwd: project,
+		logPath: join(project, 'derive-manual-preview-alias.log')
+	})
+	const manualAlias = manualAliasResult.output.trim()
+	if (manualAlias !== 'pr-987654321') throw new Error('manual preview alias is not canonical')
+	const rejectedAliases = await Promise.all(
+		['production', 'demo-api', 'pr-0', `pr-${'1'.repeat(46)}`].map((alias) =>
+			assertRejectedPreviewAlias({ project, alias })
+		)
+	)
+
 	const ingressPrerequisiteScript = await readFile(
 		join(project, 'scripts/verify-cloudflare-preview-ingress.mjs'),
 		'utf8'
@@ -550,10 +671,10 @@ async function main(): Promise<void> {
 			throw new Error(`managed preview ingress prerequisite script omits ${marker}`)
 	}
 
-	const failClosed = await run(
-		'preview-managed-domains-fail-closed',
-		'sh',
-		[
+	const failClosed = await run({
+		name: 'preview-managed-domains-fail-closed',
+		executable: 'sh',
+		args: [
 			'-c',
 			`set -eu
 output=.wrangler/preview-managed-domains-blocked.log
@@ -568,10 +689,10 @@ for config in apps/api apps/web services/auth services/users; do
 done
 cat "$output"`
 		],
-		project,
-		join(project, 'preview-managed-domains-blocked.log'),
-		{ STAGING_ALIAS: args.stagingAlias }
-	)
+		cwd: project,
+		logPath: join(project, 'preview-managed-domains-blocked.log'),
+		extraEnv: { STAGING_ALIAS: args.stagingAlias }
+	})
 
 	const previewZoneName = 'preview-verification.example'
 	const previewWebDomain = `app.${previewZoneName}`
@@ -580,13 +701,13 @@ cat "$output"`
 	const previewDatabaseId = '11111111-1111-4111-8111-111111111111'
 	const previewDatabaseUrl =
 		'postgres://preview:preview@preview-verification.example.test:5432/preview'
-	const previewPreparation = await run(
-		'prepare-preview-configs',
-		'node',
-		['scripts/prepare-cloudflare-preview.mjs'],
-		project,
-		join(project, 'prepare-cloudflare-preview.log'),
-		{
+	const previewPreparation = await run({
+		name: 'prepare-preview-configs',
+		executable: 'node',
+		args: ['scripts/prepare-cloudflare-preview.mjs'],
+		cwd: project,
+		logPath: join(project, 'prepare-cloudflare-preview.log'),
+		extraEnv: {
 			STAGING_ALIAS: args.stagingAlias,
 			PREVIEW_DB_KIND: config.choices.db === 'sqlite' ? 'd1' : 'neon',
 			...(config.choices.db === 'sqlite'
@@ -599,12 +720,16 @@ cat "$output"`
 			CLOUDFLARE_PREVIEW_API_DOMAIN: previewApiDomain,
 			CLOUDFLARE_PREVIEW_ZONE_NAME: previewZoneName
 		}
-	)
+	})
 	const previewConfigs = Object.fromEntries(
 		await Promise.all(
 			workers.map(async (worker) => [
 				worker.name,
-				await readWrangler(project, worker.directory, 'wrangler.staging.jsonc')
+				await readWrangler({
+					project,
+					directory: worker.directory,
+					file: 'wrangler.staging.jsonc'
+				})
 			])
 		)
 	) as WranglerConfigs
@@ -639,14 +764,14 @@ cat "$output"`
 			name === 'DATABASE_URL' ? previewDatabaseUrl : verificationSecretValue(name)
 		])
 	)
-	const previewSecretPreparation = await run(
-		'write-preview-secrets',
-		'node',
-		['scripts/write-cloudflare-preview-secrets.mjs', previewSecretDirectory],
-		project,
-		join(project, 'write-preview-secrets.log'),
-		previewSecretEnvironment
-	)
+	const previewSecretPreparation = await run({
+		name: 'write-preview-secrets',
+		executable: 'node',
+		args: ['scripts/write-cloudflare-preview-secrets.mjs', previewSecretDirectory],
+		cwd: project,
+		logPath: join(project, 'write-preview-secrets.log'),
+		extraEnv: previewSecretEnvironment
+	})
 	const previewSecretFiles: Partial<Record<string, string>> = {
 		auth: join(previewSecretDirectory, 'auth.json'),
 		...(requiredPreviewSecrets.users.length > 0
@@ -680,14 +805,27 @@ cat "$output"`
 		name: string
 	}
 	await rm(join(project, 'apps/web/.svelte-kit'), { recursive: true, force: true })
-	const cleanWebBuild = await run(
-		'clean-preview-web-build',
-		'corepack',
-		[`pnpm@${PNPM_VERSION}`, 'turbo', 'run', 'build', `--filter=${webPackage.name}`, '--force'],
-		project,
-		join(project, 'clean-preview-web-build.log'),
-		hasMarketing ? { PUBLIC_APP_URL: webOrigin } : {}
-	)
+	const cleanWebBuildEnvironment = {
+		...(hasMarketing ? { PUBLIC_APP_URL: webOrigin } : {}),
+		...(config.choices.auth.includes('emailOTP')
+			? { PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA' }
+			: {})
+	}
+	const cleanWebBuild = await run({
+		name: 'clean-preview-web-build',
+		executable: 'corepack',
+		args: [
+			`pnpm@${PNPM_VERSION}`,
+			'turbo',
+			'run',
+			'build',
+			`--filter=${webPackage.name}`,
+			'--force'
+		],
+		cwd: project,
+		logPath: join(project, 'clean-preview-web-build.log'),
+		extraEnv: cleanWebBuildEnvironment
+	})
 
 	let cleanMarketingBuild: CommandResult | undefined
 	if (hasMarketing) {
@@ -695,10 +833,10 @@ cat "$output"`
 			await readFile(join(project, MARKETING_WORKER.directory, 'package.json'), 'utf8')
 		) as { name: string }
 		await rm(join(project, MARKETING_WORKER.directory, 'dist'), { recursive: true, force: true })
-		cleanMarketingBuild = await run(
-			'clean-preview-marketing-build',
-			'corepack',
-			[
+		cleanMarketingBuild = await run({
+			name: 'clean-preview-marketing-build',
+			executable: 'corepack',
+			args: [
 				`pnpm@${PNPM_VERSION}`,
 				'turbo',
 				'run',
@@ -706,22 +844,22 @@ cat "$output"`
 				`--filter=${marketingPackage.name}`,
 				'--force'
 			],
-			project,
-			join(project, 'clean-preview-marketing-build.log'),
-			{
+			cwd: project,
+			logPath: join(project, 'clean-preview-marketing-build.log'),
+			extraEnv: {
 				PUBLIC_MARKETING_URL: marketingOrigin ?? '',
 				PUBLIC_APP_URL: webOrigin
 			}
-		)
+		})
 	}
 
 	const previewDryRuns: Partial<Record<WorkerName, CommandResult>> = {}
 	for (const worker of workers) {
 		const secretsFile = previewSecretFiles[worker.name]
-		previewDryRuns[worker.name] = await run(
-			`preview-wrangler-dry-run-${worker.name}`,
-			'corepack',
-			[
+		previewDryRuns[worker.name] = await run({
+			name: `preview-wrangler-dry-run-${worker.name}`,
+			executable: 'corepack',
+			args: [
 				`pnpm@${PNPM_VERSION}`,
 				'--dir',
 				worker.directory,
@@ -735,9 +873,9 @@ cat "$output"`
 				'--outdir',
 				'.wrangler/verify-preview-dry-run'
 			],
-			project,
-			join(project, `wrangler-${worker.name}-preview-dry-run.log`)
-		)
+			cwd: project,
+			logPath: join(project, `wrangler-${worker.name}-preview-dry-run.log`)
+		})
 	}
 	const cleanWebDryRun = previewDryRuns.web
 	if (!cleanWebDryRun) throw new Error('clean preview web dry-run did not execute')
@@ -781,6 +919,20 @@ cat "$output"`
 		),
 		preview: {
 			alias: args.stagingAlias,
+			aliases: {
+				pr: args.stagingAlias,
+				manual: manualAlias,
+				maximumLength: 48,
+				rejected: rejectedAliases
+			},
+			lifecycle: {
+				prCleanupTrigger: 'pull_request.closed',
+				manualCleanupTrigger: 'workflow_dispatch.inputs.alias',
+				manualCleanupInvocation: 'gh workflow run cleanup-staging.yml -f alias=<canonical alias>',
+				trustedCleanupRef: '${{ github.event.repository.default_branch }}',
+				prControlledCleanupCode: false,
+				sharedConcurrencyAlias: true
+			},
 			deployScripts: previewDeployScripts,
 			apiOrigin,
 			webOrigin,
@@ -800,7 +952,10 @@ cat "$output"`
 			cleanWebDeploy: {
 				removedOutput: 'apps/web/.svelte-kit',
 				buildCommand: cleanWebBuild.command,
-				dryRunCommand: cleanWebDryRun.command
+				dryRunCommand: cleanWebDryRun.command,
+				turnstileSiteKeyRequiredBeforeProvisioning:
+					config.choices.auth.includes('emailOTP'),
+				turnstileSiteKeyForwarded: config.choices.auth.includes('emailOTP')
 			},
 			inventory: Object.fromEntries(
 				workers.map((worker) => [worker.name, inventory(previewConfigs[worker.name])])
@@ -836,11 +991,11 @@ cat "$output"`
 		privatePublicTriggers: { auth: [], users: [] },
 		remoteResourcesCreated: false
 	}
-	await writeSanitizedArtifact(
-		join(project, 'evidence.json'),
-		`${JSON.stringify(evidence, null, 2)}\n`,
-		[project]
-	)
+	await writeSanitizedArtifact({
+		path: join(project, 'evidence.json'),
+		content: `${JSON.stringify(evidence, null, 2)}\n`,
+		roots: [project]
+	})
 	console.log(JSON.stringify(evidence, null, 2))
 }
 

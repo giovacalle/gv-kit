@@ -72,6 +72,9 @@ describe('Docker gateway topology', () => {
 			/server_name \$\{API_HOST\};[\s\S]*location \/[\s\S]*proxy_pass http:\/\/gateway_upstream/
 		)
 		expect(config).toContain('proxy_set_header X-Forwarded-Proto ${PUBLIC_SCHEME};')
+		expect(config).toContain(
+			'proxy_set_header X-Gateway-Ingress-Secret ${GATEWAY_TRUSTED_INGRESS_SECRET};'
+		)
 	})
 
 	test('uses explicit private gateway and service transports with readiness ordering', () => {
@@ -84,8 +87,29 @@ describe('Docker gateway topology', () => {
 		expect(environment('web').USERS_URL).toBeUndefined()
 		expect(environment('gateway').AUTH_URL).toBe('http://auth:8787')
 		expect(environment('gateway').USERS_URL).toBe('http://users:8788')
+		expect(environment('gateway').API_PUBLIC_ORIGIN).toBe(
+			'${API_PUBLIC_ORIGIN:-http://api.localhost:3000}'
+		)
+		expect(environment('gateway').GATEWAY_PUBLIC_ORIGINS).toBe(
+			'${GATEWAY_PUBLIC_ORIGINS:-http://localhost:3000,http://api.localhost:3000,http://localhost:8786,http://127.0.0.1:8786}'
+		)
+		expect(environment('gateway').GATEWAY_TRUSTED_INGRESS_SECRET).toBe(
+			'${GATEWAY_TRUSTED_INGRESS_SECRET:?set GATEWAY_TRUSTED_INGRESS_SECRET in .env}'
+		)
+		expect(environment('web').GATEWAY_TRUSTED_INGRESS_SECRET).toBe(
+			'${GATEWAY_TRUSTED_INGRESS_SECRET:?set GATEWAY_TRUSTED_INGRESS_SECRET in .env}'
+		)
+		expect(environment('ingress').GATEWAY_TRUSTED_INGRESS_SECRET).toBe(
+			'${GATEWAY_TRUSTED_INGRESS_SECRET:?set GATEWAY_TRUSTED_INGRESS_SECRET in .env}'
+		)
 		expect(environment('gateway').API_CORS_ORIGINS).toBe(
 			'${API_CORS_ORIGINS:-http://localhost:3000}'
+		)
+		expect(environment('auth').BETTER_AUTH_ALLOWED_HOSTS).toBe(
+			'${BETTER_AUTH_ALLOWED_HOSTS:-localhost:3000,api.localhost:3000,localhost:8786,127.0.0.1:8786}'
+		)
+		expect(environment('auth').AUTH_CORS_ORIGINS).toBe(
+			'${AUTH_CORS_ORIGINS:-http://localhost:3000,http://api.localhost:3000}'
 		)
 		expect(environment('gateway').GATEWAY_UPSTREAM_TIMEOUT_MS).toBe(
 			'${GATEWAY_UPSTREAM_TIMEOUT_MS:-10000}'
@@ -157,11 +181,16 @@ describe('Docker gateway topology', () => {
 		)
 	})
 
-	test('gateway preserves the authoritative ingress scheme for auth callbacks', () => {
-		const gateway = scaffold('apps/api/src/index.ts')
-		expect(gateway).toMatch(
-			/request\.headers\.get\('x-forwarded-proto'\)\s*\?\? incoming\.protocol\.slice\(0, -1\)/
-		)
+	test('gateway derives auth callback metadata from its public-origin allowlist', () => {
+		const app = scaffold('apps/api/src/app.ts')
+		const entrypoint = scaffold('apps/api/src/index.ts')
+
+		expect(app).toContain("headers.set('x-forwarded-host', publicOrigin.host)")
+		expect(app).toContain("headers.set('x-forwarded-proto', publicOrigin.protocol)")
+		expect(entrypoint).toContain('publicOrigins: process.env.GATEWAY_PUBLIC_ORIGINS')
+		expect(entrypoint).toContain('trustedIngressSecret')
+		expect(entrypoint).not.toContain("request.headers.get('x-forwarded-host')")
+		expect(entrypoint).not.toContain("request.headers.get('x-forwarded-proto')")
 	})
 
 	test('supports credential-free local OTP verification without removing production email settings', () => {

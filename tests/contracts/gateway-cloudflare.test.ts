@@ -48,6 +48,7 @@ type CloudflareGatewayModule = {
 				paths: Record<string, unknown>
 			}
 			canonicalApiOrigin: string
+			publicOrigins: string
 			corsOrigins: string
 			logger: (line: string) => void
 		}
@@ -100,7 +101,12 @@ type Wrangler = {
 	services?: Service[]
 	vars?: Record<string, string>
 	secrets?: { required?: string[] }
-	d1_databases?: Array<{ binding: string; database_name: string; database_id: string }>
+	d1_databases?: Array<{
+		binding: string
+		database_name: string
+		database_id: string
+		migrations_dir?: string
+	}>
 }
 
 function entry(entries: ReturnType<typeof planFixture>, path: string): string {
@@ -135,6 +141,7 @@ describe('Cloudflare gateway production topology', () => {
 			{
 				openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
 				canonicalApiOrigin: 'https://api.example.test',
+				publicOrigins: 'https://app.example.test,https://api.example.test',
 				corsOrigins: 'https://app.example.test',
 				logger: () => undefined
 			}
@@ -354,6 +361,9 @@ describe('Cloudflare gateway production topology', () => {
 
 		const production = entry(entries, '.env.cloudflare.example')
 		expect(production).toContain('API_PUBLIC_ORIGIN=https://api.<domain>')
+		expect(production).toContain(
+			'GATEWAY_PUBLIC_ORIGINS=https://<domain>,https://api.<domain>'
+		)
 		expect(production).toContain('API_CORS_ORIGINS=https://<domain>')
 		expect(production).toContain('GATEWAY_UPSTREAM_TIMEOUT_MS=10000')
 		expect(production).toContain('PUBLIC_APP_URL=https://<domain>')
@@ -364,6 +374,7 @@ describe('Cloudflare gateway production topology', () => {
 		const gateway = wrangler(entries, 'apps/api/wrangler.jsonc')
 		expect(gateway.vars).toEqual({
 			API_PUBLIC_ORIGIN: 'https://api.<domain>',
+			GATEWAY_PUBLIC_ORIGINS: 'https://<domain>,https://api.<domain>',
 			API_CORS_ORIGINS: 'https://<domain>',
 			GATEWAY_UPSTREAM_TIMEOUT_MS: '10000'
 		})
@@ -373,6 +384,46 @@ describe('Cloudflare gateway production topology', () => {
 			BETTER_AUTH_ALLOWED_HOSTS: '<domain>,api.<domain>',
 			AUTH_CORS_ORIGINS: 'https://<domain>'
 		})
+	})
+
+	test('plain local development overlays scoped root values and shares D1 state', () => {
+		const entries = planFixture('hono-cf-workers-passwordless')
+		const gateway = wrangler(entries, 'apps/api/wrangler.jsonc')
+		const authPackage = JSON.parse(entry(entries, 'services/auth/package.json')) as {
+			scripts: Record<string, string>
+		}
+		const usersPackage = JSON.parse(entry(entries, 'services/users/package.json')) as {
+			scripts: Record<string, string>
+		}
+		const dbPackage = JSON.parse(entry(entries, 'packages/db/package.json')) as {
+			scripts: Record<string, string>
+		}
+		const localScript = entry(entries, 'scripts/local.mjs')
+
+		expect(gateway.secrets?.required).toEqual([])
+		expect(localScript).toContain('"db:prepare:local"')
+		expect(entries.some(({ path }) => path === 'services/auth/.dev.vars')).toBe(false)
+		expect(authPackage.scripts.dev).toContain(
+			'wrangler dev --persist-to ../../.wrangler/state'
+		)
+		expect(usersPackage.scripts.dev).toContain(
+			'wrangler dev --persist-to ../../.wrangler/state'
+		)
+		expect(dbPackage.scripts['db:prepare:local']).toBe(
+			'drizzle-kit generate && pnpm db:migrate:local'
+		)
+		expect(dbPackage.scripts['db:migrate:local']).toContain(
+			'--persist-to ../../.wrangler/state'
+		)
+		expect(wrangler(entries, 'packages/db/wrangler.jsonc').d1_databases).toEqual([
+			{
+				binding: 'DB',
+				database_name: 'hono-cf-workers-passwordless-db',
+				database_id:
+					'<run: wrangler d1 create hono-cf-workers-passwordless-db>',
+				migrations_dir: 'migrations'
+			}
+		])
 	})
 
 	test('gateway, web, auth, and users expose affected build and deploy tasks', () => {

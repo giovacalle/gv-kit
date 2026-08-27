@@ -8,7 +8,7 @@ LICENSE  508a77d2e7b51d98
 README.md  57978be0c4e034e8
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  8810989499b599c7
+apps/web/CLAUDE.md  799754a3a0672889
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  362ffdd2f44a302f
 apps/web/prettier.config.js  76a534fdcb4541a5
@@ -41,7 +41,7 @@ packages/backend/package.json  02118c52884fb692
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
 packages/backend/tsconfig.json  8b32452841b0fe8e
-packages/db/README.md  d3a3b131fc2b84c8
+packages/db/README.md  531eb3b4f007f423
 packages/db/drizzle.config.ts  a0c540ca51839bc4
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  ecf29b6a20b6c71a

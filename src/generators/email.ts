@@ -6,7 +6,7 @@ export function generateEmail(cfg: GvKitConfig): FileEntry[] {
 	const choice = cfg.choices.email
 	if (choice === 'skip') return []
 	const authWorkspacePath =
-		cfg.choices.backend === 'hono' ? AUTH_SERVICE.workspacePath : 'apps/api/auth'
+		cfg.choices.backend === 'hono' ? AUTH_SERVICE.workspacePath : undefined
 	if (choice === 'notifuse') return notifuseFiles(authWorkspacePath)
 
 	const usesParaglide = cfg.choices.i18n === 'paraglide'
@@ -14,7 +14,7 @@ export function generateEmail(cfg: GvKitConfig): FileEntry[] {
 	return resendFiles({ usesParaglide, usesOtp, authWorkspacePath })
 }
 
-function notifuseFiles(authWorkspacePath: string): FileEntry[] {
+function notifuseFiles(authWorkspacePath?: string): FileEntry[] {
 	return [
 		{ path: 'packages/mailer/package.json', content: NOTIFUSE_PKG_JSON },
 		{ path: 'packages/mailer/tsconfig.json', content: NOTIFUSE_TSCONFIG },
@@ -33,7 +33,7 @@ function resendFiles({
 }: {
 	usesParaglide: boolean
 	usesOtp: boolean
-	authWorkspacePath: string
+	authWorkspacePath: string | undefined
 }): FileEntry[] {
 	const entries: FileEntry[] = [
 		{ path: 'packages/mailer/package.json', content: resendPkgJson(usesParaglide) },
@@ -61,7 +61,7 @@ function resendFiles({
 		},
 		{
 			path: 'packages/mailer/README.md',
-			content: resendReadme(usesParaglide, usesOtp, authWorkspacePath)
+			content: resendReadme({ usesParaglide, usesOtp, authWorkspacePath })
 		}
 	]
 
@@ -74,11 +74,6 @@ function resendFiles({
 
 	return entries
 }
-
-// -----------------------------------------------------------------------------
-// Notifuse OSS (self-hosted) — thin RPC client over POST /api/transactional.send
-// Templates live in the Notifuse console (MJML + Liquid). No local rendering.
-// -----------------------------------------------------------------------------
 
 const NOTIFUSE_PKG_JSON =
 	JSON.stringify(
@@ -231,7 +226,9 @@ export function createMailer({ apiKey, workspaceId, baseUrl }: MailerConfig) {
 export type Mailer = ReturnType<typeof createMailer>
 `
 
-function notifuseReadme(authWorkspacePath: string): string {
+function notifuseReadme(authWorkspacePath?: string): string {
+	const consumerExample = authWorkspacePath ? ` (e.g. \`${authWorkspacePath}\`)` : ''
+
 	return `# @repo/mailer
 
 Thin RPC client for a self-hosted [Notifuse](https://notifuse.com) instance.
@@ -299,7 +296,7 @@ pnpm build       # one-shot — clean dist/ then emit ESM + .d.ts
 pnpm dev         # tsup --watch
 \`\`\`
 
-\`turbo run build\` wires \`^build\` so consumers (e.g. \`${authWorkspacePath}\`) get
+\`turbo run build\` wires \`^build\` so consumers${consumerExample} get
 \`packages/mailer/dist/\` rebuilt on demand. Run \`pnpm build\` once after
 \`git clone\` if you skip the turbo orchestrator.
 
@@ -331,10 +328,6 @@ your Liquid template can reference. Keep names snake_case to match
 Notifuse's overall API style.
 `
 }
-
-// -----------------------------------------------------------------------------
-// Resend — react-email templates rendered locally to HTML + plain text
-// -----------------------------------------------------------------------------
 
 function resendPkgJson(usesParaglide: boolean): string {
 	const dependencies: Record<string, string> = {
@@ -690,11 +683,16 @@ export { MailerError, type SendInput, type SendResult } from './types.js'
 export type { BaseTemplateProps, Locale } from './templates/_shared/types.js'
 `
 
-function resendReadme(
-	usesParaglide: boolean,
-	usesOtp: boolean,
-	authWorkspacePath: string
-): string {
+function resendReadme({
+	usesParaglide,
+	usesOtp,
+	authWorkspacePath
+}: {
+	usesParaglide: boolean
+	usesOtp: boolean
+	authWorkspacePath: string | undefined
+}): string {
+	const consumerExample = authWorkspacePath ? ` (e.g. \`${authWorkspacePath}\`)` : ''
 	const otpListItem = usesOtp
 		? `
 - \`src/templates/otp-login.tsx\` — OTP sign-in code`
@@ -820,7 +818,7 @@ pnpm dev         # tsup --watch — rebuild on change while you iterate
 pnpm preview     # react-email preview UI at http://localhost:3001
 \`\`\`
 
-\`turbo run build\` already wires \`^build\` so consumers (e.g. \`${authWorkspacePath}\`)
+\`turbo run build\` already wires \`^build\` so consumers${consumerExample}
 get \`packages/mailer/dist/\` rebuilt on demand. Run \`pnpm build\` once after
 \`git clone\` if you skip the turbo orchestrator.
 

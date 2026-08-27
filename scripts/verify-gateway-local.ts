@@ -1,7 +1,6 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 import { parseJsonc } from '../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../src/pipeline/plan.js'
@@ -9,8 +8,37 @@ import { GvKitConfig, type GvKitConfig as Config } from '../src/schema/config.js
 import { appendCommandEvidence, writeSanitizedArtifact } from './gateway-verification-evidence.js'
 
 const PNPM_VERSION = '11.1.1'
-const LOCAL_ALLOWED_HOSTS = 'localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786'
 const LOCAL_CORS_ORIGINS = 'http://localhost:3000,http://localhost:5173'
+const LOCAL_ENVIRONMENT_NAMES = [
+	'API_CORS_ORIGINS',
+	'API_PUBLIC_ORIGIN',
+	'AUTH_CORS_ORIGINS',
+	'AUTH_URL',
+	'BETTER_AUTH_ALLOWED_HOSTS',
+	'BETTER_AUTH_SECRET',
+	'DATABASE_URL',
+	'FROM_EMAIL',
+	'GATEWAY_PUBLIC_ORIGINS',
+	'GATEWAY_TRUSTED_INGRESS_SECRET',
+	'GATEWAY_UPSTREAM_TIMEOUT_MS',
+	'GATEWAY_URL',
+	'GOOGLE_CLIENT_ID',
+	'GOOGLE_CLIENT_SECRET',
+	'NOTIFUSE_API_KEY',
+	'NOTIFUSE_BASE_URL',
+	'NOTIFUSE_WORKSPACE_ID',
+	'PUBLIC_APP_URL',
+	'PUBLIC_MARKETING_URL',
+	'PUBLIC_POSTHOG_HOST',
+	'PUBLIC_POSTHOG_KEY',
+	'PUBLIC_TURNSTILE_SITE_KEY',
+	'PUBLIC_UMAMI_HOST',
+	'PUBLIC_UMAMI_WEBSITE_ID',
+	'RESEND_API_KEY',
+	'SQLITE_PATH',
+	'TURNSTILE_SECRET_KEY',
+	'USERS_URL'
+]
 
 type RunningCommand = {
 	child: ReturnType<typeof spawn>
@@ -19,6 +47,17 @@ type RunningCommand = {
 }
 
 type CommandResult = { code: number; output: string }
+type LocalCommandOptions = {
+	executable: string
+	args: string[]
+	cwd: string
+}
+type RecordedLocalCommandOptions = LocalCommandOptions & {
+	name: string
+	logPath: string
+	expectedExitCode?: number
+	expectedOutput?: RegExp
+}
 
 type GeneratedProject = {
 	config: Config
@@ -55,7 +94,8 @@ async function materialize(fixture: string, output: string): Promise<GeneratedPr
 	const fixturePath = resolve('fixtures', `${fixture}.jsonc`)
 	const config = GvKitConfig.parse(parseJsonc(await readFile(fixturePath, 'utf8')))
 	if (config.choices.backend !== 'hono') throw new Error(`${fixture} is not a Hono fixture`)
-	if (config.choices.deploy !== 'skip') throw new Error(`${fixture} does not use deploy: skip`)
+	if (!['cf-workers', 'docker', 'skip'].includes(config.choices.deploy))
+		throw new Error(`${fixture} does not use a supported local runtime`)
 
 	const project = join(output, fixture)
 	await rm(project, { recursive: true, force: true })
@@ -73,15 +113,16 @@ async function materialize(fixture: string, output: string): Promise<GeneratedPr
 	return { config, project }
 }
 
-async function runCommand(command: string, args: string[], cwd: string): Promise<CommandResult> {
-	const child = spawn(command, args, {
+async function runCommand({
+	executable,
+	args,
+	cwd
+}: LocalCommandOptions): Promise<CommandResult> {
+	const child = spawn(executable, args, {
 		cwd,
 		env: {
 			...process.env,
 			CI: '1',
-			PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
-			SQLITE_PATH: `file:${join(cwd, 'packages/db/local.db')}`,
-			DATABASE_URL: '',
 			PATH: `${join(cwd, '.verify-bin')}:${process.env.PATH ?? ''}`
 		},
 		stdio: ['ignore', 'pipe', 'pipe']
@@ -96,19 +137,23 @@ async function runCommand(command: string, args: string[], cwd: string): Promise
 	return { code, output }
 }
 
-async function run(
-	name: string,
-	command: string,
-	args: string[],
-	cwd: string,
-	logPath: string,
+async function run({
+	name,
+	executable,
+	args,
+	cwd,
+	logPath,
 	expectedExitCode = 0,
-	expectedOutput?: RegExp
-): Promise<void> {
+	expectedOutput
+}: RecordedLocalCommandOptions): Promise<void> {
 	const started = performance.now()
-	const result = await runCommand(command, args, cwd)
-	const rendered = `${command} ${args.join(' ')}`
-	await writeSanitizedArtifact(logPath, `$ ${rendered}\n\n${result.output}`, [cwd])
+	const result = await runCommand({ executable, args, cwd })
+	const rendered = `${executable} ${args.join(' ')}`
+	await writeSanitizedArtifact({
+		path: logPath,
+		content: `$ ${rendered}\n\n${result.output}`,
+		roots: [cwd]
+	})
 	const passed =
 		result.code === expectedExitCode &&
 		(expectedOutput === undefined || expectedOutput.test(result.output))
@@ -123,41 +168,54 @@ async function run(
 	if (!passed) throw new Error(`${rendered} failed its verification expectation; see ${logPath}`)
 }
 
-async function availablePort(preferred: number): Promise<number> {
-	for (const port of [preferred, ...Array.from({ length: 100 }, (_, index) => 18_700 + index)]) {
-		const available = await new Promise<boolean>((done) => {
-			const server = createServer()
-			server.once('error', () => done(false))
-			server.listen(port, '127.0.0.1', () => server.close(() => done(true)))
+async function writeLocalEnvironment(
+	project: string,
+	authUrl: string
+): Promise<Record<string, string>> {
+	const example = await readFile(join(project, '.env.example'), 'utf8')
+	const environment = example
+		.replace(
+			/^BETTER_AUTH_SECRET=$/m,
+			'BETTER_AUTH_SECRET=local-only-better-auth-secret-at-least-32-characters'
+		)
+		.replace(
+			/^TURNSTILE_SECRET_KEY=$/m,
+			'TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA'
+		)
+		.replace(
+			/^PUBLIC_TURNSTILE_SITE_KEY=$/m,
+			'PUBLIC_TURNSTILE_SITE_KEY=1x00000000000000000000AA'
+		)
+		.replace(/^GOOGLE_CLIENT_ID=$/m, 'GOOGLE_CLIENT_ID=local-only-google-client-id')
+		.replace(
+			/^GOOGLE_CLIENT_SECRET=$/m,
+			'GOOGLE_CLIENT_SECRET=local-only-google-client-secret'
+		)
+		.replace(/^AUTH_URL=.*$/m, `AUTH_URL=${authUrl}`)
+		.replace(
+			/^GATEWAY_TRUSTED_INGRESS_SECRET=$/m,
+			'GATEWAY_TRUSTED_INGRESS_SECRET=local-only-gateway-ingress-secret'
+		)
+	await writeFile(join(project, '.env'), environment)
+	return Object.fromEntries(
+		environment.split('\n').flatMap((line) => {
+			const separator = line.indexOf('=')
+			if (separator < 1 || line.startsWith('#')) return []
+			return [[line.slice(0, separator), line.slice(separator + 1)]]
 		})
-		if (available) return port
-	}
-	throw new Error('Could not find a free local auth verification port')
+	)
 }
 
-function start(command: string, args: string[], cwd: string, authUrl: string): RunningCommand {
-	const child = spawn(command, args, {
+function start({ executable, args, cwd }: LocalCommandOptions): RunningCommand {
+	const environment = { ...process.env }
+	for (const name of LOCAL_ENVIRONMENT_NAMES) delete environment[name]
+	const child = spawn(executable, args, {
 		cwd,
 		detached: true,
 		env: {
-			...process.env,
+			...environment,
 			CI: '1',
-			TURBO_FORCE: 'true',
-			PATH: `${join(cwd, '.verify-bin')}:${process.env.PATH ?? ''}`,
-			GATEWAY_URL: 'http://127.0.0.1:8786',
-			API_PUBLIC_ORIGIN: 'http://localhost:8786',
-			API_CORS_ORIGINS: LOCAL_CORS_ORIGINS,
-			GATEWAY_UPSTREAM_TIMEOUT_MS: '10000',
-			AUTH_URL: authUrl,
-			AUTH_PORT: new URL(authUrl).port,
-			USERS_URL: 'http://127.0.0.1:8788',
-			BETTER_AUTH_SECRET: 'local-only-better-auth-secret-at-least-32-characters',
-			BETTER_AUTH_ALLOWED_HOSTS: LOCAL_ALLOWED_HOSTS,
-			AUTH_CORS_ORIGINS: LOCAL_CORS_ORIGINS,
-			SQLITE_PATH: `file:${join(cwd, 'packages/db/local.db')}`,
-			RESEND_API_KEY: '',
-			NOTIFUSE_API_KEY: '',
-			TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA'
+			PATH: `${join(cwd, '.verify-bin')}:${process.env.PATH ?? ''}`
 		},
 		stdio: ['ignore', 'pipe', 'pipe']
 	})
@@ -181,6 +239,44 @@ async function requestWhenReady(url: string, timeoutMs = 60_000): Promise<Respon
 	throw new Error(`Timed out waiting for ${url}: ${String(lastError)}`)
 }
 
+async function healthWhenReady(url: string, timeoutMs = 60_000) {
+	const deadline = Date.now() + timeoutMs
+	let latest = { status: 0, body: '' }
+	while (Date.now() < deadline) {
+		try {
+			const response = await fetch(url)
+			latest = { status: response.status, body: await response.text() }
+			if (latest.status === 200 && latest.body === 'ok') return latest
+		} catch {
+			latest = { status: 0, body: '' }
+		}
+		await Bun.sleep(250)
+	}
+	throw new Error(`Timed out waiting for ${url} health: ${latest.status} ${latest.body}`)
+}
+
+async function localAuthWhenReady() {
+	const deadline = Date.now() + 60_000
+	let latest: Response | undefined
+	while (Date.now() < deadline) {
+		try {
+			latest = await fetch('http://127.0.0.1:8786/api/auth/get-session', {
+				headers: { origin: 'http://localhost:5173' }
+			})
+			if (
+				latest.status === 200 &&
+				latest.headers.get('access-control-allow-origin') === 'http://localhost:5173' &&
+				latest.headers.get('access-control-allow-credentials') === 'true'
+			)
+				return latest
+		} catch {
+			latest = undefined
+		}
+		await Bun.sleep(250)
+	}
+	throw new Error(`Timed out waiting for the Cloudflare auth contract: ${latest?.status ?? 0}`)
+}
+
 async function stop(command: RunningCommand): Promise<void> {
 	const pid = command.child.pid
 	if (!pid) return
@@ -195,6 +291,34 @@ async function stop(command: RunningCommand): Promise<void> {
 	} catch {
 		// The process group stopped after SIGTERM.
 	}
+}
+
+function localWebOrigin(deploy: Config['choices']['deploy']): string {
+	return deploy === 'docker' ? 'http://localhost:3000' : 'http://localhost:5173'
+}
+
+function processInventory(command: RunningCommand, deploy: Config['choices']['deploy']) {
+	const output = command.output().replaceAll(/\u001b\[[0-9;]*m/g, '')
+	const loopbackEndpoint = (port: number) =>
+		new RegExp(`https?://(?:localhost|127\\.0\\.0\\.1):${port}(?:/|\\b)`).test(output)
+	const inventory = {
+		web: loopbackEndpoint(deploy === 'docker' ? 3000 : 5173),
+		gateway:
+			deploy === 'cf-workers'
+				? loopbackEndpoint(8786)
+				: output.includes('gateway listening on http://127.0.0.1:8786'),
+		auth:
+			deploy === 'cf-workers'
+				? loopbackEndpoint(8787)
+				: output.includes('auth listening on http://127.0.0.1:8787'),
+		users:
+			deploy === 'cf-workers'
+				? loopbackEndpoint(8788)
+				: output.includes('users listening on http://127.0.0.1:8788')
+	}
+	if (Object.values(inventory).some((started) => !started))
+		throw new Error(`plain root dev command omitted a process: ${JSON.stringify(inventory)}`)
+	return inventory
 }
 
 function startAuthRecorder(): { requests: RecordedRequest[]; target: AuthTarget } {
@@ -221,17 +345,21 @@ function startAuthRecorder(): { requests: RecordedRequest[]; target: AuthTarget 
 
 async function verifyGatewayTopology({
 	project,
+	command,
 	requests,
-	authUrl
+	authUrl,
+	deploy
 }: {
 	project: string
+	command: RunningCommand
 	requests: RecordedRequest[]
 	authUrl: string
+	deploy: Config['choices']['deploy']
 }) {
 	const gatewayHealth = await requestWhenReady('http://127.0.0.1:8786/api/healthz')
 	const openApiResponse = await requestWhenReady('http://127.0.0.1:8786/api/openapi.json')
 	const runtimeOpenApi = (await openApiResponse.json()) as { servers?: { url: string }[] }
-	const webHealth = await requestWhenReady('http://localhost:5173/api/healthz')
+	const webHealth = await requestWhenReady(`${localWebOrigin(deploy)}/api/healthz`)
 	const direct = await requestWhenReady('http://127.0.0.1:8788/healthz')
 	const known = await fetch('http://127.0.0.1:8786/api/v1/users/me', {
 		headers: { cookie: 'session=verification' }
@@ -242,6 +370,7 @@ async function verifyGatewayTopology({
 	const unknown = await fetch('http://127.0.0.1:8786/api/unknown')
 	const evidence = {
 		project: '.',
+		processInventory: processInventory(command, deploy),
 		gatewayHealth: { status: gatewayHealth.status, body: await gatewayHealth.text() },
 		openApi: { status: openApiResponse.status, servers: runtimeOpenApi.servers },
 		webAliasHealth: { status: webHealth.status, body: await webHealth.text() },
@@ -286,15 +415,74 @@ async function verifyGatewayTopology({
 		evidence.upstreamRedirect.requests.length !== 1
 	)
 		throw new Error('gateway did not preserve the upstream redirect response')
-	await writeSanitizedArtifact(
-		join(project, 'evidence.json'),
-		`${JSON.stringify(evidence, null, 2)}\n`,
-		[project]
-	)
+	await writeSanitizedArtifact({
+		path: join(project, 'evidence.json'),
+		content: `${JSON.stringify(evidence, null, 2)}\n`,
+		roots: [project]
+	})
 	return evidence
 }
 
-async function postJson(url: string, body: unknown, headers: Record<string, string> = {}) {
+async function verifyCloudflareTopology({
+	project,
+	command,
+	authUrl
+}: {
+	project: string
+	command: RunningCommand
+	authUrl: string
+}) {
+	const gatewayHealth = await healthWhenReady('http://127.0.0.1:8786/api/healthz')
+	const openApiResponse = await requestWhenReady('http://127.0.0.1:8786/api/openapi.json')
+	const runtimeOpenApi = (await openApiResponse.json()) as { servers?: { url: string }[] }
+	const webHealth = await healthWhenReady('http://localhost:5173/api/healthz')
+	const authHealth = await healthWhenReady(`${authUrl}/healthz`)
+	const usersHealth = await healthWhenReady('http://127.0.0.1:8788/healthz')
+	const authSession = await localAuthWhenReady()
+	const evidence = {
+		project: '.',
+		processInventory: processInventory(command, 'cf-workers'),
+		health: {
+			gateway: gatewayHealth,
+			webAlias: webHealth,
+			auth: authHealth,
+			users: usersHealth
+		},
+		openApi: { status: openApiResponse.status, servers: runtimeOpenApi.servers },
+		localAuthEnvironment: {
+			status: authSession.status,
+			allowOrigin: authSession.headers.get('access-control-allow-origin'),
+			credentials: authSession.headers.get('access-control-allow-credentials')
+		}
+	}
+	if (
+		evidence.openApi.status !== 200 ||
+		JSON.stringify(evidence.openApi.servers) !== JSON.stringify([{ url: 'http://localhost:8786' }])
+	)
+		throw new Error('Cloudflare OpenAPI did not advertise the local canonical origin')
+	if (
+		evidence.localAuthEnvironment.status !== 200 ||
+		evidence.localAuthEnvironment.allowOrigin !== 'http://localhost:5173' ||
+		evidence.localAuthEnvironment.credentials !== 'true'
+	)
+		throw new Error('Cloudflare auth did not receive the local host and CORS contract')
+	await writeSanitizedArtifact({
+		path: join(project, 'evidence.json'),
+		content: `${JSON.stringify(evidence, null, 2)}\n`,
+		roots: [project]
+	})
+	return evidence
+}
+
+async function postJson({
+	url,
+	body,
+	headers = {}
+}: {
+	url: string
+	body: unknown
+	headers?: Record<string, string>
+}) {
 	return fetch(url, {
 		method: 'POST',
 		headers: { 'content-type': 'application/json', ...headers },
@@ -331,16 +519,28 @@ function redactedCookies(jar: CookieJar) {
 	})
 }
 
-async function signInWithOtp(origin: string, email: string, command: RunningCommand) {
-	const send = await postJson(
-		`${origin}/api/auth/email-otp/send-verification-otp`,
-		{ email, type: 'sign-in' },
-		{ origin, 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' }
-	)
+async function signInWithOtp({
+	origin,
+	email,
+	command
+}: {
+	origin: string
+	email: string
+	command: RunningCommand
+}) {
+	const send = await postJson({
+		url: `${origin}/api/auth/email-otp/send-verification-otp`,
+		body: { email, type: 'sign-in' },
+		headers: { origin, 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' }
+	})
 	if (!send.ok)
 		throw new Error(`OTP send failed for ${origin}: ${send.status} ${await send.text()}`)
 	const otp = await waitForOtp(command, email)
-	const signIn = await postJson(`${origin}/api/auth/sign-in/email-otp`, { email, otp }, { origin })
+	const signIn = await postJson({
+		url: `${origin}/api/auth/sign-in/email-otp`,
+		body: { email, otp },
+		headers: { origin }
+	})
 	if (!signIn.ok)
 		throw new Error(`OTP sign-in failed for ${origin}: ${signIn.status} ${await signIn.text()}`)
 	const jar = cookieJar(signIn)
@@ -350,7 +550,15 @@ async function signInWithOtp(origin: string, email: string, command: RunningComm
 	return jar
 }
 
-async function verifySession(origin: string, jar: CookieJar, email: string) {
+async function verifySession({
+	origin,
+	jar,
+	email
+}: {
+	origin: string
+	jar: CookieJar
+	email: string
+}) {
 	const response = await fetch(`${origin}/api/auth/get-session`, {
 		headers: { cookie: jar.header }
 	})
@@ -372,6 +580,7 @@ async function verifyOperationalRuntime(project: string) {
 					paths: Record<string, unknown>
 				}
 				canonicalApiOrigin: string
+				publicOrigins: string
 				corsOrigins: string
 				logger: (line: string) => void
 				upstreamTimeoutMs: number
@@ -379,6 +588,7 @@ async function verifyOperationalRuntime(project: string) {
 		): { fetch(request: Request): Promise<Response> }
 	}
 	const logs: string[] = []
+	const publicOrigin = 'http://operational.example.test'
 	const app = gatewayModule.createGateway(
 		{
 			USERS: {
@@ -399,6 +609,7 @@ async function verifyOperationalRuntime(project: string) {
 		{
 			openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
 			canonicalApiOrigin: 'http://localhost:8786',
+			publicOrigins: publicOrigin,
 			corsOrigins: LOCAL_CORS_ORIGINS,
 			logger: (line) => logs.push(line),
 			upstreamTimeoutMs: 25
@@ -416,13 +627,16 @@ async function verifyOperationalRuntime(project: string) {
 			origin: 'http://localhost:5173',
 			'x-request-id': 'operational-contract-request'
 		}
-		const valid = await fetch(`${origin}/api/v1/users/valid?token=not-logged`, { headers })
+		const publicHeaders = { ...headers, host: new URL(publicOrigin).host }
+		const valid = await fetch(`${origin}/api/v1/users/valid?token=not-logged`, {
+			headers: publicHeaders
+		})
 		const validBody = await valid.text()
-		const missing = await fetch(`${origin}/api/auth/session`, { headers })
-		const transport = await fetch(`${origin}/api/v1/users/transport`, { headers })
-		const timeout = await fetch(`${origin}/api/v1/users/timeout`, { headers })
+		const missing = await fetch(`${origin}/api/auth/session`, { headers: publicHeaders })
+		const transport = await fetch(`${origin}/api/v1/users/transport`, { headers: publicHeaders })
+		const timeout = await fetch(`${origin}/api/v1/users/timeout`, { headers: publicHeaders })
 		const denied = await fetch(`${origin}/api/v1/users/valid`, {
-			headers: { ...headers, origin: 'https://evil.example.test' }
+			headers: { ...publicHeaders, origin: 'https://evil.example.test' }
 		})
 
 		if (
@@ -517,8 +731,18 @@ async function waitForStructuredTrace(command: RunningCommand, requestId: string
 	throw new Error('one request ID was not present in gateway, users, and auth structured logs')
 }
 
-async function verifyDualOriginAuth(project: string, command: RunningCommand, authUrl: string) {
-	const webOrigin = 'http://localhost:5173'
+async function verifyDualOriginAuth({
+	project,
+	command,
+	authUrl,
+	deploy
+}: {
+	project: string
+	command: RunningCommand
+	authUrl: string
+	deploy: Config['choices']['deploy']
+}) {
+	const webOrigin = localWebOrigin(deploy)
 	const apiOrigin = 'http://127.0.0.1:8786'
 	const gatewayHealth = await requestWhenReady(`${apiOrigin}/api/healthz`)
 	const gatewayHealthBody = await gatewayHealth.text()
@@ -560,7 +784,21 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 	const unknownHost = await fetch(`${apiOrigin}/api/auth/get-session`, {
 		headers: { host: 'evil.example.test' }
 	})
+	const forgedUnknownHost = await fetch(`${apiOrigin}/api/auth/get-session`, {
+		headers: {
+			host: 'evil.example.test',
+			'x-forwarded-host': new URL(webOrigin).host,
+			'x-forwarded-proto': new URL(webOrigin).protocol.slice(0, -1)
+		}
+	})
+	const approvedHostWithForgedForwarding = await fetch(`${apiOrigin}/api/auth/get-session`, {
+		headers: {
+			'x-forwarded-host': 'evil.example.test',
+			'x-forwarded-proto': 'https'
+		}
+	})
 	const unknownHostBody = await unknownHost.text()
+	const forgedUnknownHostBody = await forgedUnknownHost.text()
 	if (allowedCors.status !== 200)
 		throw new Error(`approved Better Auth host control failed with ${allowedCors.status}`)
 	if (allowedCors.headers.get('access-control-allow-origin') !== webOrigin)
@@ -571,24 +809,27 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 		throw new Error('approved CORS origin did not allow credentials')
 	if (deniedCors.headers.get('access-control-allow-origin'))
 		throw new Error('denied CORS origin received an allow-origin header')
-	const unknownHostDiagnostic = 'Host "evil.example.test" is not in the allowed hosts list.'
-	if (
-		unknownHost.status !== 500 ||
-		unknownHostBody !== 'Internal Server Error' ||
-		!command.output().includes(unknownHostDiagnostic)
-	)
+	if (unknownHost.status !== 421 || unknownHostBody !== 'misdirected request')
 		throw new Error(
-			`unknown Better Auth host did not return the expected rejection: ${unknownHost.status} ${unknownHostBody}`
+			`unknown direct host did not fail at the gateway boundary: ${unknownHost.status} ${unknownHostBody}`
+		)
+	if (forgedUnknownHost.status !== 421 || forgedUnknownHostBody !== 'misdirected request')
+		throw new Error(
+			`forged forwarding headers approved an unknown direct host: ${forgedUnknownHost.status} ${forgedUnknownHostBody}`
+		)
+	if (approvedHostWithForgedForwarding.status !== 200)
+		throw new Error(
+			`forged forwarding headers overrode an approved direct host: ${approvedHostWithForgedForwarding.status}`
 		)
 
 	const webEmail = 'web-origin@example.test'
 	const apiEmail = 'api-origin@example.test'
-	const webJar = await signInWithOtp(webOrigin, webEmail, command)
-	const apiJar = await signInWithOtp(apiOrigin, apiEmail, command)
+	const webJar = await signInWithOtp({ origin: webOrigin, email: webEmail, command })
+	const apiJar = await signInWithOtp({ origin: apiOrigin, email: apiEmail, command })
 	if (webJar.header === apiJar.header)
 		throw new Error('web and API origins received the same cookie jar')
-	const webSession = await verifySession(webOrigin, webJar, webEmail)
-	const apiSession = await verifySession(apiOrigin, apiJar, apiEmail)
+	const webSession = await verifySession({ origin: webOrigin, jar: webJar, email: webEmail })
+	const apiSession = await verifySession({ origin: apiOrigin, jar: apiJar, email: apiEmail })
 	const traceRequestId = 'local-contract-request'
 	const knownPrefix = await fetch(`${apiOrigin}/api/v1/users/me`, {
 		headers: {
@@ -624,6 +865,7 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 	const operational = await verifyOperationalRuntime(project)
 	const evidence = {
 		project: '.',
+		processInventory: processInventory(command, deploy),
 		ingress: {
 			exactWebAlias: {
 				url: `${webOrigin}/api`,
@@ -663,11 +905,20 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 			webAlias: { status: webHealth.status, body: webHealthBody },
 			auth: { status: authHealth.status, body: authHealthBody }
 		},
-		unknownHost: {
-			host: 'evil.example.test',
-			status: unknownHost.status,
-			responseBody: unknownHostBody,
-			diagnostic: unknownHostDiagnostic
+		publicHostMatrix: {
+			approvedDirectHost: { status: allowedCors.status },
+			approvedDirectHostWithForgedForwarding: {
+				status: approvedHostWithForgedForwarding.status
+			},
+			unknownDirectHost: {
+				host: 'evil.example.test',
+				status: unknownHost.status,
+				responseBody: unknownHostBody
+			},
+			unknownDirectHostWithApprovedForwarding: {
+				status: forgedUnknownHost.status,
+				responseBody: forgedUnknownHostBody
+			}
 		},
 		sessions: { web: webSession, api: apiSession },
 		routes: {
@@ -697,11 +948,11 @@ async function verifyDualOriginAuth(project: string, command: RunningCommand, au
 		captchaHeader: 'x-captcha-response survived the web and API gateway paths',
 		oauth: 'dynamic callback host resolution is covered structurally; no provider credentials used'
 	}
-	await writeSanitizedArtifact(
-		join(project, 'evidence.json'),
-		`${JSON.stringify(evidence, null, 2)}\n`,
-		[project]
-	)
+	await writeSanitizedArtifact({
+		path: join(project, 'evidence.json'),
+		content: `${JSON.stringify(evidence, null, 2)}\n`,
+		roots: [project]
+	})
 	return evidence
 }
 
@@ -719,77 +970,77 @@ async function verifyOpenApiContract(project: string) {
 	const pnpm = [`pnpm@${PNPM_VERSION}`]
 	const cleanDiagnostic = /OpenAPI is current \(sha256:[0-9a-f]{64}\)/
 	const driftDiagnostic = /apps\/api\/openapi\.json drifted; run pnpm openapi:compose/
-	await run(
-		'openapi-check-baseline',
-		'corepack',
-		[...pnpm, 'openapi:check'],
-		project,
-		join(project, 'openapi-check-baseline.log'),
-		0,
-		cleanDiagnostic
-	)
-	await run(
-		'openapi-compose-first',
-		'corepack',
-		[...pnpm, 'openapi:compose'],
-		project,
-		join(project, 'openapi-compose-first.log')
-	)
+	await run({
+		name: 'openapi-check-baseline',
+		executable: 'corepack',
+		args: [...pnpm, 'openapi:check'],
+		cwd: project,
+		logPath: join(project, 'openapi-check-baseline.log'),
+		expectedExitCode: 0,
+		expectedOutput: cleanDiagnostic
+	})
+	await run({
+		name: 'openapi-compose-first',
+		executable: 'corepack',
+		args: [...pnpm, 'openapi:compose'],
+		cwd: project,
+		logPath: join(project, 'openapi-compose-first.log')
+	})
 	const openApiPath = join(project, 'apps/api/openapi.json')
 	const firstDocument = await readFile(openApiPath, 'utf8')
 	const firstHash = createHash('sha256').update(firstDocument).digest('hex')
-	await run(
-		'openapi-compose-second',
-		'corepack',
-		[...pnpm, 'openapi:compose'],
-		project,
-		join(project, 'openapi-compose-second.log')
-	)
+	await run({
+		name: 'openapi-compose-second',
+		executable: 'corepack',
+		args: [...pnpm, 'openapi:compose'],
+		cwd: project,
+		logPath: join(project, 'openapi-compose-second.log')
+	})
 	const secondDocument = await readFile(openApiPath, 'utf8')
 	const secondHash = createHash('sha256').update(secondDocument).digest('hex')
 	if (firstHash !== secondHash || firstDocument !== secondDocument)
 		throw new Error('repeated OpenAPI composition was not byte-identical')
 
 	await writeFile(openApiPath, `${secondDocument} `)
-	await run(
-		'openapi-drift-rejection',
-		'corepack',
-		[...pnpm, 'openapi:check'],
-		project,
-		join(project, 'openapi-drift.log'),
-		1,
-		driftDiagnostic
-	)
-	await run(
-		'openapi-compose-restore',
-		'corepack',
-		[...pnpm, 'openapi:compose'],
-		project,
-		join(project, 'openapi-compose-restore.log')
-	)
-	await run(
-		'openapi-check-final',
-		'corepack',
-		[...pnpm, 'openapi:check'],
-		project,
-		join(project, 'openapi-check-final.log'),
-		0,
-		cleanDiagnostic
-	)
-	await run(
-		'openapi-codegen',
-		'corepack',
-		[...pnpm, 'codegen'],
-		project,
-		join(project, 'codegen.log')
-	)
-	await run(
-		'typed-consumer-check',
-		'corepack',
-		[...pnpm, 'typecheck'],
-		project,
-		join(project, 'typecheck.log')
-	)
+	await run({
+		name: 'openapi-drift-rejection',
+		executable: 'corepack',
+		args: [...pnpm, 'openapi:check'],
+		cwd: project,
+		logPath: join(project, 'openapi-drift.log'),
+		expectedExitCode: 1,
+		expectedOutput: driftDiagnostic
+	})
+	await run({
+		name: 'openapi-compose-restore',
+		executable: 'corepack',
+		args: [...pnpm, 'openapi:compose'],
+		cwd: project,
+		logPath: join(project, 'openapi-compose-restore.log')
+	})
+	await run({
+		name: 'openapi-check-final',
+		executable: 'corepack',
+		args: [...pnpm, 'openapi:check'],
+		cwd: project,
+		logPath: join(project, 'openapi-check-final.log'),
+		expectedExitCode: 0,
+		expectedOutput: cleanDiagnostic
+	})
+	await run({
+		name: 'openapi-codegen',
+		executable: 'corepack',
+		args: [...pnpm, 'codegen'],
+		cwd: project,
+		logPath: join(project, 'codegen.log')
+	})
+	await run({
+		name: 'typed-consumer-check',
+		executable: 'corepack',
+		args: [...pnpm, 'typecheck'],
+		cwd: project,
+		logPath: join(project, 'typecheck.log')
+	})
 
 	const checkedDocument = JSON.parse(await readFile(openApiPath, 'utf8')) as {
 		paths: Record<string, unknown>
@@ -837,11 +1088,11 @@ async function verifyOpenApiContract(project: string) {
 		browserTransport: 'same-origin baseUrl',
 		ssrTransport: 'request-scoped fetch'
 	}
-	await writeSanitizedArtifact(
-		join(project, 'contract-evidence.json'),
-		`${JSON.stringify(evidence, null, 2)}\n`,
-		[project]
-	)
+	await writeSanitizedArtifact({
+		path: join(project, 'contract-evidence.json'),
+		content: `${JSON.stringify(evidence, null, 2)}\n`,
+		roots: [project]
+	})
 	return evidence
 }
 
@@ -860,60 +1111,83 @@ async function main(): Promise<void> {
 	if (viteConfig.includes("'/api': { target:"))
 		throw new Error('generated local Vite ingress overmatches paths outside /api')
 
-	await run(
-		'install',
-		'corepack',
-		[`pnpm@${PNPM_VERSION}`, 'install', '--no-frozen-lockfile'],
+	await run({
+		name: 'install',
+		executable: 'corepack',
+		args: [`pnpm@${PNPM_VERSION}`, 'install', '--no-frozen-lockfile'],
+		cwd: generated.project,
+		logPath: join(generated.project, 'install.log')
+	})
+	await run({
+		name: 'missing-local-environment',
+		executable: 'corepack',
+		args: [`pnpm@${PNPM_VERSION}`, 'dev'],
+		cwd: generated.project,
+		logPath: join(generated.project, 'missing-local-environment.log'),
+		expectedExitCode: 1,
+		expectedOutput: /Missing \.env\. Run `cp \.env\.example \.env`/
+	})
+
+	const hasAuth = generated.config.choices.auth.length > 0
+	const localEnvironment = await writeLocalEnvironment(
 		generated.project,
-		join(generated.project, 'install.log')
+		'http://127.0.0.1:8787'
 	)
+	Object.assign(process.env, localEnvironment)
+	await run({
+		name: 'local-environment-prepare',
+		executable: 'corepack',
+		args: [`pnpm@${PNPM_VERSION}`, 'local:prepare'],
+		cwd: generated.project,
+		logPath: join(generated.project, 'database.log')
+	})
 	if (args.contract) {
 		if (generated.config.choices.apiClient !== 'hey-api')
 			throw new Error('--contract requires a fixture with apiClient: hey-api')
 		const contractEvidence = await verifyOpenApiContract(generated.project)
 		console.log(JSON.stringify(contractEvidence, null, 2))
 	}
-
-	const hasAuth = generated.config.choices.auth.length > 0
-	if (hasAuth) {
-		await run(
-			'database-prepare',
-			'corepack',
-			[`pnpm@${PNPM_VERSION}`, '--filter', '@repo/db', 'exec', 'drizzle-kit', 'push', '--force'],
-			generated.project,
-			join(generated.project, 'database.log')
-		)
-	}
 	const recorder = hasAuth ? undefined : startAuthRecorder()
-	const authPort = hasAuth ? await availablePort(8787) : undefined
 	const authUrl = recorder
 		? `http://127.0.0.1:${recorder.target.port}`
-		: `http://127.0.0.1:${authPort}`
-	const dev = start(
-		'corepack',
-		[`pnpm@${PNPM_VERSION}`, 'dev', '--env-mode=loose'],
-		generated.project,
-		authUrl
-	)
+		: 'http://127.0.0.1:8787'
+	if (recorder) await writeLocalEnvironment(generated.project, authUrl)
+	const dev = start({
+		executable: 'corepack',
+		args: [`pnpm@${PNPM_VERSION}`, 'dev'],
+		cwd: generated.project
+	})
 	let runtimePassed = false
 	try {
-		const evidence = hasAuth
-			? await verifyDualOriginAuth(generated.project, dev, authUrl)
-			: await verifyGatewayTopology({
-					project: generated.project,
-					requests: recorder!.requests,
-					authUrl
-				})
+		const evidence =
+			generated.config.choices.deploy === 'cf-workers'
+				? await verifyCloudflareTopology({ project: generated.project, command: dev, authUrl })
+				: hasAuth
+					? await verifyDualOriginAuth({
+							project: generated.project,
+							command: dev,
+							authUrl,
+							deploy: generated.config.choices.deploy
+						})
+					: await verifyGatewayTopology({
+							project: generated.project,
+							command: dev,
+							requests: recorder!.requests,
+							authUrl,
+							deploy: generated.config.choices.deploy
+						})
 		console.log(JSON.stringify(evidence, null, 2))
 		runtimePassed = true
 	} finally {
-		await writeSanitizedArtifact(join(generated.project, 'startup.log'), dev.output(), [
-			generated.project
-		])
+		await writeSanitizedArtifact({
+			path: join(generated.project, 'startup.log'),
+			content: dev.output(),
+			roots: [generated.project]
+		})
 		await stop(dev)
 		await appendCommandEvidence(generated.project, {
 			name: 'local-runtime-smoke',
-			command: `corepack pnpm@${PNPM_VERSION} dev --env-mode=loose`,
+			command: `corepack pnpm@${PNPM_VERSION} dev`,
 			outcome: runtimePassed ? 'passed' : 'failed',
 			durationMs: Math.round(performance.now() - dev.started),
 			logPath: join(generated.project, 'startup.log'),

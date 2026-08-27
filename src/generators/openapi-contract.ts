@@ -112,7 +112,12 @@ export function composeGatewayOpenApi({
 	)) {
 		validateFragment(fragment, operationOwners)
 		mergeComponents(components, fragment)
-		mergePaths(paths, pathIdentities, fragment, components.parameters)
+		mergePaths({
+			target: paths,
+			pathIdentities,
+			fragment,
+			parameterComponents: components.parameters
+		})
 	}
 
 	const document: OpenApiDocument = {
@@ -140,7 +145,11 @@ function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string
 			`OpenAPI fragment "${fragment.owner}" uses unsupported Link Objects at components.links`
 		)
 	for (const [name, response] of Object.entries(fragment.document.components?.responses ?? {})) {
-		rejectResponseLinks(response, `components.responses.${name}`, fragment.owner)
+		rejectResponseLinks({
+			response,
+			location: `components.responses.${name}`,
+			owner: fragment.owner
+		})
 	}
 
 	for (const [path, pathItem] of Object.entries(fragment.document.paths)) {
@@ -156,7 +165,11 @@ function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string
 			throw new Error(
 				`OpenAPI fragment "${fragment.owner}" must not declare servers at paths.${path}.servers`
 			)
-		validateParameterList(pathItem.parameters, `paths.${path}.parameters`, fragment)
+		validateParameterList({
+			value: pathItem.parameters,
+			location: `paths.${path}.parameters`,
+			fragment
+		})
 		for (const [method, value] of Object.entries(pathItem)) {
 			if (!HTTP_METHODS.has(method)) continue
 			if (!isJsonObject(value))
@@ -186,41 +199,57 @@ function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string
 					`duplicate operationId "${operationId}" in fragments "${firstOwner}" and "${fragment.owner}"`
 				)
 			operationOwners.set(operationId, fragment.owner)
-			validateParameterList(value.parameters, `paths.${path}.${method}.parameters`, fragment)
+			validateParameterList({
+				value: value.parameters,
+				location: `paths.${path}.${method}.parameters`,
+				fragment
+			})
 			if (isJsonObject(value.responses)) {
 				for (const [status, response] of Object.entries(value.responses)) {
-					rejectResponseLinks(
+					rejectResponseLinks({
 						response,
-						`paths.${path}.${method}.responses.${status}`,
-						fragment.owner
-					)
+						location: `paths.${path}.${method}.responses.${status}`,
+						owner: fragment.owner
+					})
 				}
 			}
 		}
 	}
 }
 
-function rejectResponseLinks(response: JsonValue, location: string, owner: string): void {
+function rejectResponseLinks({
+	response,
+	location,
+	owner
+}: {
+	response: JsonValue
+	location: string
+	owner: string
+}): void {
 	if (!isJsonObject(response) || response.links === undefined) return
 	throw new Error(`OpenAPI fragment "${owner}" uses unsupported Link Objects at ${location}.links`)
 }
 
-function validateParameterList(
-	value: JsonValue | undefined,
-	location: string,
+function validateParameterList({
+	value,
+	location,
+	fragment
+}: {
+	value: JsonValue | undefined
+	location: string
 	fragment: OpenApiFragment
-): void {
+}): void {
 	if (value === undefined) return
 	if (!Array.isArray(value))
 		throw new Error(`OpenAPI fragment "${fragment.owner}" has invalid parameters at ${location}`)
 	const parameters = new Map<string, JsonValue>()
 	for (const [index, parameter] of value.entries()) {
-		const descriptor = parameterDescriptor(
-			parameter,
-			fragment.document.components?.parameters,
-			`${location}[${index}]`,
-			fragment.owner
-		)
+		const descriptor = parameterDescriptor({
+			value: parameter,
+			parameterComponents: fragment.document.components?.parameters,
+			location: `${location}[${index}]`,
+			owner: fragment.owner
+		})
 		if (!descriptor.identity) continue
 		const existing = parameters.get(descriptor.identity)
 		if (existing && !jsonEqual(existing, descriptor.definition))
@@ -231,12 +260,17 @@ function validateParameterList(
 	}
 }
 
-function mergePaths(
-	target: Record<string, JsonObject>,
-	pathIdentities: Map<string, string>,
-	fragment: OpenApiFragment,
+function mergePaths({
+	target,
+	pathIdentities,
+	fragment,
+	parameterComponents
+}: {
+	target: Record<string, JsonObject>
+	pathIdentities: Map<string, string>
+	fragment: OpenApiFragment
 	parameterComponents: Record<string, JsonValue> | undefined
-): void {
+}): void {
 	for (const [path, incoming] of Object.entries(fragment.document.paths)) {
 		const identity = path.replaceAll(/\{[^}]+\}/g, '{}')
 		const equivalentPath = pathIdentities.get(identity)
@@ -257,13 +291,13 @@ function mergePaths(
 			}
 			if (HTTP_METHODS.has(field)) throw new Error(`method collision at ${location}`)
 			if (field === 'parameters') {
-				existing[field] = mergeParameters(
-					current,
-					value,
+				existing[field] = mergeParameters({
+					existing: current,
+					incoming: value,
 					location,
 					parameterComponents,
-					fragment.owner
-				)
+					owner: fragment.owner
+				})
 				continue
 			}
 			if (!jsonEqual(current, value)) throw new Error(`path collision at ${location}`)
@@ -271,33 +305,39 @@ function mergePaths(
 	}
 }
 
-function mergeParameters(
-	existing: JsonValue,
-	incoming: JsonValue,
-	location: string,
-	parameterComponents: Record<string, JsonValue> | undefined,
+function mergeParameters({
+	existing,
+	incoming,
+	location,
+	parameterComponents,
+	owner
+}: {
+	existing: JsonValue
+	incoming: JsonValue
+	location: string
+	parameterComponents: Record<string, JsonValue> | undefined
 	owner: string
-): JsonValue[] {
+}): JsonValue[] {
 	if (!Array.isArray(existing) || !Array.isArray(incoming))
 		throw new Error(`parameter collision at ${location}`)
 	const merged = structuredClone(existing)
 	const byIdentity = new Map<string, JsonValue>()
 	for (const [index, parameter] of merged.entries()) {
-		const descriptor = parameterDescriptor(
-			parameter,
+		const descriptor = parameterDescriptor({
+			value: parameter,
 			parameterComponents,
-			`${location}[${index}]`,
+			location: `${location}[${index}]`,
 			owner
-		)
+		})
 		if (descriptor.identity) byIdentity.set(descriptor.identity, descriptor.definition)
 	}
 	for (const [index, parameter] of incoming.entries()) {
-		const descriptor = parameterDescriptor(
-			parameter,
+		const descriptor = parameterDescriptor({
+			value: parameter,
 			parameterComponents,
-			`${location}[${merged.length + index}]`,
+			location: `${location}[${merged.length + index}]`,
 			owner
-		)
+		})
 		if (!descriptor.identity) {
 			if (!merged.some((candidate) => jsonEqual(candidate, parameter)))
 				merged.push(structuredClone(parameter))
@@ -329,26 +369,43 @@ function mergeComponents(
 	}
 }
 
-function parameterDescriptor(
-	value: JsonValue,
-	parameterComponents: Record<string, JsonValue> | undefined,
-	location: string,
+function parameterDescriptor({
+	value,
+	parameterComponents,
+	location,
+	owner
+}: {
+	value: JsonValue
+	parameterComponents: Record<string, JsonValue> | undefined
+	location: string
 	owner: string
-): { definition: JsonValue; identity: string | undefined } {
+}): { definition: JsonValue; identity: string | undefined } {
 	const definition =
 		isJsonObject(value) && typeof value.$ref === 'string'
-			? resolveParameterReference(value.$ref, parameterComponents, location, owner, new Set())
+			? resolveParameterReference({
+					reference: value.$ref,
+					parameterComponents,
+					location,
+					owner,
+					seen: new Set()
+				})
 			: value
 	return { definition, identity: directParameterIdentity(definition) }
 }
 
-function resolveParameterReference(
-	reference: string,
-	parameterComponents: Record<string, JsonValue> | undefined,
-	location: string,
-	owner: string,
+function resolveParameterReference({
+	reference,
+	parameterComponents,
+	location,
+	owner,
+	seen
+}: {
+	reference: string
+	parameterComponents: Record<string, JsonValue> | undefined
+	location: string
+	owner: string
 	seen: Set<string>
-): JsonValue {
+}): JsonValue {
 	const prefix = '#/components/parameters/'
 	const encodedName = reference.startsWith(prefix) ? reference.slice(prefix.length) : ''
 	if (!encodedName || encodedName.includes('/') || /~(?:[^01]|$)/.test(encodedName))
@@ -366,13 +423,13 @@ function resolveParameterReference(
 			`OpenAPI fragment "${owner}" cannot resolve parameter reference "${reference}" at ${location}`
 		)
 	if (isJsonObject(definition) && typeof definition.$ref === 'string') {
-		return resolveParameterReference(
-			definition.$ref,
+		return resolveParameterReference({
+			reference: definition.$ref,
 			parameterComponents,
 			location,
 			owner,
-			new Set([...seen, reference])
-		)
+			seen: new Set([...seen, reference])
+		})
 	}
 	if (!directParameterIdentity(definition))
 		throw new Error(

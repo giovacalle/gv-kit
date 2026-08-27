@@ -1,4 +1,5 @@
 import type { FileEntry } from '../lib/files.js'
+import { HONO_WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
 
 /** Generator for `packages/db/`. Driver follows a (db x deploy) matrix. */
@@ -10,7 +11,10 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 	const project = cfg.choices.name
 
 	const entries: FileEntry[] = [
-		{ path: 'packages/db/package.json', content: renderPackageJson({ project, isSqlite, isCf }) },
+		{
+			path: 'packages/db/package.json',
+			content: renderPackageJson({ project, isSqlite, isCf, isHono })
+		},
 		{ path: 'packages/db/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
 		{
 			path: 'packages/db/drizzle.config.ts',
@@ -21,11 +25,20 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 		{ path: 'packages/db/src/schema/index.ts', content: renderSchemaIndex(hasAuth) },
 		{ path: 'packages/db/src/schema/sample.ts', content: renderSampleSchema(isSqlite) },
 		{ path: 'packages/db/migrations/.gitkeep', content: '' },
-		{ path: 'packages/db/README.md', content: renderReadme({ isSqlite, isCf, hasAuth }) }
+		{
+			path: 'packages/db/README.md',
+			content: renderReadme({ isSqlite, isCf, hasAuth, isHono })
+		}
 	]
 
 	if (hasAuth)
 		entries.push({ path: 'packages/db/src/schema/auth.ts', content: renderAuthSchema(isSqlite) })
+	if (isHono && isCf && isSqlite) {
+		entries.push({
+			path: 'packages/db/wrangler.jsonc',
+			content: renderWranglerJsonc(project)
+		})
+	}
 
 	return entries
 }
@@ -33,11 +46,13 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 function renderPackageJson({
 	project,
 	isSqlite,
-	isCf
+	isCf,
+	isHono
 }: {
 	project: string
 	isSqlite: boolean
 	isCf: boolean
+	isHono: boolean
 }): string {
 	const dependencies: Record<string, string> = {
 		'drizzle-orm': '^0.45.0',
@@ -71,7 +86,11 @@ function renderPackageJson({
 			: 'drizzle-kit migrate'
 	}
 	if (isCf && isSqlite) {
-		scripts['db:migrate:local'] = `wrangler d1 migrations apply ${project}-db --local`
+		const migrateLocal = `wrangler d1 migrations apply ${project}-db --local`
+		scripts['db:migrate:local'] = isHono
+			? `${migrateLocal} --persist-to ../../.wrangler/state`
+			: migrateLocal
+		if (isHono) scripts['db:prepare:local'] = `drizzle-kit generate && pnpm db:migrate:local`
 	}
 
 	const pkg = {
@@ -89,6 +108,23 @@ function renderPackageJson({
 		devDependencies
 	}
 	return JSON.stringify(pkg, null, 2) + '\n'
+}
+
+function renderWranglerJsonc(project: string): string {
+	return `{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "${project}-db-migrations",
+	"compatibility_date": "${HONO_WORKERS_COMPAT_DATE}",
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "${project}-db",
+			"database_id": "<run: wrangler d1 create ${project}-db>",
+			"migrations_dir": "migrations"
+		}
+	]
+}
+`
 }
 
 function renderTsconfig({
@@ -397,11 +433,13 @@ export const verification = pgTable('verification', {
 function renderReadme({
 	isSqlite,
 	isCf,
-	hasAuth
+	hasAuth,
+	isHono
 }: {
 	isSqlite: boolean
 	isCf: boolean
 	hasAuth: boolean
+	isHono: boolean
 }): string {
 	const driverLabel =
 		isSqlite && isCf
@@ -485,8 +523,14 @@ Then run \`pnpm db:generate\` and review the diff.
 	}
 ## Boundary
 
-\`@repo/db\` exports schema and a client factory. It does NOT contain auth
+${
+	isHono
+		? `\`@repo/db\` exports schema and a client factory. It does NOT contain auth
 business logic — that lives in the auth service. Other services consume the
-schema they own; the auth tables here are queried only by the auth service.
+schema they own; the auth tables here are queried only by the auth service.`
+		: `\`@repo/db\` exports schema and a client factory. SvelteKit server handlers
+in \`apps/web/\` consume that public package entry point. Keep application
+business logic outside this package.`
+}
 `
 }

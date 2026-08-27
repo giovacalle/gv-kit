@@ -21,7 +21,7 @@ describe('auth-worker bindings', () => {
 		const isCf = cfg.choices.deploy === 'cf-workers'
 
 		if (isCf) {
-			test(`${file} (cf-workers) declares no service bindings and exact required secrets`, () => {
+			test(`${file} (cf-workers) declares exact bindings without a package-local environment`, () => {
 				const entries = runGenerators(cfg)
 				const wrangler = entries.find((e) => e.path === 'services/auth/wrangler.jsonc')
 				expect(wrangler).toBeDefined()
@@ -45,18 +45,7 @@ describe('auth-worker bindings', () => {
 				}
 				expect(parsed.secrets?.required).toEqual(expected)
 
-				const devVars = entries.find((e) => e.path === 'services/auth/.dev.vars')
-				expect(devVars).toBeDefined()
-				const localNames = devVars!.content
-					.split('\n')
-					.filter((line) => line && !line.startsWith('#'))
-					.map((line) => line.slice(0, line.indexOf('=')))
-				expect(localNames).toEqual([
-					'BETTER_AUTH_ALLOWED_HOSTS',
-					'AUTH_CORS_ORIGINS',
-					...expected
-				])
-				expect(devVars!.content).toContain('local-only')
+				expect(entries.find((e) => e.path === 'services/auth/.dev.vars')).toBeUndefined()
 			})
 		} else {
 			test(`${file} (non-cf) does NOT emit services/auth/wrangler.jsonc`, () => {

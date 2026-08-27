@@ -8,6 +8,10 @@ import { defineConfig } from 'vite'
 export default defineConfig({
 	/*@gvkit:if honoGateway*/
 	server: {
+		/*@gvkit:if honoGatewayDocker*/
+		host: '127.0.0.1',
+		port: 3000,
+		/*@gvkit:endif*/
 		proxy: {
 			'^/api(?:[/?]|$)': { target: '__GATEWAY_URL__' }
 		}

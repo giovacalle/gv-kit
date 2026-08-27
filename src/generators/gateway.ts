@@ -21,6 +21,8 @@ import {
 
 const API_CORS_ORIGINS = 'API_CORS_ORIGINS'
 const API_PUBLIC_ORIGIN = 'API_PUBLIC_ORIGIN'
+const GATEWAY_PUBLIC_ORIGINS = 'GATEWAY_PUBLIC_ORIGINS'
+const GATEWAY_TRUSTED_INGRESS_SECRET = 'GATEWAY_TRUSTED_INGRESS_SECRET'
 const GATEWAY_UPSTREAM_TIMEOUT_MS = 'GATEWAY_UPSTREAM_TIMEOUT_MS'
 
 type Runtime = 'cf-workers' | 'node'
@@ -158,12 +160,15 @@ export type GatewayTargets = {
 export type GatewayOptions = {
 	openApiDocument: OpenApiDocument
 	canonicalApiOrigin: string
+	publicOrigins?: string
+	trustedIngressSecret?: string
 	corsOrigins?: string
 	logger?: (line: string) => void
 	upstreamTimeoutMs?: number
 }
 
-type GatewayVariables = { requestId: string }
+type PublicOrigin = { host: string; protocol: string }
+type GatewayVariables = { publicOrigin: PublicOrigin; requestId: string }
 type GatewayContext = Context<{ Variables: GatewayVariables }>
 type PlatformResponse = Response & {
 	readonly cf?: unknown
@@ -178,6 +183,7 @@ const DEFAULT_CORS_ORIGINS = ['http://localhost:3000', 'http://localhost:5173']
 const DEFAULT_UPSTREAM_TIMEOUT_MS = 10_000
 const MAX_UPSTREAM_TIMEOUT_MS = 300_000
 const REQUEST_ID_HEADER = 'x-request-id'
+const TRUSTED_INGRESS_HEADER = 'x-gateway-ingress-secret'
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 
 class UpstreamTimeoutError extends Error {}
@@ -255,9 +261,55 @@ function corsAllowlist(value: string | undefined): string[] {
 		.map((origin) => origin.trim())
 		.filter(Boolean)
 	if (origins.includes('*')) throw new Error('corsOrigins must not contain a wildcard')
-	const invalidOrigin = origins.find((origin) => canonicalOrigin(origin) !== origin)
+	const invalidOrigin = origins.find(
+		(origin) => canonicalOrigin(origin, 'corsOrigins') !== origin
+	)
 	if (invalidOrigin) throw new Error('corsOrigins must contain only complete HTTP origins')
 	return [...new Set(origins)]
+}
+
+function publicOriginAllowlist(value: string | undefined, canonicalApiOrigin: string) {
+	const origins = (value ? value.split(',') : [canonicalApiOrigin])
+		.map((origin) => origin.trim())
+		.filter(Boolean)
+	const allowed = new Map<string, PublicOrigin>()
+	for (const origin of origins) {
+		const url = new URL(canonicalOrigin(origin, 'publicOrigins'))
+		const current = allowed.get(url.host)
+		if (current && current.protocol !== url.protocol)
+			throw new Error('publicOrigins must not assign multiple schemes to one host')
+		allowed.set(url.host, { host: url.host, protocol: url.protocol.slice(0, -1) })
+	}
+	return allowed
+}
+
+function sameSecret(left: string | undefined, right: string | undefined): boolean {
+	if (!left || !right) return false
+	let difference = left.length ^ right.length
+	const length = Math.max(left.length, right.length)
+	for (let index = 0; index < length; index += 1)
+		difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0)
+	return difference === 0
+}
+
+function resolvePublicOrigin({
+	request,
+	allowed,
+	trustedIngressSecret
+}: {
+	request: Request
+	allowed: Map<string, PublicOrigin>
+	trustedIngressSecret: string | undefined
+}): PublicOrigin | undefined {
+	const requestUrl = new URL(request.url)
+	const direct = allowed.get(requestUrl.host)
+	if (direct?.protocol === requestUrl.protocol.slice(0, -1)) return direct
+	if (!sameSecret(request.headers.get(TRUSTED_INGRESS_HEADER) ?? undefined, trustedIngressSecret))
+		return undefined
+	const host = request.headers.get('x-forwarded-host')?.toLowerCase()
+	const protocol = request.headers.get('x-forwarded-proto')?.toLowerCase()
+	const forwarded = host ? allowed.get(host) : undefined
+	return forwarded?.protocol === protocol ? forwarded : undefined
 }
 
 function boundedTimeout(value: number | undefined): number {
@@ -271,16 +323,21 @@ async function fetchUpstream({
 	target,
 	request,
 	requestId,
+	publicOrigin,
 	timeoutMs
 }: {
 	target: GatewayTarget
 	request: Request
 	requestId: string
+	publicOrigin: PublicOrigin
 	timeoutMs: number
 }): Promise<Response> {
 	const controller = new AbortController()
 	const headers = new Headers(request.headers)
 	headers.set(REQUEST_ID_HEADER, requestId)
+	headers.delete(TRUSTED_INGRESS_HEADER)
+	headers.set('x-forwarded-host', publicOrigin.host)
+	headers.set('x-forwarded-proto', publicOrigin.protocol)
 	const forwarded = new Request(request, { headers, signal: controller.signal })
 	let timedOut = false
 	const cancellation = new Promise<never>((_, reject) => {
@@ -306,10 +363,10 @@ async function fetchUpstream({
 	}
 }
 
-function canonicalOrigin(value: string): string {
+function canonicalOrigin(value: string, name = '${API_PUBLIC_ORIGIN}'): string {
 	const url = new URL(value)
-	if (url.origin !== value && \`\${url.origin}/\` !== value) throw new Error('${API_PUBLIC_ORIGIN} must be an HTTP origin without a path, query, or fragment')
-	if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error('${API_PUBLIC_ORIGIN} must use http or https')
+	if (url.origin !== value && \`\${url.origin}/\` !== value) throw new Error(name + ' must be an HTTP origin without a path, query, or fragment')
+	if (url.protocol !== 'http:' && url.protocol !== 'https:') throw new Error(name + ' must use http or https')
 	return url.origin
 }
 
@@ -322,6 +379,7 @@ export function createGateway(
 ) {
 	const app = new Hono<{ Variables: GatewayVariables }>()
 	const serverOrigin = canonicalOrigin(options.canonicalApiOrigin)
+	const allowedPublicOrigins = publicOriginAllowlist(options.publicOrigins, serverOrigin)
 	const allowedCorsOrigins = corsAllowlist(options.corsOrigins)
 	const timeoutMs = boundedTimeout(options.upstreamTimeoutMs)
 	const writeLog = options.logger ?? ((line: string) => console.log(line))
@@ -350,6 +408,27 @@ export function createGateway(
 				durationMs: Date.now() - startedAt
 			})
 		)
+	})
+
+	app.use('*', async (c, next) => {
+		const origin = resolvePublicOrigin({
+			request: c.req.raw,
+			allowed: allowedPublicOrigins,
+			trustedIngressSecret: options.trustedIngressSecret
+		})
+		if (!origin) {
+			writeLog(
+				JSON.stringify({
+					event: 'public_origin_rejected',
+					requestId: c.get('requestId'),
+					method: c.req.method,
+					path: new URL(c.req.url).pathname
+				})
+			)
+			return respond(c, c.text('misdirected request', 421))
+		}
+		c.set('publicOrigin', origin)
+		await next()
 	})
 
 	app.use('/api/*', async (c, next) => {
@@ -413,6 +492,7 @@ export function createGateway(
 				target,
 				request: c.req.raw,
 				requestId: c.get('requestId'),
+				publicOrigin: c.get('publicOrigin'),
 				timeoutMs
 			})
 			return respond(c, response)
@@ -459,6 +539,7 @@ export default {
 		return createGateway(env, {
 			openApiDocument,
 			canonicalApiOrigin: env.${API_PUBLIC_ORIGIN},
+			publicOrigins: env.${GATEWAY_PUBLIC_ORIGINS},
 			corsOrigins: env.${API_CORS_ORIGINS},
 			upstreamTimeoutMs: Number(env.${GATEWAY_UPSTREAM_TIMEOUT_MS})
 		}).fetch(request, env)
@@ -478,14 +559,6 @@ function httpTarget(origin: string): GatewayTarget {
 			const incoming = new URL(request.url)
 			const upstream = new URL(\`\${incoming.pathname}\${incoming.search}\`, origin)
 			const forwarded = new Request(upstream, request)
-			forwarded.headers.set(
-				'x-forwarded-host',
-				request.headers.get('x-forwarded-host') ?? request.headers.get('host') ?? incoming.host
-			)
-			forwarded.headers.set(
-				'x-forwarded-proto',
-				request.headers.get('x-forwarded-proto') ?? incoming.protocol.slice(0, -1)
-			)
 			return fetch(forwarded, { redirect: 'manual' })
 		}
 	}
@@ -493,6 +566,8 @@ function httpTarget(origin: string): GatewayTarget {
 
 const canonicalApiOrigin = process.env.${API_PUBLIC_ORIGIN}
 if (!canonicalApiOrigin) throw new Error('${API_PUBLIC_ORIGIN} is required')
+const trustedIngressSecret = process.env.${GATEWAY_TRUSTED_INGRESS_SECRET}
+if (!trustedIngressSecret) throw new Error('${GATEWAY_TRUSTED_INGRESS_SECRET} is required')
 
 const app = createGateway(
 	{
@@ -502,6 +577,8 @@ const app = createGateway(
 	{
 		openApiDocument,
 		canonicalApiOrigin,
+		publicOrigins: process.env.${GATEWAY_PUBLIC_ORIGINS},
+		trustedIngressSecret,
 		corsOrigins: process.env.${API_CORS_ORIGINS},
 		upstreamTimeoutMs: Number(process.env.${GATEWAY_UPSTREAM_TIMEOUT_MS} ?? 10000)
 	}
@@ -531,9 +608,11 @@ function wranglerJsonc(project: string, webHost: string): string {
 	],
 	"vars": {
 		"${API_PUBLIC_ORIGIN}": "https://api.<domain>",
+		"${GATEWAY_PUBLIC_ORIGINS}": "https://${webHost},https://api.<domain>",
 		"${API_CORS_ORIGINS}": "https://${webHost}",
 		"${GATEWAY_UPSTREAM_TIMEOUT_MS}": "10000"
 	},
+	"secrets": { "required": [] },
 	"services": [
 		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" },
 		{ "binding": "${USERS_SERVICE.internalTarget}", "service": "${honoServiceName(project, USERS_SERVICE)}" }
@@ -869,6 +948,11 @@ Every request receives one \`x-request-id\`. The gateway forwards it to the sele
 returns it in the response, and includes it in structured gateway and service logs. Routing logs
 contain only the request ID, method, path, target, outcome, status, and duration; they do not include
 headers, cookies, query strings, or bodies.
+
+\`${GATEWAY_PUBLIC_ORIGINS}\` is the comma-separated allowlist of complete web and API origins
+accepted at the gateway boundary. The gateway rejects unknown request hosts and replaces caller-supplied
+forwarding metadata with the approved host and scheme before calling a private service. Node SSR sets
+trusted forwarding metadata with \`${GATEWAY_TRUSTED_INGRESS_SECRET}\`; keep that value private.
 
 \`${API_CORS_ORIGINS}\` is a comma-separated list of complete browser origins allowed to call
 the canonical API origin with credentials. Wildcards are rejected. Same-origin web requests use the

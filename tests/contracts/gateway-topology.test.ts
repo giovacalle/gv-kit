@@ -15,14 +15,31 @@ function planFixture(name: string) {
 }
 
 const gatewayOwnedSourcePaths = [
+	'fixtures/templates/web/overlays/api-client-hey-api/src/routes/users/+page.server.ts',
+	'fixtures/templates/web/overlays/inside-frontend-baseline/src/app.d.ts',
 	'scripts/gateway-verification-evidence.ts',
 	'scripts/verify-gateway-cloudflare.ts',
 	'scripts/verify-gateway-docker.ts',
 	'scripts/verify-gateway-local.ts',
 	'scripts/verify-gateway-scaffold-matrix.ts',
+	'src/generators/api.ts',
+	'src/generators/cloudflare-worker-types.ts',
 	'src/generators/deploy.ts',
+	'src/generators/email.ts',
 	'src/generators/gateway.ts',
-	'src/generators/openapi-contract.ts'
+	'src/generators/hono-topology.ts',
+	'src/generators/integrated-deploy.ts',
+	'src/generators/openapi-contract.ts',
+	'src/generators/services/users.ts',
+	'src/lib/workers.ts',
+	'tests/contracts/gateway-auth.test.ts',
+	'tests/contracts/gateway-cloudflare.test.ts',
+	'tests/contracts/gateway-docker.test.ts',
+	'tests/contracts/gateway-openapi.test.ts',
+	'tests/contracts/gateway-preview-workflows.test.ts',
+	'tests/contracts/gateway-scaffold-matrix.test.ts',
+	'tests/contracts/gateway-topology.test.ts',
+	'tests/generators/hono-topology.test.ts'
 ]
 
 function bracedThrowLocations(path: string, source: string): string[] {
@@ -52,6 +69,86 @@ function bracedThrowLocations(path: string, source: string): string[] {
 	return locations
 }
 
+function sourceStandardFindings(path: string, source: string): string[] {
+	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
+	const findings: string[] = []
+	const literalRanges: Array<{ start: number; end: number }> = []
+
+	function visit(node: ts.Node) {
+		if (
+			ts.isStringLiteralLike(node) ||
+			ts.isRegularExpressionLiteral(node) ||
+			node.kind === ts.SyntaxKind.TemplateHead ||
+			node.kind === ts.SyntaxKind.TemplateMiddle ||
+			node.kind === ts.SyntaxKind.TemplateTail ||
+			node.kind === ts.SyntaxKind.JsxText
+		) {
+			literalRanges.push({ start: node.getStart(sourceFile), end: node.getEnd() })
+		}
+		if (
+			(ts.isFunctionDeclaration(node) ||
+				ts.isMethodDeclaration(node) ||
+				ts.isArrowFunction(node) ||
+				ts.isFunctionExpression(node) ||
+				ts.isConstructorDeclaration(node) ||
+				ts.isGetAccessorDeclaration(node) ||
+				ts.isSetAccessorDeclaration(node)) &&
+			node.parameters.length >= 3
+		) {
+			const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
+			findings.push(`${path}:${line + 1} ${node.parameters.length} positional parameters`)
+		}
+		ts.forEachChild(node, visit)
+	}
+
+	visit(sourceFile)
+
+	const scanner = ts.createScanner(
+		ts.ScriptTarget.Latest,
+		false,
+		ts.LanguageVariant.Standard,
+		source
+	)
+	let previousLineComment: { line: number; start: number } | undefined
+	let lineCommentGroupStart: number | undefined
+	for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+		const start = scanner.getTokenPos()
+		if (literalRanges.some((range) => start >= range.start && start < range.end)) continue
+		if (kind === ts.SyntaxKind.MultiLineCommentTrivia) {
+			if (!source.startsWith('/*@gvkit:', start)) {
+				const { line } = sourceFile.getLineAndCharacterOfPosition(start)
+				findings.push(`${path}:${line + 1} block comment`)
+			}
+			previousLineComment = undefined
+			lineCommentGroupStart = undefined
+			continue
+		}
+		if (kind === ts.SyntaxKind.SingleLineCommentTrivia) {
+			const { line } = sourceFile.getLineAndCharacterOfPosition(start)
+			const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0)
+			const isLineLeading = source.slice(lineStart, start).trim() === ''
+			if (isLineLeading && previousLineComment?.line === line - 1) {
+				if (lineCommentGroupStart === undefined) {
+					lineCommentGroupStart = previousLineComment.start
+					const { line: groupLine } = sourceFile.getLineAndCharacterOfPosition(
+						lineCommentGroupStart
+					)
+					findings.push(`${path}:${groupLine + 1} consecutive line comments`)
+				}
+			} else {
+				lineCommentGroupStart = undefined
+			}
+			previousLineComment = isLineLeading ? { line, start } : undefined
+			continue
+		}
+		if (kind === ts.SyntaxKind.WhitespaceTrivia || kind === ts.SyntaxKind.NewLineTrivia) continue
+		previousLineComment = undefined
+		lineCommentGroupStart = undefined
+	}
+
+	return findings
+}
+
 type GatewayTarget = { fetch(request: Request): Promise<Response> }
 type GatewayOptions = {
 	openApiDocument: {
@@ -60,6 +157,7 @@ type GatewayOptions = {
 		paths: Record<string, unknown>
 	}
 	canonicalApiOrigin: string
+	publicOrigins?: string
 	corsOrigins?: string
 	logger?: (line: string) => void
 	upstreamTimeoutMs?: number
@@ -138,6 +236,23 @@ async function loadGeneratedHandleFetch(): Promise<HandleFetchModule> {
 }
 
 describe('local private-service gateway topology', () => {
+	test('source standards detect block and consecutive line comments', () => {
+		const source = ['const first = 1', '// first line', '// second line', '/* block */'].join(
+			'\n'
+		)
+		expect(sourceStandardFindings('sample.ts', source)).toEqual([
+			'sample.ts:2 consecutive line comments',
+			'sample.ts:4 block comment'
+		])
+	})
+
+	test('gateway-owned source uses named options and no multi-line comments', () => {
+		const findings = gatewayOwnedSourcePaths.flatMap((path) =>
+			sourceStandardFindings(path, readFileSync(join(fixturesDir, '..', path), 'utf8'))
+		)
+		expect(findings).toEqual([])
+	})
+
 	test('gateway-owned source and emitted code use unbraced single-statement throws', () => {
 		const sourceFindings = gatewayOwnedSourcePaths.flatMap((path) =>
 			bracedThrowLocations(path, readFileSync(join(fixturesDir, '..', path), 'utf8'))
@@ -204,14 +319,21 @@ describe('local private-service gateway topology', () => {
 				['x-request-id', 'request-123']
 			]
 		})
-		const gateway = createGateway({
-			USERS: {
-				async fetch(request) {
-					forwarded = request
-					return upstream
+		const gateway = createGateway(
+			{
+				USERS: {
+					async fetch(request) {
+						forwarded = request
+						return upstream
+					}
 				}
+			},
+			{
+				openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
+				canonicalApiOrigin: 'http://web.test',
+				publicOrigins: 'http://web.test'
 			}
-		})
+		)
 		const request = new Request('http://web.test/api/v1/users/me?expanded=true', {
 			method: 'POST',
 			headers: { cookie: 'session=abc', 'x-request-id': 'request-123', 'x-trace': 'one' },
@@ -259,6 +381,7 @@ describe('local private-service gateway topology', () => {
 			{
 				openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
 				canonicalApiOrigin: 'http://localhost:8786',
+				publicOrigins: 'http://web.test',
 				logger: (line) => lines.push(line),
 				upstreamTimeoutMs: 1_000
 			}
@@ -294,6 +417,7 @@ describe('local private-service gateway topology', () => {
 			{
 				openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
 				canonicalApiOrigin: 'http://localhost:8786',
+				publicOrigins: 'http://web.test',
 				logger: (line) => lines.push(line)
 			}
 		)
@@ -361,6 +485,7 @@ describe('local private-service gateway topology', () => {
 		const options: GatewayOptions = {
 			openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
 			canonicalApiOrigin: 'http://localhost:8786',
+			publicOrigins: 'http://web.test',
 			logger: (line) => lines.push(line),
 			upstreamTimeoutMs: 10
 		}
@@ -415,12 +540,25 @@ describe('local private-service gateway topology', () => {
 	test('one root command starts the gateway and loopback-only services', () => {
 		const entries = planFixture('hono-skip-deploy')
 		const rootPackage = entries.find((entry) => entry.path === 'package.json')
+		const localScript = entries.find((entry) => entry.path === 'scripts/local.mjs')
+		const turbo = entries.find((entry) => entry.path === 'turbo.json')
 		const gatewayIndex = entries.find((entry) => entry.path === 'apps/api/src/index.ts')
 		const authIndex = entries.find((entry) => entry.path === 'services/auth/src/index.ts')
 		const usersIndex = entries.find((entry) => entry.path === 'services/users/src/index.ts')
 		const usersPackage = entries.find((entry) => entry.path === 'services/users/package.json')
 
-		expect(JSON.parse(rootPackage!.content).scripts.dev).toBe('turbo run dev')
+		expect(JSON.parse(rootPackage!.content).scripts.dev).toBe('node scripts/local.mjs dev')
+		expect(localScript?.content).toContain("dev: ['exec', 'turbo', 'run', 'dev'")
+		expect(localScript?.content).toContain("'--filter=./apps/*', '--filter=./services/*'")
+		expect(localScript?.content).not.toContain('--env-mode=loose')
+		const tasks = JSON.parse(turbo!.content).tasks as Record<string, { env?: string[] }>
+		expect(tasks['@hono-skip-deploy/api-gateway#dev']?.env).toContain('API_PUBLIC_ORIGIN')
+		expect(tasks['@hono-skip-deploy/auth-worker#dev']?.env).toEqual(['SQLITE_PATH'])
+		expect(tasks['@hono-skip-deploy/users-worker#dev']?.env).toEqual([
+			'SQLITE_PATH',
+			'AUTH_URL'
+		])
+		expect(tasks['hono-skip-deploy-web#dev']?.env).toContain('GATEWAY_URL')
 		expect(gatewayIndex?.content).toContain("process.env.HOST ?? '127.0.0.1'")
 		expect(gatewayIndex?.content).toContain('process.env.PORT ?? 8786')
 		expect(gatewayIndex?.content).toContain("redirect: 'manual'")
@@ -445,11 +583,18 @@ describe('local private-service gateway topology', () => {
 
 		expect(vite?.content).toContain("'^/api(?:[/?]|$)': { target: 'http://127.0.0.1:8786' }")
 		expect(vite?.content).not.toContain("'/api': { target:")
+		expect(vite?.content).not.toContain('port: 3000')
+		const dockerVite = planFixture('hono-docker-sqlite-auth').find(
+			(entry) => entry.path === 'apps/web/vite.config.ts'
+		)
+		expect(dockerVite?.content).toContain("host: '127.0.0.1'")
+		expect(dockerVite?.content).toContain('port: 3000')
 		expect(layout?.content).toContain("baseUrl: ''")
 		expect(layout?.content).not.toContain('PUBLIC_USERS_URL')
 		expect(hooks?.content).toContain('export const handleFetch')
 		expect(hooks?.content).toContain('env.GATEWAY_URL')
 		expect(hooks?.content).toContain('new Request(upstream, request)')
+		expect(hooks?.content).toContain("headers.set('x-gateway-ingress-secret'")
 		expect(hooks?.content).not.toContain('forwardApiAlias')
 		expect(hooks?.content).not.toContain('gateway.fetch(event.request)')
 	})
@@ -559,8 +704,13 @@ describe('local private-service gateway topology', () => {
 		expect(env).toContain('GATEWAY_URL=http://127.0.0.1:8786')
 		expect(env).toContain('AUTH_URL=http://127.0.0.1:8787')
 		expect(env).toContain('USERS_URL=http://127.0.0.1:8788')
-		expect(env).toContain('BETTER_AUTH_ALLOWED_HOSTS=')
-		expect(env).toContain('AUTH_CORS_ORIGINS=')
+		expect(env).toContain(
+			'BETTER_AUTH_ALLOWED_HOSTS=localhost:3000,api.localhost:3000,localhost:8786,127.0.0.1:8786'
+		)
+		expect(env).toContain(
+			'AUTH_CORS_ORIGINS=http://localhost:3000,http://api.localhost:3000'
+		)
+		expect(env).toContain('GATEWAY_PUBLIC_ORIGINS=')
 		expect(env).toContain('API_CORS_ORIGINS=')
 		expect(env).toContain('GATEWAY_UPSTREAM_TIMEOUT_MS=10000')
 	})

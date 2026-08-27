@@ -29,6 +29,7 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	const usesSqlite = cfg.choices.db === 'sqlite'
 	const auth = cfg.choices.auth
 	const email = cfg.choices.email
+	const hasAuth = auth.length > 0
 	const wantsGoogle = auth.includes('google')
 	const wantsEmailOTP = auth.includes('emailOTP')
 	const runtime = deriveRuntime(cfg.choices.deploy)
@@ -36,27 +37,19 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	const entries: FileEntry[] = [
 		{
 			path: honoServicePath(AUTH_SERVICE, 'package.json'),
-			content: pkgJson({ project, runtime, auth, usesSqlite })
+			content: pkgJson({ project, runtime, auth, usesSqlite, hasAuth })
 		},
 		{
 			path: honoServicePath(AUTH_SERVICE, 'tsconfig.json'),
 			content: tsconfig({ runtime, usesSqlite })
 		},
 		{
-			path: honoServicePath(AUTH_SERVICE, 'src/lib/utils.ts'),
-			content: utilsTs({ wantsEmailOTP })
-		},
-		{
-			path: honoServicePath(AUTH_SERVICE, 'src/auth.ts'),
-			content: authTs({ runtime, usesSqlite, wantsGoogle, auth, email })
-		},
-		{
 			path: honoServicePath(AUTH_SERVICE, 'src/openapi.ts'),
-			content: openapiTs(project)
+			content: openapiTs(project, hasAuth)
 		},
 		{
 			path: honoServicePath(AUTH_SERVICE, 'src/app.ts'),
-			content: appTs(runtime)
+			content: appTs(runtime, hasAuth)
 		},
 		{
 			path: honoServicePath(AUTH_SERVICE, 'src/index.ts'),
@@ -64,9 +57,22 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 		},
 		{
 			path: honoServicePath(AUTH_SERVICE, 'README.md'),
-			content: readme({ project, runtime, wantsGoogle, wantsEmailOTP, email })
+			content: readme({ project, runtime, wantsGoogle, wantsEmailOTP, email, hasAuth })
 		}
 	]
+
+	if (hasAuth) {
+		entries.push(
+			{
+				path: honoServicePath(AUTH_SERVICE, 'src/lib/utils.ts'),
+				content: utilsTs({ wantsEmailOTP })
+			},
+			{
+				path: honoServicePath(AUTH_SERVICE, 'src/auth.ts'),
+				content: authTs({ runtime, usesSqlite, wantsGoogle, auth, email })
+			}
+		)
+	}
 
 	if (runtime === 'cf-workers') {
 		const webHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
@@ -76,7 +82,8 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 			wantsGoogle,
 			wantsEmailOTP,
 			email,
-			webHost
+			webHost,
+			hasAuth
 		})
 		entries.push(
 			{
@@ -92,11 +99,11 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 		entries.push(
 			{
 				path: honoServicePath(AUTH_SERVICE, 'env.d.ts'),
-				content: envDts({ usesSqlite, wantsGoogle, auth, email })
+				content: envDts({ usesSqlite, wantsGoogle, auth, email, hasAuth })
 			},
 			{
 				path: honoServicePath(AUTH_SERVICE, 'tsup.config.ts'),
-				content: tsupConfig(usesSqlite)
+				content: tsupConfig(usesSqlite && hasAuth)
 			}
 		)
 	}
@@ -118,24 +125,27 @@ function pkgJson({
 	project,
 	runtime,
 	auth,
-	usesSqlite
+	usesSqlite,
+	hasAuth
 }: {
 	project: string
 	runtime: Runtime
 	auth: AuthChoice[]
 	usesSqlite: boolean
+	hasAuth: boolean
 }): string {
 	const dependencies: Record<string, string> = {
 		'@hono/zod-openapi': '^1.0.0',
 		'@repo/backend': 'workspace:*',
-		'@repo/db': 'workspace:*',
-		'better-auth': '^1.6.0',
+		...(hasAuth
+			? { '@repo/db': 'workspace:*', 'better-auth': '^1.6.0' }
+			: {}),
 		hono: '^4.6.0',
 		zod: '^4.3.0'
 	}
 
 	if (auth.includes('emailOTP')) dependencies['@repo/mailer'] = 'workspace:*'
-	if (runtime === 'node' && usesSqlite) dependencies['@libsql/client'] = '^0.14.0'
+	if (runtime === 'node' && usesSqlite && hasAuth) dependencies['@libsql/client'] = '^0.14.0'
 
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
@@ -160,8 +170,9 @@ function pkgJson({
 		scripts.build = 'wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
-		scripts['deploy:staging'] =
-			'pnpm cf-typegen && test -n "$STAGING_ALIAS" && test -n "$STAGING_SECRETS_FILE" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --secrets-file "$STAGING_SECRETS_FILE"'
+		scripts['deploy:staging'] = hasAuth
+			? 'pnpm cf-typegen && test -n "$STAGING_ALIAS" && test -n "$STAGING_SECRETS_FILE" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --secrets-file "$STAGING_SECRETS_FILE"'
+			: 'pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}"'
 		scripts.typecheck = 'tsc --noEmit'
 	} else {
 		dependencies['@hono/node-server'] = '^1.13.0'
@@ -235,7 +246,8 @@ function wranglerJsonc({
 	wantsGoogle,
 	wantsEmailOTP,
 	email,
-	webHost
+	webHost,
+	hasAuth
 }: {
 	project: string
 	usesSqlite: boolean
@@ -243,8 +255,9 @@ function wranglerJsonc({
 	wantsEmailOTP: boolean
 	email: EmailChoice
 	webHost: string
+	hasAuth: boolean
 }): string {
-	const dbBlock = usesSqlite
+	const dbBlock = hasAuth && usesSqlite
 		? `,
 	"d1_databases": [
 		{
@@ -255,8 +268,8 @@ function wranglerJsonc({
 	]`
 		: ''
 
-	const requiredSecrets = ['BETTER_AUTH_SECRET']
-	if (!usesSqlite) requiredSecrets.push('DATABASE_URL')
+	const requiredSecrets = hasAuth ? ['BETTER_AUTH_SECRET'] : []
+	if (hasAuth && !usesSqlite) requiredSecrets.push('DATABASE_URL')
 	if (wantsGoogle) requiredSecrets.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 	if (wantsEmailOTP) {
 		requiredSecrets.push('TURNSTILE_SECRET_KEY')
@@ -273,12 +286,16 @@ function wranglerJsonc({
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
 	"preview_urls": false,
-	"services": [],
+	"services": [],${
+		hasAuth
+			? `
 	"vars": {
 		"BETTER_AUTH_ALLOWED_HOSTS": "${webHost},api.<domain>",
 		"AUTH_CORS_ORIGINS": "https://${webHost}"
 	},
-	"secrets": { "required": ${JSON.stringify(requiredSecrets)} },
+	"secrets": { "required": ${JSON.stringify(requiredSecrets)} },`
+			: ''
+	}
 	"dev": {
 		"ip": "${AUTH_SERVICE.development.ip}",
 		"port": ${AUTH_SERVICE.development.port},
@@ -294,13 +311,23 @@ function envDts({
 	usesSqlite,
 	wantsGoogle,
 	auth,
-	email
+	email,
+	hasAuth
 }: {
 	usesSqlite: boolean
 	wantsGoogle: boolean
 	auth: AuthChoice[]
 	email: EmailChoice
+	hasAuth: boolean
 }): string {
+	if (!hasAuth) {
+		return `declare global {
+	type Env = Record<string, never>
+}
+export {}
+`
+	}
+
 	const wantsEmailOTP = auth.includes('emailOTP')
 
 	const oauthLines = wantsGoogle
@@ -578,9 +605,9 @@ export function getAuth(_env?: unknown) {
 `
 }
 
-function openapiTs(project: string): string {
-	return `import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-
+function openapiTs(project: string, hasAuth: boolean): string {
+	const sessionSchema = hasAuth
+		? `
 // Only /internal/session is typed because sibling services never call the public Better Auth routes.
 const SessionResponse = z
 	.object({
@@ -589,16 +616,23 @@ const SessionResponse = z
 		expiresAt: z.string()
 	})
 	.openapi('Session')
+`
+		: ''
+	const resolvedSession = hasAuth
+		? `
+		200: {
+			description: 'Resolved session for the caller',
+			content: { 'application/json': { schema: SessionResponse } }
+		},`
+		: ''
 
+	return `import { OpenAPIHono, createRoute${hasAuth ? ', z' : ''} } from '@hono/zod-openapi'
+${sessionSchema}
 export const sessionRoute = createRoute({
 	method: 'get',
 	path: '/internal/session',
 	tags: ['internal'],
-	responses: {
-		200: {
-			description: 'Resolved session for the caller',
-			content: { 'application/json': { schema: SessionResponse } }
-		},
+	responses: {${resolvedSession}
 		401: { description: 'No active session' }
 	}
 })
@@ -612,7 +646,28 @@ export function mountOpenApi(app: OpenAPIHono<{ Bindings: Env }>): void {
 `
 }
 
-function appTs(runtime: Runtime): string {
+function appTs(runtime: Runtime, hasAuth: boolean): string {
+	if (!hasAuth) {
+		return `import { OpenAPIHono } from '@hono/zod-openapi'
+import { logger } from '@repo/backend/middleware'
+
+import { mountOpenApi, sessionRoute } from './openapi.js'
+
+const app = new OpenAPIHono<{ Bindings: Env }>()
+
+app.use('*', logger('auth'))
+app.get('/healthz', (c) => c.text('ok'))
+
+app.openapi(sessionRoute, (c) => {
+	return c.json({ error: 'unauthorized' }, 401)
+})
+
+mountOpenApi(app)
+
+export default app
+`
+	}
+
 	if (runtime === 'cf-workers') {
 		return `import { OpenAPIHono } from '@hono/zod-openapi'
 import { logger } from '@repo/backend/middleware'
@@ -769,14 +824,34 @@ function readme({
 	runtime,
 	wantsGoogle,
 	wantsEmailOTP,
-	email
+	email,
+	hasAuth
 }: {
 	project: string
 	runtime: Runtime
 	wantsGoogle: boolean
 	wantsEmailOTP: boolean
 	email: EmailChoice
+	hasAuth: boolean
 }): string {
+	if (!hasAuth) {
+		return `# ${honoServiceName(project, AUTH_SERVICE)}
+
+This private service preserves the mandatory auth transport while authentication is disabled.
+It is reachable externally only through the gateway, where no public auth methods are mounted.
+It exposes health and always reports no active session to sibling services.
+
+## Boundary
+
+- No public authentication methods are mounted under \`${PUBLIC_AUTH_PREFIX}/*\`.
+- \`GET /internal/session\` always returns \`401\`.
+- The service owns no authentication credentials or database access.
+- Other services still use the private \`${AUTH_SERVICE.internalTarget}\` binding or \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` URL.
+
+Do not add public ingress to this service. Select an authentication provider before adding login or session behavior.
+`
+	}
+
 	const oauth = wantsGoogle
 		? runtime === 'cf-workers'
 			? `

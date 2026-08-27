@@ -19,13 +19,25 @@ const choices: Choices = {
 }
 
 const config: GvKitConfig = { configVersion: 2, choices }
+const noAuthConfig: GvKitConfig = {
+	configVersion: 2,
+	choices: {
+		...choices,
+		name: 'no-auth',
+		marketing: 'astro',
+		db: 'sqlite',
+		apiClient: 'skip',
+		auth: [],
+		email: 'skip'
+	}
+}
 
 function generated(path: string): string {
 	return generateDeploy(config).find((entry) => entry.path === path)!.content
 }
 
-function scaffold(path: string): string {
-	return runGenerators(config).find((entry) => entry.path === path)!.content
+function scaffold(path: string, source = config): string {
+	return runGenerators(source).find((entry) => entry.path === path)!.content
 }
 
 function composeServices(): Record<string, Record<string, unknown>> {
@@ -193,11 +205,33 @@ describe('Docker gateway topology', () => {
 		expect(entrypoint).not.toContain("request.headers.get('x-forwarded-proto')")
 	})
 
+	test('runs the mandatory private auth transport without public auth when no provider is selected', () => {
+		const entries = runGenerators(noAuthConfig)
+		const compose = Bun.YAML.parse(
+			entries.find(({ path }) => path === 'docker-compose.yml')!.content
+		) as { services: Record<string, { environment?: Record<string, string>; ports?: unknown }> }
+		const authPackage = JSON.parse(scaffold('services/auth/package.json', noAuthConfig)) as {
+			dependencies: Record<string, string>
+		}
+		const authApp = scaffold('services/auth/src/app.ts', noAuthConfig)
+
+		expect(compose.services.auth?.environment).toEqual({ PORT: '8787' })
+		expect(compose.services.auth?.ports).toBeUndefined()
+		expect(authPackage.dependencies['better-auth']).toBeUndefined()
+		expect(authPackage.dependencies['@repo/db']).toBeUndefined()
+		expect(entries.some(({ path }) => path === 'services/auth/src/auth.ts')).toBe(false)
+		expect(entries.some(({ path }) => path === 'services/auth/src/lib/utils.ts')).toBe(false)
+		expect(authApp).not.toContain('/api/auth')
+		expect(authApp).toContain("return c.json({ error: 'unauthorized' }, 401)")
+	})
+
 	test('supports credential-free local OTP verification without removing production email settings', () => {
 		const services = composeServices()
 		const authEnvironment = services.auth?.environment as Record<string, string>
 		const webBuild = services.web?.build as { args: Record<string, string> }
 
+		expect(authEnvironment.BETTER_AUTH_SECRET).toContain('set BETTER_AUTH_SECRET')
+		expect(authEnvironment.BETTER_AUTH_SECRET).not.toContain(':-')
 		expect(authEnvironment.TURNSTILE_SECRET_KEY).toContain('set TURNSTILE_SECRET_KEY')
 		expect(authEnvironment.RESEND_API_KEY).toBe('${RESEND_API_KEY:-}')
 		expect(authEnvironment.FROM_EMAIL).toBe('${FROM_EMAIL:-}')

@@ -95,6 +95,11 @@ describe('gateway generated-workspace verification matrix', () => {
 			new Set(['cloudflare-preview', 'docker-runtime', 'local-runtime', 'generated-workspace'])
 		)
 		expect(
+			GATEWAY_SCAFFOLD_MATRIX.find(
+				({ id }) => id === 'gdk02-no-auth-sqlite-astro-no-client-v2'
+			)?.highestSeam
+		).toBe('docker-runtime')
+		expect(
 			GATEWAY_SCAFFOLD_MATRIX.filter(({ deploy }) => deploy === 'cf-workers').some(
 				({ highestSeam }) => highestSeam === 'cloudflare-preview'
 			)

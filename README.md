@@ -4,12 +4,32 @@ Scaffolding CLI for full-stack product monorepos. Pick your project shape and st
 
 ## Quickstart
 
+Create a project with the default Hono backend:
+
 ```bash
 npx gv-kit new my-app
 cd my-app
+```
+
+For the default Hono scaffold, use the generated local setup sequence. The generated command handles target-specific database preparation.
+
+### First run
+
+```bash
 pnpm install
+cp .env.example .env
+# Fill the required values in .env.
+pnpm local:prepare
 pnpm dev
 ```
+
+### Subsequent runs
+
+```bash
+pnpm dev
+```
+
+If you select `backend=inside-frontend`, follow its generated README instead. That topology does not use `pnpm local:prepare`.
 
 ## What you get
 

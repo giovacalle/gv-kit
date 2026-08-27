@@ -36,7 +36,7 @@
 .prettierignore  00ccef47c63de1e9
 CLAUDE.md  c76fd15bd3209c4a
 LICENSE  508a77d2e7b51d98
-README.md  880f88e759ef6ff4
+README.md  3d9a7e476f835b5a
 apps/api/README.md  18ae3e78ce493e5e
 apps/api/openapi.json  0744518cabb522ad
 apps/api/package.json  2750f934d85cb908
@@ -276,7 +276,7 @@ prettier.config.js  76a534fdcb4541a5
 scripts/cleanup-cloudflare-preview-workers.sh  82a8cffcadc19a34
 scripts/cloudflare-preview-name.mjs  687b290318c94070
 scripts/local.mjs  42825d534dc30567
-scripts/prepare-cloudflare-preview.mjs  389440cc2bb0dbe1
+scripts/prepare-cloudflare-preview.mjs  b9da7a13932ca873
 scripts/resolve-cloudflare-deploy-range.sh  5a1efeaeeb11ebb8
 scripts/verify-cloudflare-preview-ingress.mjs  d679b9884fed1dc2
 scripts/write-cloudflare-preview-secrets.mjs  c538262dd3ffb716

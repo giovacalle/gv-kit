@@ -374,13 +374,25 @@ function renderReadme(cfg: GvKitConfig): string {
 
 	const quickstart =
 		cfg.choices.backend === 'hono'
-			? `pnpm install
+			? `### First run
+
+\`\`\`bash
+pnpm install
 cp .env.example .env
 # Fill the required values in .env.
 pnpm local:prepare
-pnpm dev`
-			: `pnpm install
-pnpm dev`
+pnpm dev
+\`\`\`
+
+### Subsequent runs
+
+\`\`\`bash
+pnpm dev
+\`\`\``
+			: `\`\`\`bash
+pnpm install
+pnpm dev
+\`\`\``
 
 	return `# ${name}
 
@@ -388,9 +400,7 @@ Type-safe full-stack monorepo with sensible defaults — install, run, ship.
 
 ## Quickstart
 
-\`\`\`bash
 ${quickstart}
-\`\`\`
 
 ## Common commands
 

@@ -7,7 +7,7 @@
 .prettierignore  00ccef47c63de1e9
 Dockerfile  863f5b3f3c33de19
 LICENSE  508a77d2e7b51d98
-README.md  464f32f487e93309
+README.md  ec7295dd5f38de41
 apps/api/README.md  18ae3e78ce493e5e
 apps/api/openapi.json  e1f4f3ab3504f32c
 apps/api/package.json  bd98589e0dba2ec6
@@ -46,7 +46,7 @@ apps/web/static/favicon.svg  0b4b302394834bcd
 apps/web/svelte.config.js  5c32ff96e10d06c8
 apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  e8dee2244bca3ff3
-docker-compose.yml  59c7943f82d062e3
+docker-compose.yml  6e53c9e5e805f1c8
 docker/ingress.conf.template  9fb8b1ac9911eb4c
 eslint.config.js  cfd85b071f7c820c
 gv-kit.config.jsonc  7a15002770b1f922
@@ -212,14 +212,12 @@ packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
 scripts/local.mjs  f278b4fb2a62fb8d
-services/auth/README.md  bc7f5cfc7ebc69b9
-services/auth/env.d.ts  157c926dea1887bf
-services/auth/package.json  c83355e5c5c86041
-services/auth/src/app.ts  ecb37c3b53c18e2c
-services/auth/src/auth.ts  732bfbdad347f07a
+services/auth/README.md  95c84f8d95c4b138
+services/auth/env.d.ts  3eb96b5d8937e0da
+services/auth/package.json  c3fd8f272cc171bd
+services/auth/src/app.ts  48898a140ad30378
 services/auth/src/index.ts  d67465b9372c4f2f
-services/auth/src/lib/utils.ts  08891fc3737da40e
-services/auth/src/openapi.ts  7bcfb9b99ab18b94
+services/auth/src/openapi.ts  87fc9fcbd5b0b8ed
 services/auth/tsconfig.json  f5cee125f468d286
 services/auth/tsup.config.ts  ebd50f3bd9d70df7
 services/users/README.md  2f5eadcc2e37cce7

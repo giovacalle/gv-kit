@@ -31,7 +31,7 @@
 .prettierignore  00ccef47c63de1e9
 CLAUDE.md  315db740d9ab370d
 LICENSE  508a77d2e7b51d98
-README.md  01ad960cc86de559
+README.md  755b5f72e306a3bd
 apps/api/README.md  18ae3e78ce493e5e
 apps/api/openapi.json  d29ca48d95cd3c11
 apps/api/package.json  e26edcaba418ff1a

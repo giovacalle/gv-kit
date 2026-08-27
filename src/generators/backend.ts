@@ -2,9 +2,6 @@ import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
 import { AUTH_SERVICE } from './hono-topology.js'
 
-/**
- * Generator for the shared backend application/core layer in `packages/backend/`.
- */
 export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 	const isHono = cfg.choices.backend === 'hono'
 	const isCf = cfg.choices.deploy === 'cf-workers'
@@ -21,9 +18,7 @@ export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 		{ path: 'packages/backend/src/helpers/index.test.ts', content: HELPERS_TEST }
 	]
 
-	// users DAO + use-cases require the better-auth `user` table emitted by
-	// `@repo/db`, which is only present when at least one auth provider was
-	// chosen. Skip these emissions otherwise so the package still typechecks.
+	// The users core requires Better Auth's user table, which is absent without a provider.
 	if (hasAuth) {
 		entries.push(
 			{ path: 'packages/backend/src/core/types.ts', content: CORE_TYPES },
@@ -48,10 +43,6 @@ export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 
 	return entries
 }
-
-/* ------------------------------------------------------------------ */
-/*  package.json                                                       */
-/* ------------------------------------------------------------------ */
 
 function renderPackageJson({
 	isHono,
@@ -81,7 +72,7 @@ function renderPackageJson({
 		'drizzle-orm': '^0.45.0',
 		zod: '^4.3.0'
 	}
-	// users DAO + use-cases import the better-auth `user` table from `@repo/db`.
+	// Only authenticated scaffolds emit the @repo/db table imported by the users core.
 	if (hasAuth) dependencies['@repo/db'] = 'workspace:*'
 	if (isHono) dependencies.hono = '^4.12.0'
 
@@ -111,10 +102,6 @@ function renderPackageJson({
 	return JSON.stringify(pkg, null, 2) + '\n'
 }
 
-/* ------------------------------------------------------------------ */
-/*  tsconfig.json                                                      */
-/* ------------------------------------------------------------------ */
-
 function renderTsconfig({
 	isCf,
 	isSqlite: _isSqlite
@@ -122,9 +109,7 @@ function renderTsconfig({
 	isCf: boolean
 	isSqlite: boolean
 }): string {
-	// Inherit the shared compiler base from `@repo/tooling-typescript` so every
-	// package agrees on strictness + module resolution. cf-workers consumers
-	// pick up `@cloudflare/workers-types`; everything else picks up `node`.
+	// Workers need Cloudflare globals; other runtimes need Node globals.
 	const base = isCf ? '@repo/tooling-typescript/workers.json' : '@repo/tooling-typescript/node.json'
 
 	return `{
@@ -137,10 +122,6 @@ function renderTsconfig({
 }
 `
 }
-
-/* ------------------------------------------------------------------ */
-/*  src/helpers/index.ts                                               */
-/* ------------------------------------------------------------------ */
 
 const HELPERS_INDEX = `export class HttpError extends Error {
 	constructor(
@@ -191,10 +172,6 @@ describe('errors', () => {
 	})
 })
 `
-
-/* ------------------------------------------------------------------ */
-/*  src/middleware/* (hono-only)                                       */
-/* ------------------------------------------------------------------ */
 
 const MIDDLEWARE_INDEX = `export { logger } from './logger.js'
 export { errorHandler } from './error-handler.js'
@@ -256,12 +233,6 @@ export function errorHandler(): MiddlewareHandler {
 }
 `
 
-/* ------------------------------------------------------------------ */
-/*  src/core/types.ts                                                  */
-/*  src/core/data-access/users.ts                                      */
-/*  src/core/use-cases/users.ts                                        */
-/* ------------------------------------------------------------------ */
-
 const CORE_TYPES = `import { authSchema } from '@repo/db'
 
 export type UserId = (typeof authSchema.user.$inferSelect)['id']
@@ -290,10 +261,6 @@ export async function getMeUseCase(db: Db, userId: UserId) {
 	return row
 }
 `
-
-/* ------------------------------------------------------------------ */
-/*  src/middleware/auth/* (hono-only)                                  */
-/* ------------------------------------------------------------------ */
 
 const MIDDLEWARE_AUTH_CLIENT = `export type SessionLike = {
 	userId: string

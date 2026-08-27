@@ -5,6 +5,22 @@ import { generateTooling } from '../../src/generators/tooling.js'
 import type { FileEntry } from '../../src/lib/files.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
+const canonicalHonoQuickstart = `### First run
+
+\`\`\`bash
+pnpm install
+cp .env.example .env
+# Fill the required values in .env.
+pnpm local:prepare
+pnpm dev
+\`\`\`
+
+### Subsequent runs
+
+\`\`\`bash
+pnpm dev
+\`\`\``
+
 const baseChoices: Choices = {
 	name: 'demo',
 	frontend: 'sveltekit',
@@ -154,9 +170,25 @@ describe('generateRoot — Astro project shape', () => {
 		expect(local).toContain("'--filter=./apps/*', '--filter=./services/*'")
 		expect(local).not.toContain('typecheck')
 		expect(local).not.toContain('--env-mode=loose')
-		expect(readme).toContain('cp .env.example .env')
-		expect(readme).toContain('pnpm local:prepare')
-		expect(readme).toContain('pnpm dev')
+		expect(readme).toContain(canonicalHonoQuickstart)
+	})
+
+	test('integrated-backend quickstart does not claim Hono local preparation', () => {
+		const readme = content(
+			generateRoot(
+				makeCfg({ backend: 'inside-frontend', apiClient: 'skip', auth: [], email: 'skip' })
+			),
+			'README.md'
+		)
+
+		expect(readme).toContain(`## Quickstart
+
+\`\`\`bash
+pnpm install
+pnpm dev
+\`\`\``)
+		expect(readme).not.toContain('pnpm local:prepare')
+		expect(readme).not.toContain('cp .env.example .env')
 	})
 
 	test('non-Cloudflare Hono auth uses gateway ingress allowlists', () => {

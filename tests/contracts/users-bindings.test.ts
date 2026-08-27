@@ -57,9 +57,6 @@ describe('users-worker bindings', () => {
 				const userSources = entries.filter((e) => e.path.startsWith('services/users/src/'))
 				for (const src of userSources) {
 					expect(src.content).not.toContain('BETTER_AUTH_SECRET')
-					// The nonexistent backend auth subpath must never appear.
-					// Session checks use the deploy-aware middleware at
-					// `@repo/backend/middleware/auth`.
 					expect(src.content).not.toContain(`from '@repo/backend/auth'`)
 				}
 			})
@@ -69,9 +66,6 @@ describe('users-worker bindings', () => {
 			const entries = runGenerators(cfg)
 			const appTs = entries.find((e) => e.path === 'services/users/src/app.ts')
 			expect(appTs).toBeDefined()
-			// Must import requireAuth from the deploy-aware middleware. Asserts
-			// W4 wired the middleware/auth subpath rather than a local
-			// auth service client.
 			expect(appTs!.content).toContain(`from '@repo/backend/middleware/auth'`)
 			expect(appTs!.content).toContain('requireAuth')
 		})

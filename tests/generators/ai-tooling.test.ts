@@ -367,10 +367,16 @@ describe('generated Hono gateway guidance', () => {
 
 			expect(guidance).not.toContain('@repo/backend/auth')
 			expect(guidance).not.toMatch(/auth factory/i)
-			expect(guidance).toContain('`services/auth/src/auth.ts`')
-			expect(guidance).toMatch(/configures Better Auth directly/i)
+			if (auth.length > 0) {
+				expect(guidance).toContain('`services/auth/src/auth.ts`')
+				expect(guidance).toMatch(/configures Better Auth directly/i)
+				expect(planPaths).toContain('services/auth/src/auth.ts')
+			} else {
+				expect(guidance).not.toContain('`services/auth/src/auth.ts`')
+				expect(guidance).toMatch(/no public auth methods/i)
+				expect(planPaths).not.toContain('services/auth/src/auth.ts')
+			}
 			expect(guidance).toContain('`@repo/backend/middleware/auth`')
-			expect(planPaths).toContain('services/auth/src/auth.ts')
 			expect(backendPackage.exports['./auth']).toBeUndefined()
 			expect(backendPackage.exports['./middleware/auth']).toBe('./src/middleware/auth/index.ts')
 			expect(planPaths).toContain(

@@ -132,7 +132,7 @@ async function runCommand({ executable, args, cwd }: LocalCommandOptions): Promi
 	return { code, output }
 }
 
-async function run({
+async function recordCommandEvidence({
 	name,
 	executable,
 	args,
@@ -887,7 +887,7 @@ async function verifyOpenApiContract(project: string) {
 	const pnpm = [`pnpm@${PNPM_VERSION}`]
 	const cleanDiagnostic = /OpenAPI is current \(sha256:[0-9a-f]{64}\)/
 	const driftDiagnostic = /apps\/api\/openapi\.json drifted; run pnpm openapi:compose/
-	await run({
+	await recordCommandEvidence({
 		name: 'openapi-check-baseline',
 		executable: 'corepack',
 		args: [...pnpm, 'openapi:check'],
@@ -896,7 +896,7 @@ async function verifyOpenApiContract(project: string) {
 		expectedExitCode: 0,
 		expectedOutput: cleanDiagnostic
 	})
-	await run({
+	await recordCommandEvidence({
 		name: 'openapi-compose-first',
 		executable: 'corepack',
 		args: [...pnpm, 'openapi:compose'],
@@ -906,7 +906,7 @@ async function verifyOpenApiContract(project: string) {
 	const openApiPath = join(project, 'apps/api/openapi.json')
 	const firstDocument = await readFile(openApiPath, 'utf8')
 	const firstHash = createHash('sha256').update(firstDocument).digest('hex')
-	await run({
+	await recordCommandEvidence({
 		name: 'openapi-compose-second',
 		executable: 'corepack',
 		args: [...pnpm, 'openapi:compose'],
@@ -918,7 +918,7 @@ async function verifyOpenApiContract(project: string) {
 	if (firstHash !== secondHash || firstDocument !== secondDocument) throw new Error('repeated OpenAPI composition was not byte-identical')
 
 	await writeFile(openApiPath, `${secondDocument} `)
-	await run({
+	await recordCommandEvidence({
 		name: 'openapi-drift-rejection',
 		executable: 'corepack',
 		args: [...pnpm, 'openapi:check'],
@@ -927,14 +927,14 @@ async function verifyOpenApiContract(project: string) {
 		expectedExitCode: 1,
 		expectedOutput: driftDiagnostic
 	})
-	await run({
+	await recordCommandEvidence({
 		name: 'openapi-compose-restore',
 		executable: 'corepack',
 		args: [...pnpm, 'openapi:compose'],
 		cwd: project,
 		logPath: join(project, 'openapi-compose-restore.log')
 	})
-	await run({
+	await recordCommandEvidence({
 		name: 'openapi-check-final',
 		executable: 'corepack',
 		args: [...pnpm, 'openapi:check'],
@@ -943,14 +943,14 @@ async function verifyOpenApiContract(project: string) {
 		expectedExitCode: 0,
 		expectedOutput: cleanDiagnostic
 	})
-	await run({
+	await recordCommandEvidence({
 		name: 'openapi-codegen',
 		executable: 'corepack',
 		args: [...pnpm, 'codegen'],
 		cwd: project,
 		logPath: join(project, 'codegen.log')
 	})
-	await run({
+	await recordCommandEvidence({
 		name: 'typed-consumer-check',
 		executable: 'corepack',
 		args: [...pnpm, 'typecheck'],
@@ -1014,14 +1014,14 @@ async function main(): Promise<void> {
 	if (!viteConfig.includes("'^/api(?:[/?]|$)': { target:")) throw new Error('generated local Vite ingress omits the exact API boundary')
 	if (viteConfig.includes("'/api': { target:")) throw new Error('generated local Vite ingress overmatches paths outside /api')
 
-	await run({
+	await recordCommandEvidence({
 		name: 'install',
 		executable: 'corepack',
 		args: [`pnpm@${PNPM_VERSION}`, 'install', '--no-frozen-lockfile'],
 		cwd: generated.project,
 		logPath: join(generated.project, 'install.log')
 	})
-	await run({
+	await recordCommandEvidence({
 		name: 'missing-local-environment',
 		executable: 'corepack',
 		args: [`pnpm@${PNPM_VERSION}`, 'dev'],
@@ -1034,7 +1034,7 @@ async function main(): Promise<void> {
 	const hasAuth = generated.config.choices.auth.length > 0
 	const localEnvironment = await writeLocalEnvironment(generated.project, 'http://127.0.0.1:8787')
 	Object.assign(process.env, localEnvironment)
-	await run({
+	await recordCommandEvidence({
 		name: 'local-environment-prepare',
 		executable: 'corepack',
 		args: [`pnpm@${PNPM_VERSION}`, 'local:prepare'],

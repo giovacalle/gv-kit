@@ -23,16 +23,48 @@ Remove direct public service triggers and any unversioned domain routes such as 
 
 ## Environment
 
-Replace browser-facing service URLs such as `PUBLIC_AUTH_URL`, `PUBLIC_USERS_URL`, and `PUBLIC_API_URL` with the gateway contract:
+Remove browser-facing service URLs such as `PUBLIC_AUTH_URL`, `PUBLIC_USERS_URL`, and `PUBLIC_API_URL`. Browser code uses the web origin's same-origin `/api/*` alias and needs no API base URL.
 
-- `API_PUBLIC_ORIGIN` is the canonical API origin advertised by runtime OpenAPI.
-- Browser code uses the web origin's same-origin `/api/*` alias and needs no API base URL.
-- `GATEWAY_URL` is the private Node or Docker SSR target.
-- `AUTH_URL` and `USERS_URL` are private Node or Docker service targets.
-- `BETTER_AUTH_ALLOWED_HOSTS` lists explicit web, API, preview, and local hosts without schemes.
-- `AUTH_CORS_ORIGINS` lists complete browser origins allowed to call the canonical API with credentials.
+Use this topology environment inventory. Retain separate database, OAuth, email, and other feature-specific variables already required by the generated project.
 
-Keep secret values in the deployment platform's secret manager. Do not copy secrets into environment examples or Wrangler configuration.
+| Variable | Owner / consumer | Value class and target scope |
+| --- | --- | --- |
+| `API_PUBLIC_ORIGIN` | Gateway (`apps/api`) | Public, non-secret canonical API origin advertised by runtime OpenAPI. Required for Cloudflare, Docker, and Node; use the origin for the current local, production, or preview environment. |
+| `GATEWAY_PUBLIC_ORIGINS` | Gateway (`apps/api`) | Public, non-secret comma-separated allowlist of complete web and API origins accepted at ingress. Required by generated startup for every target. |
+| `API_CORS_ORIGINS` | Gateway (`apps/api`) | Public, non-secret comma-separated browser-origin allowlist for credentialed CORS across the canonical public API. Required by generated startup for every target. |
+| `GATEWAY_UPSTREAM_TIMEOUT_MS` | Gateway (`apps/api`) | Non-secret private-service timeout in milliseconds. Required by generated startup; generated deployment output uses `10000`. |
+| `GATEWAY_TRUSTED_INGRESS_SECRET` | Gateway plus trusted web SSR and ingress callers | Secret shared only across the Node or Docker private ingress boundary. It authenticates forwarded public host and scheme metadata; it is not a public origin, URL, or Cloudflare binding. |
+| `GATEWAY_URL` | Web SSR (`apps/web`) | Private Node or Docker gateway target. Never expose it to browser code. Cloudflare replaces it with the `GATEWAY` Service Binding. |
+| `AUTH_URL` | Gateway and private auth clients | Private Node or Docker auth-service target. Cloudflare replaces it with the `AUTH` Service Binding. |
+| `USERS_URL` | Gateway (`apps/api`) | Private Node or Docker users-service target. Cloudflare replaces it with the `USERS` Service Binding. |
+| `BETTER_AUTH_ALLOWED_HOSTS` | Auth service (`services/auth`) | Non-secret comma-separated request-host allowlist. Entries omit schemes and must cover only the current web, API, local, or preview hosts. |
+| `AUTH_CORS_ORIGINS` | Auth service (`services/auth`) | Non-secret comma-separated browser-origin allowlist for the auth service's own CORS contract. It does not configure canonical API CORS at the gateway. |
+
+`API_CORS_ORIGINS` is the canonical API CORS control. `AUTH_CORS_ORIGINS` remains a service-owned defense for auth routes; keep it scoped to origins allowed to use auth, but do not substitute it for the gateway allowlist. Wildcards are invalid for credentialed requests.
+
+Complete origins include `http://` or `https://` and contain no path. Host allowlist entries omit the scheme. Private target URLs name loopback or internal network endpoints, never public browser endpoints. Local examples are not production defaults, and production values must not be copied into previews.
+
+### Local and Node startup
+
+Copy `.env.example` to `.env` and use the generated root commands. The local startup script validates `API_PUBLIC_ORIGIN`, `GATEWAY_PUBLIC_ORIGINS`, `API_CORS_ORIGINS`, `GATEWAY_UPSTREAM_TIMEOUT_MS`, `GATEWAY_URL`, `AUTH_URL`, and `USERS_URL`. Non-Cloudflare Node output also requires `GATEWAY_TRUSTED_INGRESS_SECRET`; selected auth and infrastructure features add their own requirements.
+
+The Node gateway entrypoint hard-requires `API_PUBLIC_ORIGIN` and `GATEWAY_TRUSTED_INGRESS_SECRET`. Node gateway startup fails if either is absent. Set the remaining gateway values explicitly rather than relying on runtime fallbacks, and use loopback private targets only for local development. The same secret must be available to Node web SSR so its trusted forwarded metadata can be verified. Cloudflare local development uses Service Bindings and does not require this secret.
+
+### Cloudflare production and previews
+
+Place `API_PUBLIC_ORIGIN`, `GATEWAY_PUBLIC_ORIGINS`, `API_CORS_ORIGINS`, and `GATEWAY_UPSTREAM_TIMEOUT_MS` in `apps/api/wrangler.jsonc`. Place `BETTER_AUTH_ALLOWED_HOSTS` and `AUTH_CORS_ORIGINS` in `services/auth/wrangler.jsonc`. These are non-secret configuration values. Production uses production hosts only: the canonical API origin, the web and API gateway origins, and the web browser origin allowed by API CORS.
+
+Cloudflare Service Bindings replace `GATEWAY_URL`, `AUTH_URL`, and `USERS_URL`. Cloudflare Service Bindings do not use this secret: omit `GATEWAY_TRUSTED_INGRESS_SECRET` from Wrangler variables and secrets.
+
+The generated preview preparation script derives the PR-scoped API and web origins, rewrites gateway and auth allowlists, preserves the generated timeout, and rewires every Service Binding to the same preview alias. Generated preview allowlists also retain the explicit local development origins. Preview values must name only that preview and must never reference production Workers, hosts, or data bindings.
+
+### Docker startup
+
+Use `.env` as the Compose input. Docker Compose requires the same secret in the gateway, web, and ingress containers and refuses to start if `GATEWAY_TRUSTED_INGRESS_SECRET` is absent. Generate one secret value through an approved secret tool, keep it out of committed files and logs, and rotate it independently for each production or preview environment.
+
+Compose provides private `GATEWAY_URL`, `AUTH_URL`, and `USERS_URL` values from service names; do not replace them with public hosts. Its public-origin and CORS defaults are local conveniences. For production or preview, explicitly set `API_PUBLIC_ORIGIN`, `GATEWAY_PUBLIC_ORIGINS`, `API_CORS_ORIGINS`, and `GATEWAY_UPSTREAM_TIMEOUT_MS` to that environment's values. Configure the ingress host and scheme for the same public API origin.
+
+Keep all secret values in the deployment platform's secret manager. Do not copy secret values into environment examples, Wrangler configuration, migration records, or preview output.
 
 ## Client imports
 

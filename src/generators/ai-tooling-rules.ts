@@ -144,8 +144,13 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\
 
 ## Request lifecycle
 
-1. Browser requests use same-origin \`/api/*\` paths and reach the gateway. Better Auth uses
-   \`/api/auth/*\`; domain operations use versioned \`/api/v1/*\` paths.
+${
+	cfg.choices.auth.length > 0
+		? `1. Browser requests use same-origin \`/api/*\` paths and reach the gateway. Better Auth uses
+   \`/api/auth/*\`; domain operations use versioned \`/api/v1/*\` paths.`
+		: `1. Browser requests use same-origin \`/api/*\` paths and reach the gateway. No public auth
+   methods are mounted; domain operations use versioned \`/api/v1/*\` paths.`
+}
 2. SvelteKit SSR passes its request-scoped \`fetch\` ${cfg.choices.apiClient === 'hey-api' ? 'to the flat gateway client' : 'to same-origin gateway requests'}.
    On Cloudflare, \`handleFetch\` sends these requests through the web Worker's
    \`GATEWAY\` Service Binding. Node and Docker use the private gateway URL.
@@ -162,7 +167,7 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\
   cases or orchestrate business workflows.
 - **Private services stay private.** They must not gain a public route, workers.dev hostname, or preview URL.
 - **Auth is a service.** Served EXCLUSIVELY by \`${AUTH_SERVICE.workspacePath}/\`. No other
-  service exposes auth endpoints.
+  service exposes auth endpoints.${cfg.choices.auth.length === 0 ? ' With no selected provider, it mounts no public auth methods and its private session transport always reports no active session.' : ''}
 - **Inter-service calls stay private.** Session-aware services use the existing
   \`@repo/backend/middleware/auth\` transport, which calls \`/internal/session\`
   through an explicit \`${AUTH_SERVICE.internalTarget}\` binding on Cloudflare or the private
@@ -305,7 +310,7 @@ The shared backend application/core layer is split into **data-access** and **us
 	sections.push(`## What NOT to do
 
 - No \`as any\` in worker code
-- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths${isHono ? '\n- No Better Auth configuration outside of `' + AUTH_SERVICE.workspacePath + '/src/auth.ts`' : ''}
+- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths${isHono && cfg.choices.auth.length > 0 ? '\n- No Better Auth configuration outside of `' + AUTH_SERVICE.workspacePath + '/src/auth.ts`' : ''}${isHono && cfg.choices.auth.length === 0 ? '\n- No public auth methods while no authentication provider is selected' : ''}
 - No hand-written \`Env\` interface — let wrangler generate it
 - No \`wrangler.toml\` — \`wrangler.jsonc\` only`)
 

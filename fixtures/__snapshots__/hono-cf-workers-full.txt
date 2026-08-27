@@ -37,7 +37,7 @@
 AGENTS.md  31c8d3cf3a548256
 CLAUDE.md  fad66f72b2845f2b
 LICENSE  508a77d2e7b51d98
-README.md  26331e673ebde55a
+README.md  3e67343fbb6d736a
 apps/api/README.md  18ae3e78ce493e5e
 apps/api/openapi.json  2389e66815480b94
 apps/api/package.json  58cc721f6193b148
@@ -288,7 +288,7 @@ prettier.config.js  76a534fdcb4541a5
 scripts/cleanup-cloudflare-preview-workers.sh  82a8cffcadc19a34
 scripts/cloudflare-preview-name.mjs  687b290318c94070
 scripts/local.mjs  42825d534dc30567
-scripts/prepare-cloudflare-preview.mjs  389440cc2bb0dbe1
+scripts/prepare-cloudflare-preview.mjs  b9da7a13932ca873
 scripts/resolve-cloudflare-deploy-range.sh  5a1efeaeeb11ebb8
 scripts/verify-cloudflare-preview-ingress.mjs  d679b9884fed1dc2
 scripts/write-cloudflare-preview-secrets.mjs  c538262dd3ffb716

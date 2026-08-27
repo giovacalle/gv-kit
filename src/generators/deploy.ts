@@ -394,7 +394,7 @@ for (const { config, configPath, normalizedPath, productionName } of sources) {
 			API_CORS_ORIGINS: [webOrigin.origin, ...localOrigins].join(',')
 		}
 	}
-	if (normalizedPath === 'services/auth/wrangler.jsonc' && apiOrigin && webOrigin) {
+	if (normalizedPath === 'services/auth/wrangler.jsonc' && apiOrigin && webOrigin && config.vars) {
 		config.vars = {
 			...(config.vars ?? {}),
 			BETTER_AUTH_ALLOWED_HOSTS: [webOrigin.host, apiOrigin.host, ...localHosts].join(','),
@@ -447,7 +447,7 @@ function writeCloudflarePreviewSecretsScript(
 	db: GvKitConfig['choices']['db']
 ): string {
 	const authSources = previewAuthSecretKeys(cfg).map((key) => [key, key])
-	if (db === 'postgres') authSources.push(['DATABASE_URL', 'STAGING_DATABASE_URL'])
+	if (cfg.choices.auth.length > 0 && db === 'postgres') authSources.push(['DATABASE_URL', 'STAGING_DATABASE_URL'])
 	const usersSources = db === 'postgres' ? [['DATABASE_URL', 'STAGING_DATABASE_URL']] : []
 	return `import { chmodSync, mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -527,7 +527,9 @@ function honoDeploymentSteps({
 			packageName: honoPackageIdentity(project, AUTH_SERVICE),
 			phase: 'private',
 			secretsFile:
-				stage === 'staging' ? '${{ steps.preview_secrets.outputs.auth_file }}' : undefined
+				stage === 'staging' && cfg.choices.auth.length > 0
+					? '${{ steps.preview_secrets.outputs.auth_file }}'
+					: undefined
 		},
 		{
 			label: 'users',
@@ -673,6 +675,7 @@ ${publicVariableChecks}
 }
 
 function previewAuthSecretKeys(cfg: GvKitConfig): string[] {
+	if (cfg.choices.auth.length === 0) return []
 	const keys = ['BETTER_AUTH_SECRET']
 	if (cfg.choices.auth.includes('google')) keys.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 	if (cfg.choices.auth.includes('emailOTP')) {
@@ -693,6 +696,10 @@ function previewPrivateSecretsStep(cfg: GvKitConfig, db: GvKitConfig['choices'][
 				: []
 		)
 		.join('\n')
+	const authOutput =
+		cfg.choices.auth.length > 0
+			? `\n          echo "auth_file=$secret_dir/auth.json" >> "$GITHUB_OUTPUT"`
+			: ''
 	const usersOutput =
 		db === 'postgres'
 			? `\n          echo "users_file=$secret_dir/users.json" >> "$GITHUB_OUTPUT"`
@@ -703,8 +710,7 @@ function previewPrivateSecretsStep(cfg: GvKitConfig, db: GvKitConfig['choices'][
           set -euo pipefail
           secret_dir="$RUNNER_TEMP/gv-kit-preview-secrets"
           umask 077
-          node scripts/write-cloudflare-preview-secrets.mjs "$secret_dir"
-          echo "auth_file=$secret_dir/auth.json" >> "$GITHUB_OUTPUT"${usersOutput}
+          node scripts/write-cloudflare-preview-secrets.mjs "$secret_dir"${authOutput}${usersOutput}
         env:
 ${env}`
 }
@@ -779,8 +785,9 @@ function deployStagingWorkflow({
         run: pnpm turbo run deploy:staging --affected
         env:
 ${deployEnv}`
-	const privateSecretsStep = isHono ? `\n\n${previewPrivateSecretsStep(cfg, db)}` : ''
-	const removePrivateSecretsStep = isHono
+	const hasPrivateSecrets = cfg.choices.auth.length > 0 || db === 'postgres'
+	const privateSecretsStep = isHono && hasPrivateSecrets ? `\n\n${previewPrivateSecretsStep(cfg, db)}` : ''
+	const removePrivateSecretsStep = isHono && hasPrivateSecrets
 		? `      - name: Remove private Worker preview secret files
         if: always()
         run: rm -rf "$RUNNER_TEMP/gv-kit-preview-secrets"`
@@ -1377,8 +1384,9 @@ function migrateService(opts: DockerOpts): string {
 }
 
 function authService(opts: DockerOpts): string {
-	const env = [`      PORT: "${AUTH_SERVICE.development.port}"`, ...dbEnvLines(opts, '      ')]
+	const env = [`      PORT: "${AUTH_SERVICE.development.port}"`]
 	if (opts.hasAuth) {
+		env.push(...dbEnvLines(opts, '      '))
 		env.push('      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}')
 		env.push(
 			'      BETTER_AUTH_ALLOWED_HOSTS: ${BETTER_AUTH_ALLOWED_HOSTS:-localhost:3000,api.localhost:3000,localhost:8786,127.0.0.1:8786}'
@@ -1421,8 +1429,8 @@ function authService(opts: DockerOpts): string {
 		'    restart: unless-stopped',
 		'    environment:',
 		...env,
-		...volumeMountLines(opts, '    '),
-		...dependsOnDbAndMigrate(opts),
+		...(opts.hasAuth ? volumeMountLines(opts, '    ') : []),
+		...(opts.hasAuth ? dependsOnDbAndMigrate(opts) : []),
 		...healthcheckLines(AUTH_SERVICE.development.port)
 	]
 	return lines.join('\n')

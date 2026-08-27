@@ -273,6 +273,7 @@ marketing; route those changes to \`apps/web\` or the owning service instead.
 
 function renderServiceArchitectAgent(cfg: GvKitConfig): string {
 	const isCfWorkers = cfg.choices.deploy === 'cf-workers'
+	const hasAuth = cfg.choices.auth.length > 0
 	const project = cfg.choices.name
 
 	const runtimeFiles = isCfWorkers
@@ -366,7 +367,7 @@ ${authTransport}
 - **REFUSE internal calls through the gateway.** Private services call one another through direct bindings or private URLs.
 - **REFUSE credentialed wildcard CORS.** Use an explicit origin allowlist and reject unknown origins.
 ${isCfWorkers ? '- **REFUSE `wrangler.toml`, public private-service triggers, and hand-written Cloudflare `Env` declarations.** Keep `workers_dev: false`, `preview_urls: false`, no routes, and use `wrangler.jsonc` plus `pnpm cf-typegen` as the source of truth.' : ''}
-- **REFUSE to configure Better Auth outside \`${AUTH_SERVICE.workspacePath}/src/auth.ts\`.** The auth service owns Better Auth configuration and secrets.
+${hasAuth ? `- **REFUSE to configure Better Auth outside \`${AUTH_SERVICE.workspacePath}/src/auth.ts\`.** The auth service owns Better Auth configuration and secrets.` : '- **REFUSE to mount public auth methods while no authentication provider is selected.** The private auth transport must continue to report no active session.'}
 - **REFUSE to put reusable application logic in a transport adapter.** Put shared data access, use cases, types, helpers, and middleware in \`packages/backend/\`, then import the required modules from the service.
 - **REFUSE to query \`user\`, \`session\`, \`account\`, \`verification\` from a non-auth service.** Read session via the auth boundary.
 - **REFUSE to extract a shared service-client SDK** (\`packages/<svc>-client/\`). Use existing deploy-aware middleware for the auth boundary; add a service-local private transport only for a different boundary that needs one.

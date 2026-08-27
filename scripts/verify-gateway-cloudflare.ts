@@ -99,7 +99,7 @@ async function assertRejectedPreviewAlias({
 	return { alias, rejected: true }
 }
 
-async function run({
+async function recordCommandEvidence({
 	name,
 	executable,
 	args,
@@ -224,7 +224,8 @@ function assertPreviewTopology({
 	apiOrigin,
 	webOrigin,
 	marketingOrigin,
-	zoneName
+	zoneName,
+	hasAuth
 }: {
 	preview: WranglerConfigs
 	workers: WorkerTarget[]
@@ -233,6 +234,7 @@ function assertPreviewTopology({
 	webOrigin: string
 	marketingOrigin?: string | undefined
 	zoneName: string
+	hasAuth: boolean
 }): void {
 	for (const worker of workers) {
 		const config = preview[worker.name]
@@ -277,8 +279,10 @@ function assertPreviewTopology({
 	if (preview.gateway.vars?.GATEWAY_PUBLIC_ORIGINS !== `${webOrigin},${apiOrigin},${localOrigins}`) throw new Error('gateway preview public-origin allowlist contains the wrong origins')
 	if (preview.gateway.vars?.API_CORS_ORIGINS !== `${webOrigin},${localOrigins}`) throw new Error('gateway preview CORS contains the wrong origins')
 	if (preview.gateway.vars?.GATEWAY_UPSTREAM_TIMEOUT_MS !== '10000') throw new Error('gateway preview timeout is not explicit')
-	if ( preview.auth.vars?.BETTER_AUTH_ALLOWED_HOSTS !== `${new URL(webOrigin).host},${new URL(apiOrigin).host},${localHosts}` ) throw new Error('auth preview allowed hosts contain the wrong origins')
-	if (preview.auth.vars?.AUTH_CORS_ORIGINS !== `${webOrigin},${apiOrigin},${localOrigins}`) throw new Error('auth preview CORS contains the wrong origins')
+	if (hasAuth) {
+		if ( preview.auth.vars?.BETTER_AUTH_ALLOWED_HOSTS !== `${new URL(webOrigin).host},${new URL(apiOrigin).host},${localHosts}` ) throw new Error('auth preview allowed hosts contain the wrong origins')
+		if (preview.auth.vars?.AUTH_CORS_ORIGINS !== `${webOrigin},${apiOrigin},${localOrigins}`) throw new Error('auth preview CORS contains the wrong origins')
+	} else if (preview.auth.vars !== undefined) throw new Error('no-auth preview declares auth-only variables')
 }
 
 type DatabaseEvidence =
@@ -314,7 +318,9 @@ function assertPreviewDatabaseIsolation({
 	previewDatabaseUrl: string
 	previewSecretValues: Partial<Record<'auth' | 'users', Record<string, string>>>
 }): DatabaseEvidence {
-	const privateWorkers = ['auth', 'users'] as const
+	const privateWorkers = config.choices.auth.length > 0
+		? (['auth', 'users'] as const)
+		: (['users'] as const)
 	if (config.choices.db === 'sqlite') {
 		const productionDatabases = privateWorkers.flatMap(
 			(name) => production[name].d1_databases?.filter(({ binding }) => binding === 'DB') ?? []
@@ -324,7 +330,7 @@ function assertPreviewDatabaseIsolation({
 			if ( databases.length !== 1 || databases[0]?.database_name !== previewDatabaseName || databases[0]?.database_id !== previewDatabaseId ) throw new Error(`${name} preview D1 binding is not isolated`)
 			if (preview[name].secrets?.required?.includes('DATABASE_URL')) throw new Error(`${name} D1 preview unexpectedly requires DATABASE_URL`)
 		}
-		if ( productionDatabases.length !== 2 || productionDatabases.some( (database) => database.database_name === previewDatabaseName || database.database_id === previewDatabaseId ) ) throw new Error('production and preview D1 bindings are not distinct')
+		if ( productionDatabases.length !== privateWorkers.length || productionDatabases.some( (database) => database.database_name === previewDatabaseName || database.database_id === previewDatabaseId ) ) throw new Error('production and preview D1 bindings are not distinct')
 		if (Object.values(previewSecretValues).some((values) => values?.DATABASE_URL)) throw new Error('D1 preview secret files contain DATABASE_URL')
 		return {
 			kind: 'd1',
@@ -397,7 +403,10 @@ async function generatedInputSnapshot(
 	)
 }
 
-async function assertTypegenContract(project: string): Promise<Record<string, string[]>> {
+async function assertTypegenContract(
+	project: string,
+	hasAuth: boolean
+): Promise<Record<string, string[]>> {
 	const expected: Record<string, string[]> = {
 		gateway: [
 			'AUTH',
@@ -408,7 +417,9 @@ async function assertTypegenContract(project: string): Promise<Record<string, st
 			'GATEWAY_UPSTREAM_TIMEOUT_MS'
 		],
 		web: ['GATEWAY'],
-		auth: ['BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS'],
+		auth: hasAuth
+			? ['BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS']
+			: [],
 		users: ['AUTH']
 	}
 	for (const worker of CORE_WORKERS) {
@@ -441,7 +452,7 @@ async function main(): Promise<void> {
 	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)')) throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
 	if (!webHooks.includes('export const handleFetch')) throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
 
-	await run({
+	await recordCommandEvidence({
 		name: 'install',
 		executable: 'corepack',
 		args: [`pnpm@${PNPM_VERSION}`, 'install', '--no-frozen-lockfile'],
@@ -458,7 +469,7 @@ async function main(): Promise<void> {
 		: {}
 	for (const task of ['lint', 'typecheck', 'test', 'build']) {
 		workspaceChecks.push(
-			await run({
+			await recordCommandEvidence({
 				name: `workspace-${task}`,
 				executable: 'corepack',
 				args: [`pnpm@${PNPM_VERSION}`, task],
@@ -486,12 +497,12 @@ async function main(): Promise<void> {
 		)
 	) as WranglerConfigs
 	assertTopology(configs)
-	const generatedTypes = await assertTypegenContract(project)
+	const generatedTypes = await assertTypegenContract(project, config.choices.auth.length > 0)
 	const previewDeployScripts = await assertPreviewDeployScripts(project, workers)
 
 	const dryRuns: Record<string, { command: string; output: string }> = {}
 	for (const worker of workers) {
-		const result = await run({
+		const result = await recordCommandEvidence({
 			name: `production-wrangler-dry-run-${worker.name}`,
 			executable: 'corepack',
 			args: [
@@ -551,7 +562,7 @@ async function main(): Promise<void> {
 	]) if (!cleanupScript.includes(marker)) throw new Error(`preview cleanup inventory omits ${marker}`)
 	if (/dns_records|api\.cloudflare\.com|wrangler[^\n]*dns/i.test(cleanupScript)) throw new Error('preview cleanup can delete shared wildcard DNS')
 
-	const manualAliasResult = await run({
+	const manualAliasResult = await recordCommandEvidence({
 		name: 'derive-manual-preview-alias',
 		executable: 'node',
 		args: ['scripts/cloudflare-preview-name.mjs', '--from-id', '987654321'],
@@ -577,7 +588,7 @@ async function main(): Promise<void> {
 		"wildcard = '*.' + parent"
 	]) if (!ingressPrerequisiteScript.includes(marker)) throw new Error(`managed preview ingress prerequisite script omits ${marker}`)
 
-	const failClosed = await run({
+	const failClosed = await recordCommandEvidence({
 		name: 'preview-managed-domains-fail-closed',
 		executable: 'sh',
 		args: [
@@ -607,7 +618,7 @@ cat "$output"`
 	const previewDatabaseId = '11111111-1111-4111-8111-111111111111'
 	const previewDatabaseUrl =
 		'postgres://preview:preview@preview-verification.example.test:5432/preview'
-	const previewPreparation = await run({
+	const previewPreparation = await recordCommandEvidence({
 		name: 'prepare-preview-configs',
 		executable: 'node',
 		args: ['scripts/prepare-cloudflare-preview.mjs'],
@@ -652,7 +663,8 @@ cat "$output"`
 		apiOrigin,
 		webOrigin,
 		marketingOrigin,
-		zoneName: previewZoneName
+		zoneName: previewZoneName,
+		hasAuth: config.choices.auth.length > 0
 	})
 
 	const previewSecretDirectory = join(project, '.wrangler/verify-preview-secrets')
@@ -666,7 +678,7 @@ cat "$output"`
 			name === 'DATABASE_URL' ? previewDatabaseUrl : verificationSecretValue(name)
 		])
 	)
-	const previewSecretPreparation = await run({
+	const previewSecretPreparation = await recordCommandEvidence({
 		name: 'write-preview-secrets',
 		executable: 'node',
 		args: ['scripts/write-cloudflare-preview-secrets.mjs', previewSecretDirectory],
@@ -675,7 +687,9 @@ cat "$output"`
 		extraEnv: previewSecretEnvironment
 	})
 	const previewSecretFiles: Partial<Record<string, string>> = {
-		auth: join(previewSecretDirectory, 'auth.json'),
+		...(requiredPreviewSecrets.auth.length > 0
+			? { auth: join(previewSecretDirectory, 'auth.json') }
+			: {}),
 		...(requiredPreviewSecrets.users.length > 0
 			? { users: join(previewSecretDirectory, 'users.json') }
 			: {})
@@ -709,7 +723,7 @@ cat "$output"`
 			? { PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA' }
 			: {})
 	}
-	const cleanWebBuild = await run({
+	const cleanWebBuild = await recordCommandEvidence({
 		name: 'clean-preview-web-build',
 		executable: 'corepack',
 		args: [
@@ -731,7 +745,7 @@ cat "$output"`
 			await readFile(join(project, MARKETING_WORKER.directory, 'package.json'), 'utf8')
 		) as { name: string }
 		await rm(join(project, MARKETING_WORKER.directory, 'dist'), { recursive: true, force: true })
-		cleanMarketingBuild = await run({
+		cleanMarketingBuild = await recordCommandEvidence({
 			name: 'clean-preview-marketing-build',
 			executable: 'corepack',
 			args: [
@@ -754,7 +768,7 @@ cat "$output"`
 	const previewDryRuns: Partial<Record<WorkerName, CommandResult>> = {}
 	for (const worker of workers) {
 		const secretsFile = previewSecretFiles[worker.name]
-		previewDryRuns[worker.name] = await run({
+		previewDryRuns[worker.name] = await recordCommandEvidence({
 			name: `preview-wrangler-dry-run-${worker.name}`,
 			executable: 'corepack',
 			args: [

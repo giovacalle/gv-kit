@@ -103,9 +103,9 @@ export const GATEWAY_SCAFFOLD_MATRIX: GatewayMatrixEntry[] = [
 		marketing: 'astro',
 		apiClient: 'skip',
 		configVersion: 2,
-		highestSeam: 'generated-workspace',
+		highestSeam: 'docker-runtime',
 		coverage: [
-			'Compose no-auth topology',
+			'Compose no-auth runtime',
 			'Astro static output',
 			'composed OpenAPI without a generated client'
 		]
@@ -169,7 +169,7 @@ export const COVERAGE_RATIONALE = [
 	'The committed matrix is a representative reduction, not a claim of full pairwise prompt coverage.',
 	'Every deployment target runs both Hono and inside-frontend output. Required interaction checks cover Hono Cloudflare with both PostgreSQL/Neon and SQLite/D1, plus auth runtime seams, Astro, Hey API, and v1/v2 migration.',
 	'Cloudflare cases use production and preview topology checks plus correctly positioned `wrangler deploy --dry-run` commands. No remote command is allowed.',
-	'One Docker auth topology runs Compose end to end; the second validates the no-auth Compose and Astro shape. Every Docker case validates Compose configuration.',
+	'Both Docker topologies run Compose end to end: one proves auth and the other proves the no-auth transport, Astro ingress, and API-client-skip shape.',
 	'The selected local Hono case runs dual-ingress, auth, CORS, cookie, SSR, known-prefix, unknown-prefix, health, and OpenAPI HTTP checks.',
 	'All Hey API entries independently compose twice, reject drift, restore the document, generate the flat client, and typecheck its browser and SSR consumers.',
 	'One Hono row skips Hey API while retaining composed OpenAPI and proving that client-only packages, scripts, imports, exports, and guidance are absent.',
@@ -293,6 +293,11 @@ type RunOptions = {
 	expectedOutput?: RegExp
 	env?: Record<string, string>
 }
+type PnpmArgumentsOptions = {
+	pnpmCommand: string
+	pnpmCommandArguments?: string[]
+	workspaceDirectory?: string
+}
 
 const verificationEnvironment = {
 	CI: '1',
@@ -308,6 +313,7 @@ const verificationEnvironment = {
 	BETTER_AUTH_SECRET: 'matrix-only-secret-at-least-thirty-two-characters',
 	BETTER_AUTH_ALLOWED_HOSTS: 'localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786',
 	AUTH_CORS_ORIGINS: 'http://localhost:3000,http://localhost:5173',
+	GATEWAY_TRUSTED_INGRESS_SECRET: 'matrix-only-gateway-ingress-secret',
 	GOOGLE_CLIENT_ID: 'matrix-google-client',
 	GOOGLE_CLIENT_SECRET: 'matrix-google-secret',
 	RESEND_API_KEY: 're_matrix',
@@ -421,8 +427,17 @@ async function materialize(entry: GatewayMatrixEntry, project: string): Promise<
 	)
 }
 
-function pnpmArgs(...args: string[]): string[] {
-	return [`pnpm@${PNPM_VERSION}`, ...args]
+function pnpmArgs({
+	pnpmCommand,
+	pnpmCommandArguments = [],
+	workspaceDirectory
+}: PnpmArgumentsOptions): string[] {
+	return [
+		`pnpm@${PNPM_VERSION}`,
+		...(workspaceDirectory ? ['--dir', workspaceDirectory] : []),
+		pnpmCommand,
+		...pnpmCommandArguments
+	]
 }
 
 async function runSpecializedSeam({
@@ -476,7 +491,13 @@ async function runStandardCommands({
 	for (const task of REQUIRED_WORKSPACE_GATES) {
 		if (commands.some((command) => command.outcome === 'failed')) break
 		if (commands.some((command) => provesWorkspaceGate(command, task))) continue
-		const args = task === 'install' ? pnpmArgs('install', '--no-frozen-lockfile') : pnpmArgs(task)
+		const args =
+			task === 'install'
+				? pnpmArgs({
+					pnpmCommand: 'install',
+					pnpmCommandArguments: ['--no-frozen-lockfile']
+				})
+				: pnpmArgs({ pnpmCommand: task })
 		commands.push(
 			await runCommand({
 				name: task,
@@ -514,22 +535,28 @@ async function verifyOpenApi({
 }): Promise<AssertionEvidence> {
 	const recordOpenApiCommand = async ({
 		name,
-		args,
+		pnpmCommand,
+		pnpmCommandArguments = [],
 		expectedExitCode = 0,
 		expectedOutput
 	}: {
 		name: string
-		args: string[]
+		pnpmCommand: string
+		pnpmCommandArguments?: string[]
 		expectedExitCode?: number
 		expectedOutput?: RegExp
 	}) => {
+		const pnpmArguments = pnpmArgs({
+			pnpmCommand,
+			pnpmCommandArguments
+		})
 		const result = await runCommand({
 			name,
 			program: 'corepack',
-			args: pnpmArgs(...args),
+			args: pnpmArguments,
 			cwd: project,
 			logPath: join(logs, `${name}.log`),
-			displayCommand: `corepack ${pnpmArgs(...args).join(' ')}`,
+			displayCommand: `corepack ${pnpmArguments.join(' ')}`,
 			expectedExitCode,
 			...(expectedOutput ? { expectedOutput } : {})
 		})
@@ -543,34 +570,43 @@ async function verifyOpenApi({
 		async () => {
 			await recordOpenApiCommand({
 				name: 'openapi-check-baseline',
-				args: ['openapi:check'],
+				pnpmCommand: 'openapi:check',
 				expectedExitCode: 0,
 				expectedOutput: cleanDiagnostic
 			})
-			await recordOpenApiCommand({ name: 'openapi-compose-first', args: ['openapi:compose'] })
+			await recordOpenApiCommand({
+				name: 'openapi-compose-first',
+				pnpmCommand: 'openapi:compose'
+			})
 			const path = join(project, 'apps/api/openapi.json')
 			const first = await readFile(path, 'utf8')
 			const firstHash = createHash('sha256').update(first).digest('hex')
-			await recordOpenApiCommand({ name: 'openapi-compose-second', args: ['openapi:compose'] })
+			await recordOpenApiCommand({
+				name: 'openapi-compose-second',
+				pnpmCommand: 'openapi:compose'
+			})
 			const second = await readFile(path, 'utf8')
 			const secondHash = createHash('sha256').update(second).digest('hex')
 			if (first !== second) throw new Error('OpenAPI composition is not byte-identical')
 			await writeFile(path, `${second} `)
 			await recordOpenApiCommand({
 				name: 'openapi-drift-rejection',
-				args: ['openapi:check'],
+				pnpmCommand: 'openapi:check',
 				expectedExitCode: 1,
 				expectedOutput: driftDiagnostic
 			})
-			await recordOpenApiCommand({ name: 'openapi-compose-restore', args: ['openapi:compose'] })
+			await recordOpenApiCommand({
+				name: 'openapi-compose-restore',
+				pnpmCommand: 'openapi:compose'
+			})
 			await recordOpenApiCommand({
 				name: 'openapi-check-final',
-				args: ['openapi:check'],
+				pnpmCommand: 'openapi:check',
 				expectedExitCode: 0,
 				expectedOutput: cleanDiagnostic
 			})
-			await recordOpenApiCommand({ name: 'openapi-codegen', args: ['codegen'] })
-			await recordOpenApiCommand({ name: 'typed-consumer-check', args: ['typecheck'] })
+			await recordOpenApiCommand({ name: 'openapi-codegen', pnpmCommand: 'codegen' })
+			await recordOpenApiCommand({ name: 'typed-consumer-check', pnpmCommand: 'typecheck' })
 
 			const packageJson = JSON.parse(
 				await readFile(join(project, 'packages/openapi-client/package.json'), 'utf8')
@@ -762,23 +798,25 @@ async function cloudflareChecks({
 		if (config.main === undefined && config.assets === undefined) continue
 		const directory = relative(project, dirname(configPath))
 		const slug = directory.replaceAll('/', '-') || 'root'
+		const pnpmArguments = pnpmArgs({
+			workspaceDirectory: directory,
+			pnpmCommand: 'exec',
+			pnpmCommandArguments: [
+				'wrangler',
+				'deploy',
+				'--dry-run',
+				'--outdir',
+				`.wrangler/matrix-${entry.id}`
+			]
+		})
 		commands.push(
 			await runCommand({
 				name: `wrangler-dry-run-${slug}`,
 				program: 'corepack',
-				args: pnpmArgs(
-					'--dir',
-					directory,
-					'exec',
-					'wrangler',
-					'deploy',
-					'--dry-run',
-					'--outdir',
-					`.wrangler/matrix-${entry.id}`
-				),
+				args: pnpmArguments,
 				cwd: project,
 				logPath: join(logs, `wrangler-${slug}.log`),
-				displayCommand: `corepack ${pnpmArgs('--dir', directory, 'exec', 'wrangler', 'deploy', '--dry-run', '--outdir', `.wrangler/matrix-${entry.id}`).join(' ')}`
+				displayCommand: `corepack ${pnpmArguments.join(' ')}`
 			})
 		)
 	}

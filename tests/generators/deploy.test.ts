@@ -87,9 +87,7 @@ describe('generateDeploy — single-Dockerfile architecture', () => {
 			'auth-runtime',
 			'users-runtime',
 			'migrate-runtime'
-		]) {
-			expect(dockerfile).toContain(`AS ${target}`)
-		}
+		]) expect(dockerfile).toContain(`AS ${target}`)
 	})
 
 	test('Dockerfile uses Node + pnpm via corepack (no Bun base image)', () => {
@@ -196,9 +194,7 @@ describe('generateDeploy — auth env injection', () => {
 describe('generateDeploy — backend topology', () => {
 	test('backend=hono → ingress + gateway + auth + users + web services', () => {
 		const yaml = compose(makeCfg({ backend: 'hono' }))
-		for (const name of ['ingress', 'gateway', 'auth', 'users', 'web']) {
-			expect(yaml).toMatch(new RegExp(`^\\s+${name}:`, 'm'))
-		}
+		for (const name of ['ingress', 'gateway', 'auth', 'users', 'web']) expect(yaml).toMatch(new RegExp(`^\\s+${name}:`, 'm'))
 	})
 
 	test('backend=inside-frontend → no auth/users service blocks', () => {
@@ -291,9 +287,7 @@ describe('generateDeploy — Dockerfile correctness', () => {
 		const entries = generateDeploy(makeCfg({}))
 		const dockerfile = findEntry(entries, 'Dockerfile')!.content
 		expect(dockerfile).toMatch(/AS web-runtime[\s\S]*?USER app/)
-		for (const target of ['gateway', 'auth', 'users']) {
-			expect(dockerfile).toMatch(new RegExp(`AS ${target}-runtime[\\s\\S]*?(?:USER app|FROM)`))
-		}
+		for (const target of ['gateway', 'auth', 'users']) expect(dockerfile).toMatch(new RegExp(`AS ${target}-runtime[\\s\\S]*?(?:USER app|FROM)`))
 	})
 
 	test('every runtime stage uses tini as PID 1', () => {
@@ -422,7 +416,9 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const production = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
 		const staging = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		const productionWorkflow = Bun.YAML.parse(production) as {
-			jobs: { deploy: { steps: Array<{ name?: string; run?: string; env?: Record<string, string> }> } }
+			jobs: {
+				deploy: { steps: Array<{ name?: string; run?: string; env?: Record<string, string> }> }
+			}
 		}
 		const stagingWorkflow = Bun.YAML.parse(staging) as {
 			jobs: Record<
@@ -456,12 +452,8 @@ describe('generateDeploy — cf-workers workflows', () => {
 			expect(productionMarketing.run).toContain(`test -n "$${key}"`)
 			expect(productionMarketing.env?.[key]).toBe(`\${{ vars.${key} }}`)
 			expect(stagingMarketing.env?.[key]).toBe(`\${{ vars.${key} }}`)
-			for (const step of productionDeployments.filter((step) => step !== productionMarketing)) {
-				expect(step.env?.[key]).toBeUndefined()
-			}
-			for (const step of stagingDeployments.filter((step) => step !== stagingMarketing)) {
-				expect(step.env?.[key]).toBeUndefined()
-			}
+			for (const step of productionDeployments.filter((step) => step !== productionMarketing)) expect(step.env?.[key]).toBeUndefined()
+			for (const step of stagingDeployments.filter((step) => step !== stagingMarketing)) expect(step.env?.[key]).toBeUndefined()
 			for (const step of previewIngress) expect(step.env?.[key]).toBeUndefined()
 		}
 	})
@@ -473,9 +465,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const production = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
 		expect(production).not.toContain('PUBLIC_AUTH_URL')
 		expect(production).toContain('#   - PUBLIC_TURNSTILE_SITE_KEY')
-		expect(production).toContain(
-			'PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}'
-		)
+		expect(production).toContain('PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}')
 		expect(production).toContain('test -n "$PUBLIC_TURNSTILE_SITE_KEY"')
 		const productionWorkflow = Bun.YAML.parse(production) as {
 			jobs: { deploy: { steps: Array<{ name?: string; env?: Record<string, string> }> } }
@@ -510,9 +500,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 
 	test('generated workflows do not contain YAML tab indentation', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
-		for (const entry of entries.filter((entry) => entry.path.endsWith('.yml'))) {
-			expect(entry.content, entry.path).not.toContain('\t')
-		}
+		for (const entry of entries.filter((entry) => entry.path.endsWith('.yml'))) expect(entry.content, entry.path).not.toContain('\t')
 	})
 
 	test('deploy-production.yml triggers on push to main and deploys affected Workers via turbo', () => {
@@ -550,9 +538,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 			'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
 			'CLOUDFLARE_PREVIEW_API_DOMAIN',
 			'CLOUDFLARE_PREVIEW_ZONE_NAME'
-		]) {
-			expect(yml).toContain(`${variable}: \${{ vars.${variable} }}`)
-		}
+		]) expect(yml).toContain(`${variable}: \${{ vars.${variable} }}`)
 		expect(yml).toContain('${{ steps.preview_config.outputs.api_origin }}')
 		expect(yml).toContain('${{ steps.preview_config.outputs.web_origin }}')
 		expect(preparation).toContain('API_PUBLIC_ORIGIN: apiOrigin.origin')
@@ -593,7 +579,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).toContain('STAGING_ALIAS')
 		expect(yml).toContain('pnpm turbo run deploy:staging --affected')
 		expect(aliasScript).toContain('MAX_PREVIEW_ALIAS_LENGTH = 48')
-		expect(aliasScript).toContain("/^pr-[1-9][0-9]*$/")
+		expect(aliasScript).toContain('/^pr-[1-9][0-9]*$/')
 		expect(aliasScript).toContain('validateCloudflarePreviewAlias(alias)')
 	})
 

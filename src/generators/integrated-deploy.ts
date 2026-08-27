@@ -35,12 +35,8 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 function marketingMonitoringEnvKeys(cfg: GvKitConfig): string[] {
 	if (cfg.choices.marketing !== 'astro') return []
 	const keys: string[] = []
-	if (cfg.choices.monitoring.includes('umami')) {
-		keys.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
-	}
-	if (cfg.choices.monitoring.includes('posthog')) {
-		keys.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
-	}
+	if (cfg.choices.monitoring.includes('umami')) keys.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
+	if (cfg.choices.monitoring.includes('posthog')) keys.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
 	return keys
 }
 
@@ -68,9 +64,7 @@ function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
 	const publicKeys = marketingPublicEnvKeys(cfg)
 	const publicOriginRequirements = workflowVariableRequirements(publicKeys)
 	const publicOriginEnv = workflowVariableEnv(publicKeys)
-	const publicVariableChecks = publicKeys
-		.map((key) => `          test -n "$${key}"`)
-		.join('\n')
+	const publicVariableChecks = publicKeys.map((key) => `          test -n "$${key}"`).join('\n')
 	return `# Deploy ${project} to production on push to main.
 #
 # Required GitHub Secrets:
@@ -846,9 +840,7 @@ function authService(opts: DockerOpts): string {
 			'      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET in .env}'
 		)
 	}
-	if (opts.wantsEmailOTP && opts.emailProvider === 'resend') {
-		env.push('      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}')
-	}
+	if (opts.wantsEmailOTP && opts.emailProvider === 'resend') env.push('      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}')
 	if (opts.wantsEmailOTP && opts.emailProvider === 'notifuse') {
 		env.push('      NOTIFUSE_API_KEY: ${NOTIFUSE_API_KEY:?set NOTIFUSE_API_KEY in .env}')
 		env.push(
@@ -913,9 +905,7 @@ function usersService(opts: DockerOpts): string {
 function webService(opts: DockerOpts): string {
 	const env: string[] = ['      ORIGIN: ${ORIGIN:-http://localhost:3000}']
 	const buildArgs = [`        TURBO_FILTER: "${opts.project}-web"`]
-	if (opts.hasMarketing) {
-		buildArgs.push('        PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}')
-	}
+	if (opts.hasMarketing) buildArgs.push('        PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}')
 
 	if (opts.isHono) {
 		env.push(
@@ -937,9 +927,7 @@ function webService(opts: DockerOpts): string {
 				'      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET in .env}'
 			)
 		}
-		if (opts.wantsEmailOTP && opts.emailProvider === 'resend') {
-			env.push('      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}')
-		}
+		if (opts.wantsEmailOTP && opts.emailProvider === 'resend') env.push('      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}')
 		if (opts.wantsEmailOTP && opts.emailProvider === 'notifuse') {
 			env.push(
 				'      NOTIFUSE_API_KEY: ${NOTIFUSE_API_KEY:?set NOTIFUSE_API_KEY in .env}',

@@ -15,7 +15,7 @@ SvelteKit application with server routes and data access in one deployment unit.
 
 ## Backend boundary
 
-`apps/web/` owns all pages, server loads, form actions, and HTTP endpoints. Shared database setup lives in `packages/db/`; shared server helpers live in `packages/backend/`.
+`apps/web/` owns all pages, server loads, form actions, and HTTP endpoints. Shared database setup lives in `packages/db/`. `packages/backend/` is the shared backend application/core layer for reusable data access, use cases, types, helpers, and middleware.
 
 <!--@gvkit:if deployCfWorkers-->
 The web Worker's configuration is `apps/web/wrangler.jsonc`. Declare the resources used by SvelteKit handlers there and keep `apps/web/src/app.d.ts` aligned with it.

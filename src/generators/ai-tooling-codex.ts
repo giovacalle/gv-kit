@@ -9,11 +9,12 @@ import type { GvKitConfig } from '../schema/config.js'
  */
 export function generateAiToolingCodex(cfg: GvKitConfig): FileEntry[] {
 	const entries: FileEntry[] = [{ path: 'AGENTS.md', content: renderAgentsMd(cfg) }]
-	if (cfg.choices.marketing === 'astro')
+	if (cfg.choices.marketing === 'astro') {
 		entries.push({
 			path: '.codex/agents/astro-marketer.toml',
 			content: renderAstroMarketerAgent()
 		})
+	}
 	return entries
 }
 
@@ -54,26 +55,25 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 	lines.push(
 		'- `.ai/rules/web-svelte.md`, `web-forms.md`, `web-tailwind.md`, `web-ui.md` — frontend conventions'
 	)
-	if (cfg.choices.backend === 'hono')
+	if (cfg.choices.backend === 'hono') {
 		lines.push(
 			'- `.ai/rules/web-api.md` — same-origin browser API access and request-scoped SSR gateway transport'
 		)
-	if (cfg.choices.apiClient === 'hey-api')
-		lines.push('- `.ai/rules/web-query.md` — TanStack Query (svelte-query) client-data conventions')
-	if (cfg.choices.auth.length > 0)
-		lines.push('- `.ai/rules/auth-flow.md` — passwordless login, OTP, OAuth, Turnstile')
-	if (cfg.choices.deploy === 'cf-workers')
-		lines.push('- `.ai/rules/deploy-cf-workers.md` — wrangler, bindings, no Node APIs')
-	if (cfg.choices.email === 'resend')
-		lines.push('- `.ai/rules/email-templates.md` — react-email + mailer')
-	else if (cfg.choices.email === 'notifuse')
+	}
+	if (cfg.choices.apiClient === 'hey-api') lines.push('- `.ai/rules/web-query.md` — TanStack Query (svelte-query) client-data conventions')
+	if (cfg.choices.auth.length > 0) lines.push('- `.ai/rules/auth-flow.md` — passwordless login, OTP, OAuth, Turnstile')
+	if (cfg.choices.deploy === 'cf-workers') lines.push('- `.ai/rules/deploy-cf-workers.md` — wrangler, bindings, no Node APIs')
+	if (cfg.choices.email === 'resend') lines.push('- `.ai/rules/email-templates.md` — react-email + mailer')
+	else if (cfg.choices.email === 'notifuse') {
 		lines.push(
 			'- `.ai/rules/email-templates.md` — Notifuse RPC client, templates managed in Notifuse console'
 		)
-	if (cfg.choices.marketing === 'astro')
+	}
+	if (cfg.choices.marketing === 'astro') {
 		lines.push(
 			'- `.ai/rules/marketing-astro.md` — static Astro, shared UI, content, SEO, and delivery boundaries'
 		)
+	}
 	lines.push('')
 
 	lines.push('## Commands')
@@ -114,55 +114,52 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 function renderStackBullets(cfg: GvKitConfig): string {
 	const lines: string[] = []
 	lines.push('- Frontend: SvelteKit (Svelte 5, runes only)')
-	if (cfg.choices.marketing === 'astro')
-		lines.push('- Marketing: Astro static site (`apps/marketing`)')
-	if (cfg.choices.backend === 'hono')
-		lines.push('- Backend: public Hono gateway at `apps/api` with private workers under `services/`')
+	if (cfg.choices.marketing === 'astro') lines.push('- Marketing: Astro static site (`apps/marketing`)')
+	if (cfg.choices.backend === 'hono') {
+		lines.push(
+			'- Backend: public Hono gateway at `apps/api` with private workers under `services/`'
+		)
+	}
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
 	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
-	if (cfg.choices.auth.length > 0)
-		lines.push(`- Auth: better-auth (${cfg.choices.auth.join(', ')})`)
-	if (cfg.choices.i18n === 'paraglide')
-		lines.push('- i18n: Paraglide v2 (`packages/i18n` compiled package)')
+	if (cfg.choices.auth.length > 0) lines.push(`- Auth: better-auth (${cfg.choices.auth.join(', ')})`)
+	if (cfg.choices.i18n === 'paraglide') lines.push('- i18n: Paraglide v2 (`packages/i18n` compiled package)')
 	if (cfg.choices.email !== 'skip') lines.push(`- Email: ${cfg.choices.email}`)
-	if (cfg.choices.monitoring.length > 0)
-		lines.push(`- Analytics: ${cfg.choices.monitoring.join(', ')}`)
+	if (cfg.choices.monitoring.length > 0) lines.push(`- Analytics: ${cfg.choices.monitoring.join(', ')}`)
 	if (cfg.choices.deploy !== 'skip') {
 		const label = cfg.choices.deploy === 'cf-workers' ? 'Cloudflare Workers' : 'Docker'
 		lines.push(`- Deploy: ${label}`)
 	}
-	if (cfg.choices.apiClient === 'hey-api')
-		lines.push('- API client: Hey API + TanStack Query (`packages/openapi-client`)')
+	if (cfg.choices.apiClient === 'hey-api') lines.push('- API client: Hey API + TanStack Query (`packages/openapi-client`)')
 	return lines.join('\n')
 }
 
 function databaseLabel(cfg: GvKitConfig): string {
-	if (cfg.choices.db === 'postgres') {
-		return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
-	}
+	if (cfg.choices.db === 'postgres') return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
 	return cfg.choices.deploy === 'cf-workers' ? 'SQLite (Cloudflare D1)' : 'SQLite'
 }
 
 function renderLayoutBullets(cfg: GvKitConfig): string {
 	const lines: string[] = []
-	if (cfg.choices.marketing === 'astro')
-		lines.push('- `apps/marketing/` — static Astro public site')
+	if (cfg.choices.marketing === 'astro') lines.push('- `apps/marketing/` — static Astro public site')
 	lines.push('- `apps/web/` — SvelteKit app')
 	if (cfg.choices.backend === 'hono') {
 		lines.push('- `apps/api/` — public Hono API gateway')
 		lines.push('- `services/<service>/` — independently deployable private Hono Workers')
 	}
 	lines.push('- `packages/db/` — Drizzle schema + client factory')
-	lines.push('- `packages/backend/` — horizontal helpers (logger, error helpers, middleware)')
+	lines.push(
+		'- `packages/backend/` — shared backend application/core layer (data access, use cases, types, helpers, middleware)'
+	)
 	lines.push(
 		'- `packages/ui/` — shared primitives (`$lib/components/primitives/`), `cn()` helper, Tailwind theme'
 	)
-	if (cfg.choices.i18n === 'paraglide')
+	if (cfg.choices.i18n === 'paraglide') {
 		lines.push(
 			'- `packages/i18n/` — Paraglide messages + compiled runtime (`@repo/i18n/messages`, `@repo/i18n/runtime`, `@repo/i18n/server`)'
 		)
-	if (cfg.choices.apiClient === 'hey-api')
-		lines.push('- `packages/openapi-client/` — flat client generated from the gateway contract')
+	}
+	if (cfg.choices.apiClient === 'hey-api') lines.push('- `packages/openapi-client/` — flat client generated from the gateway contract')
 	return lines.join('\n')
 }
 

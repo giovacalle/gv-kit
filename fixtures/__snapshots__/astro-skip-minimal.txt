@@ -5,7 +5,7 @@
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
 LICENSE  508a77d2e7b51d98
-README.md  b2304dc65b8f79fa
+README.md  8738d38befa56677
 apps/marketing/.env.example  39af4d79e7f026bc
 apps/marketing/astro.config.mjs  b7f9b0e64d4e443d
 apps/marketing/package.json  df153a4dd27215df
@@ -22,7 +22,7 @@ apps/marketing/src/styles/app.css  3b143b4dedae7e6d
 apps/marketing/tsconfig.json  bf116ae4200916ac
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  69d23ad87967c49c
+apps/web/CLAUDE.md  516c761b1bf64267
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  c7318488e7f3c0ed
 apps/web/prettier.config.js  76a534fdcb4541a5

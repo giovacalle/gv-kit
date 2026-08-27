@@ -72,9 +72,7 @@ function callbackFragment(location: 'components' | 'operation'): OpenApiFragment
 	if (location === 'operation') {
 		const operation = value.paths['/api/v1/jobs']!.get as Record<string, unknown>
 		operation.callbacks = { onComplete: callback }
-	} else {
-		value.components = { callbacks: { onComplete: callback } }
-	}
+	} else value.components = { callbacks: { onComplete: callback } }
 	return fragment('jobs', value)
 }
 
@@ -466,11 +464,14 @@ describe('gateway runtime OpenAPI', () => {
 			'http://localhost:8786',
 			'https://preview-42.api.example.test'
 		]) {
-			const gateway = createGateway({}, {
-				openApiDocument: checked,
-				canonicalApiOrigin,
-				publicOrigins: canonicalApiOrigin
-			})
+			const gateway = createGateway(
+				{},
+				{
+					openApiDocument: checked,
+					canonicalApiOrigin,
+					publicOrigins: canonicalApiOrigin
+				}
+			)
 			const response = await gateway.fetch(
 				new Request(`${canonicalApiOrigin}/api/openapi.json`, {
 					headers: {

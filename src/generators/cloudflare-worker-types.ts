@@ -35,8 +35,6 @@ export function renderCloudflareBootstrapTypes(wranglerJsonc: string): string {
 
 	return `/* eslint-disable -- pnpm cf-typegen replaces these bootstrap declarations */
 /// <reference types="@cloudflare/workers-types" />
-// Bootstrap bindings derived from wrangler.jsonc for clean installs.
-// Run pnpm cf-typegen to replace this file with Wrangler's worker-configuration.d.ts.
 interface __BaseEnv_Env {
 ${declarations}
 }

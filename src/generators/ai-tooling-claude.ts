@@ -36,16 +36,18 @@ export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 	})
 	entries.push(...fixtureAgents.filter((e) => e.path.startsWith('.claude/')))
 
-	if (cfg.choices.backend === 'hono')
+	if (cfg.choices.backend === 'hono') {
 		entries.push({
 			path: '.claude/agents/service-architect.md',
 			content: renderServiceArchitectAgent(cfg)
 		})
-	if (cfg.choices.marketing === 'astro')
+	}
+	if (cfg.choices.marketing === 'astro') {
 		entries.push({
 			path: '.claude/agents/astro-marketer.md',
 			content: renderAstroMarketerAgent()
 		})
+	}
 
 	return entries
 }
@@ -57,44 +59,40 @@ export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 function renderStackSummary(cfg: GvKitConfig): string {
 	const lines: string[] = []
 	lines.push('- Frontend: SvelteKit (Svelte 5, runes)')
-	if (cfg.choices.marketing === 'astro')
-		lines.push('- Marketing: Astro static site (`apps/marketing`)')
-	if (cfg.choices.backend === 'hono')
-		lines.push('- Backend: Hono gateway (`apps/api`) with private workers under `services/`')
+	if (cfg.choices.marketing === 'astro') lines.push('- Marketing: Astro static site (`apps/marketing`)')
+	if (cfg.choices.backend === 'hono') lines.push('- Backend: Hono gateway (`apps/api`) with private workers under `services/`')
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
 	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
-	if (cfg.choices.auth.length > 0)
-		lines.push(`- Auth: better-auth (${cfg.choices.auth.join(', ')})`)
+	if (cfg.choices.auth.length > 0) lines.push(`- Auth: better-auth (${cfg.choices.auth.join(', ')})`)
 	if (cfg.choices.i18n === 'paraglide') lines.push('- i18n: Paraglide v2')
 	if (cfg.choices.email !== 'skip') lines.push(`- Email: ${cfg.choices.email}`)
-	if (cfg.choices.monitoring.length > 0)
-		lines.push(`- Analytics: ${cfg.choices.monitoring.join(', ')}`)
+	if (cfg.choices.monitoring.length > 0) lines.push(`- Analytics: ${cfg.choices.monitoring.join(', ')}`)
 	if (cfg.choices.deploy !== 'skip') {
 		const label = cfg.choices.deploy === 'cf-workers' ? 'Cloudflare Workers' : 'Docker'
 		lines.push(`- Deploy: ${label}`)
 	}
-	if (cfg.choices.apiClient === 'hey-api')
-		lines.push('- API client: Hey API + TanStack Query (`packages/openapi-client`)')
+	if (cfg.choices.apiClient === 'hey-api') lines.push('- API client: Hey API + TanStack Query (`packages/openapi-client`)')
 	return lines.join('\n')
 }
 
 function renderLayoutTree(cfg: GvKitConfig): string {
 	const lines: string[] = []
-	if (cfg.choices.marketing === 'astro')
-		lines.push('- `apps/marketing/` — static Astro public site')
+	if (cfg.choices.marketing === 'astro') lines.push('- `apps/marketing/` — static Astro public site')
 	lines.push('- `apps/web/` — SvelteKit app')
 	if (cfg.choices.backend === 'hono') {
 		lines.push('- `apps/api/` — public Hono API gateway')
 		lines.push('- `services/<service>/` — independently deployable private Hono workers')
 	}
 	lines.push('- `packages/db/` — Drizzle schema + client factory')
-	lines.push('- `packages/backend/` — shared backend helpers (logger, error helpers, middleware)')
-	if (cfg.choices.i18n === 'paraglide')
+	lines.push(
+		'- `packages/backend/` — shared backend application/core layer (data access, use cases, types, helpers, middleware)'
+	)
+	if (cfg.choices.i18n === 'paraglide') {
 		lines.push(
 			'- `packages/i18n/` — Paraglide messages + compiled runtime (`@repo/i18n/messages`, `@repo/i18n/runtime`, `@repo/i18n/server`)'
 		)
-	if (cfg.choices.apiClient === 'hey-api')
-		lines.push('- `packages/openapi-client/` — flat client generated from the gateway contract')
+	}
+	if (cfg.choices.apiClient === 'hey-api') lines.push('- `packages/openapi-client/` — flat client generated from the gateway contract')
 	return lines.join('\n')
 }
 
@@ -104,10 +102,12 @@ function renderLayoutTree(cfg: GvKitConfig): string {
 
 function renderClaudeMd(cfg: GvKitConfig): string {
 	const specialists: string[] = []
-	if (cfg.choices.backend === 'hono')
-		specialists.push('- `service-architect` — scaffolds a new private `services/<svc>/` Hono Worker')
-	if (cfg.choices.marketing === 'astro')
-		specialists.push('- `astro-marketer` — edits the static public site within its app boundary')
+	if (cfg.choices.backend === 'hono') {
+		specialists.push(
+			'- `service-architect` — scaffolds a new private `services/<svc>/` Hono Worker'
+		)
+	}
+	if (cfg.choices.marketing === 'astro') specialists.push('- `astro-marketer` — edits the static public site within its app boundary')
 
 	const specialistsBlock =
 		specialists.length > 0
@@ -339,7 +339,7 @@ tools: Read, Glob, Grep, Bash, Edit, Write
 
 # service-architect
 
-You scaffold a NEW private service under \`services/<svc>/\`. Each service is independently deployable. The public gateway stays at \`apps/api/\` and owns every external API route.
+You scaffold a NEW private service under \`services/<svc>/\`. Each service is an independently deployable transport/runtime adapter that may import the application modules it needs from the shared backend application/core layer at \`packages/backend/\`. The public gateway stays at \`apps/api/\` and owns every external API route.
 
 ## Mandate
 
@@ -350,10 +350,10 @@ When asked to add service \`<svc>\` (e.g. \`billing\`, \`notifications\`, \`asse
 ${runtimeFiles}
    - \`tsconfig.json\` — extends the workspace base.
    - \`src/index.ts\` — runtime entry. ${isCfWorkers ? 'Use `export default { fetch: app.fetch }`.' : 'Use `serve({ fetch: app.fetch, port })`.'}
-   - \`src/app.ts\` — Hono app wiring (routes, middleware).
-   - \`src/routes/\` — one file per resource.
+   - \`src/app.ts\` — Hono transport wiring (routes, middleware).
+   - \`src/routes/\` — one file per resource. Keep handlers thin and invoke reusable application modules from \`@repo/backend\`.
 
-2. DB access via \`createDb(env)\` from \`@repo/db\`. No raw drivers.
+2. Put reusable data access, use cases, types, helpers, and middleware in \`packages/backend/\`. Service adapters may pass a DB created with \`createDb(env)\` from \`@repo/db\` into those modules. No raw drivers.
 3. Errors via \`errors.*\` from \`@repo/backend/helpers\` (\`errors.notFound\`, \`errors.badRequest\`, …). Catch \`HttpError\` once at the boundary.
 4. If the service needs the current session, consume the auth boundary:
 ${authTransport}
@@ -366,8 +366,8 @@ ${authTransport}
 - **REFUSE internal calls through the gateway.** Private services call one another through direct bindings or private URLs.
 - **REFUSE credentialed wildcard CORS.** Use an explicit origin allowlist and reject unknown origins.
 ${isCfWorkers ? '- **REFUSE `wrangler.toml`, public private-service triggers, and hand-written Cloudflare `Env` declarations.** Keep `workers_dev: false`, `preview_urls: false`, no routes, and use `wrangler.jsonc` plus `pnpm cf-typegen` as the source of truth.' : ''}
-- **REFUSE to import \`@repo/backend/auth\` from any service other than \`${AUTH_SERVICE.workspacePath}/\`.** That import path is reserved for the auth Worker's own bootstrap.
-- **REFUSE to add cross-service domain logic to \`packages/backend/\`.** That package is for horizontal helpers only (logger, error helpers, generic middleware). Auth state, billing state, RBAC live with their owning service.
+- **REFUSE to configure Better Auth outside \`${AUTH_SERVICE.workspacePath}/src/auth.ts\`.** The auth service owns Better Auth configuration and secrets.
+- **REFUSE to put reusable application logic in a transport adapter.** Put shared data access, use cases, types, helpers, and middleware in \`packages/backend/\`, then import the required modules from the service.
 - **REFUSE to query \`user\`, \`session\`, \`account\`, \`verification\` from a non-auth service.** Read session via the auth boundary.
 - **REFUSE to extract a shared service-client SDK** (\`packages/<svc>-client/\`). Use existing deploy-aware middleware for the auth boundary; add a service-local private transport only for a different boundary that needs one.
 - **REFUSE to share binding or environment declarations between services.** Each \`services/<svc>/\` owns its runtime configuration.
@@ -385,8 +385,6 @@ ${cloudflareConfig}
 }
 
 function databaseLabel(cfg: GvKitConfig): string {
-	if (cfg.choices.db === 'postgres') {
-		return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
-	}
+	if (cfg.choices.db === 'postgres') return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
 	return cfg.choices.deploy === 'cf-workers' ? 'SQLite (Cloudflare D1)' : 'SQLite'
 }

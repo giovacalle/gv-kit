@@ -42,49 +42,152 @@ const gatewayOwnedSourcePaths = [
 	'tests/generators/hono-topology.test.ts'
 ]
 
-function bracedThrowLocations(path: string, source: string): string[] {
-	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
-	const locations: string[] = []
+const gatewayEffortSourcePaths = [
+	'fixtures/templates/web/base/src/app.d.ts',
+	'fixtures/templates/web/base/src/hooks.server.ts',
+	'fixtures/templates/web/base/vite.config.ts',
+	'fixtures/templates/web/overlays/api-client-hey-api/src/routes/+layout.ts',
+	'fixtures/templates/web/overlays/api-client-hey-api/src/routes/users/+page.server.ts',
+	'fixtures/templates/web/overlays/auth/src/lib/auth/client.ts',
+	'fixtures/templates/web/overlays/auth/src/lib/server/load-session.ts',
+	'fixtures/templates/web/overlays/inside-frontend-baseline/src/app.d.ts',
+	'scripts/gateway-verification-evidence.ts',
+	'scripts/verify-gateway-cloudflare.ts',
+	'scripts/verify-gateway-docker.ts',
+	'scripts/verify-gateway-local.ts',
+	'scripts/verify-gateway-scaffold-matrix.ts',
+	'src/generators/ai-tooling-claude.ts',
+	'src/generators/ai-tooling-codex.ts',
+	'src/generators/ai-tooling-rules.ts',
+	'src/generators/api.ts',
+	'src/generators/backend.ts',
+	'src/generators/cloudflare-worker-types.ts',
+	'src/generators/db.ts',
+	'src/generators/deploy.ts',
+	'src/generators/email.ts',
+	'src/generators/frontend-sveltekit.ts',
+	'src/generators/gateway.ts',
+	'src/generators/hono-topology.ts',
+	'src/generators/i18n.ts',
+	'src/generators/integrated-deploy.ts',
+	'src/generators/marketing-astro.ts',
+	'src/generators/openapi-client.ts',
+	'src/generators/openapi-contract.ts',
+	'src/generators/root.ts',
+	'src/generators/services/auth.ts',
+	'src/generators/services/users.ts',
+	'src/lib/workers.ts',
+	'tests/contracts/astro-scaffold-matrix.test.ts',
+	'tests/contracts/auth-bindings.test.ts',
+	'tests/contracts/ci-workflow.test.ts',
+	'tests/contracts/deploy-compose-yaml.test.ts',
+	'tests/contracts/gateway-auth.test.ts',
+	'tests/contracts/gateway-cloudflare.test.ts',
+	'tests/contracts/gateway-docker.test.ts',
+	'tests/contracts/gateway-openapi.test.ts',
+	'tests/contracts/gateway-preview-workflows.test.ts',
+	'tests/contracts/gateway-scaffold-matrix.test.ts',
+	'tests/contracts/gateway-topology.test.ts',
+	'tests/contracts/inside-frontend-bindings.test.ts',
+	'tests/contracts/topology-routes.test.ts',
+	'tests/contracts/users-bindings.test.ts',
+	'tests/generators/ai-tooling.test.ts',
+	'tests/generators/deploy.test.ts',
+	'tests/generators/frontend-sveltekit.test.ts',
+	'tests/generators/hono-topology.test.ts',
+	'tests/generators/openapi-client.test.ts',
+	'tests/generators/root.test.ts',
+	'tests/pipeline.test.ts',
+	'tests/schema.test.ts'
+]
 
-	function recordBlock(block: ts.Statement, branch: 'if' | 'else') {
-		if (
-			ts.isBlock(block) &&
-			block.statements.length === 1 &&
-			ts.isThrowStatement(block.statements[0]!)
-		) {
-			const { line } = sourceFile.getLineAndCharacterOfPosition(block.getStart(sourceFile))
-			locations.push(`${path}:${line + 1} (${branch})`)
+function inlineControlBodyFindings(path: string, source: string): string[] {
+	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
+	const findings: string[] = []
+
+	function recordBody({
+		body,
+		control,
+		headerEnd
+	}: {
+		body: ts.Statement
+		control: string
+		headerEnd: number
+	}) {
+		if (ts.isBlock(body)) {
+			if (body.statements.length !== 1) return
+			const statement = body.statements[0]!
+			const start = sourceFile.getLineAndCharacterOfPosition(statement.getStart(sourceFile))
+			const end = sourceFile.getLineAndCharacterOfPosition(statement.getEnd())
+			if (start.line !== end.line) return
+			const { line } = sourceFile.getLineAndCharacterOfPosition(body.getStart(sourceFile))
+			findings.push(`${path}:${line + 1} (${control}, braced)`)
+			return
 		}
+
+		const header = sourceFile.getLineAndCharacterOfPosition(headerEnd)
+		const start = sourceFile.getLineAndCharacterOfPosition(body.getStart(sourceFile))
+		const end = sourceFile.getLineAndCharacterOfPosition(body.getEnd())
+		if (header.line !== start.line) findings.push(`${path}:${start.line + 1} (${control}, split)`)
+		if (start.line !== end.line && !(control === 'else' && ts.isIfStatement(body))) findings.push(`${path}:${start.line + 1} (${control}, unbraced multi-line)`)
 	}
 
 	function visit(node: ts.Node) {
 		if (ts.isIfStatement(node)) {
-			recordBlock(node.thenStatement, 'if')
-			if (node.elseStatement) recordBlock(node.elseStatement, 'else')
+			recordBody({ body: node.thenStatement, control: 'if', headerEnd: node.expression.getEnd() })
+			if (node.elseStatement) {
+				const elseKeyword = node
+					.getChildren(sourceFile)
+					.find((child) => child.kind === ts.SyntaxKind.ElseKeyword)
+				recordBody({
+					body: node.elseStatement,
+					control: 'else',
+					headerEnd: elseKeyword?.getEnd() ?? node.thenStatement.getEnd()
+				})
+			}
+		} else if (
+			ts.isForStatement(node) ||
+			ts.isForInStatement(node) ||
+			ts.isForOfStatement(node) ||
+			ts.isWhileStatement(node)
+		) {
+			const control = ts.isForStatement(node)
+				? 'for'
+				: ts.isForInStatement(node)
+					? 'for-in'
+					: ts.isForOfStatement(node)
+						? 'for-of'
+						: 'while'
+			const closeParen = node
+				.getChildren(sourceFile)
+				.find((child) => child.kind === ts.SyntaxKind.CloseParenToken)
+			recordBody({
+				body: node.statement,
+				control,
+				headerEnd: closeParen?.getEnd() ?? node.statement.getStart(sourceFile)
+			})
+		} else if (ts.isDoStatement(node)) {
+			const doKeyword = node
+				.getChildren(sourceFile)
+				.find((child) => child.kind === ts.SyntaxKind.DoKeyword)
+			recordBody({
+				body: node.statement,
+				control: 'do',
+				headerEnd: doKeyword?.getEnd() ?? node.getStart(sourceFile)
+			})
 		}
 		ts.forEachChild(node, visit)
 	}
 
 	visit(sourceFile)
-	return locations
+	return findings
 }
 
-function sourceStandardFindings(path: string, source: string): string[] {
+function positionalParameterFindings(path: string, source: string): string[] {
 	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
 	const findings: string[] = []
-	const literalRanges: Array<{ start: number; end: number }> = []
 
 	function visit(node: ts.Node) {
-		if (
-			ts.isStringLiteralLike(node) ||
-			ts.isRegularExpressionLiteral(node) ||
-			node.kind === ts.SyntaxKind.TemplateHead ||
-			node.kind === ts.SyntaxKind.TemplateMiddle ||
-			node.kind === ts.SyntaxKind.TemplateTail ||
-			node.kind === ts.SyntaxKind.JsxText
-		) {
-			literalRanges.push({ start: node.getStart(sourceFile), end: node.getEnd() })
-		}
 		if (
 			(ts.isFunctionDeclaration(node) ||
 				ts.isMethodDeclaration(node) ||
@@ -98,6 +201,83 @@ function sourceStandardFindings(path: string, source: string): string[] {
 			const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
 			findings.push(`${path}:${line + 1} ${node.parameters.length} positional parameters`)
 		}
+		ts.forEachChild(node, visit)
+	}
+
+	visit(sourceFile)
+	return findings
+}
+
+function dynamicSourceParameterFindings(path: string, source: string): string[] {
+	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
+	const findings: string[] = []
+
+	function visit(node: ts.Node) {
+		if (ts.isNewExpression(node) && node.arguments) {
+			const declaredParameters = node.arguments.slice(0, -1)
+			if (
+				declaredParameters.length >= 3 &&
+				declaredParameters.every((argument) => ts.isStringLiteralLike(argument))
+			) {
+				const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
+				findings.push(
+					`${path}:${line + 1} ${declaredParameters.length} dynamic positional parameters`
+				)
+			}
+		}
+		ts.forEachChild(node, visit)
+	}
+
+	visit(sourceFile)
+	return findings
+}
+
+function generatedGatewaySources({
+	includeSharedBackendAndCloudflareTypes = false
+}: { includeSharedBackendAndCloudflareTypes?: boolean } = {}): Array<{
+	path: string
+	content: string
+}> {
+	const sources = new Map<string, { path: string; content: string }>()
+	for (const name of readdirSync(fixturesDir).filter((candidate) => candidate.endsWith('.jsonc'))) {
+		const fixture = name.slice(0, -'.jsonc'.length)
+		const raw = parseJsonc(readFileSync(join(fixturesDir, name), 'utf8'))
+		const config = GvKitConfig.parse(raw)
+		if (config.choices.backend !== 'hono') continue
+
+		for (const generated of runGenerators(config)) {
+			const isTypeScriptOrJavaScript = /\.[cm]?[jt]sx?$/.test(generated.path)
+			const isGatewayOrService =
+				generated.path.startsWith('apps/api/') || generated.path.startsWith('services/')
+			const isPreviewTool =
+				generated.path.startsWith('scripts/') && generated.path.includes('cloudflare-preview')
+			const isSharedBackend = generated.path.startsWith('packages/backend/')
+			const isCloudflareType = generated.path.endsWith('worker-configuration.bootstrap.d.ts')
+			const isIncluded =
+				isGatewayOrService ||
+				isPreviewTool ||
+				(includeSharedBackendAndCloudflareTypes && (isSharedBackend || isCloudflareType))
+			if (!isTypeScriptOrJavaScript || !isIncluded) continue
+
+			const key = `${generated.path}\0${generated.content}`
+			if (!sources.has(key)) {
+				sources.set(key, {
+					path: `${fixture}:${generated.path}`,
+					content: generated.content
+				})
+			}
+		}
+	}
+	return [...sources.values()]
+}
+
+function sourceStandardFindings(path: string, source: string): string[] {
+	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
+	const findings = positionalParameterFindings(path, source)
+	const literalRanges: Array<{ start: number; end: number }> = []
+
+	function visit(node: ts.Node) {
+		if ( ts.isStringLiteralLike(node) || ts.isRegularExpressionLiteral(node) || node.kind === ts.SyntaxKind.TemplateHead || node.kind === ts.SyntaxKind.TemplateMiddle || node.kind === ts.SyntaxKind.TemplateTail || node.kind === ts.SyntaxKind.JsxText ) literalRanges.push({ start: node.getStart(sourceFile), end: node.getEnd() })
 		ts.forEachChild(node, visit)
 	}
 
@@ -130,19 +310,92 @@ function sourceStandardFindings(path: string, source: string): string[] {
 			if (isLineLeading && previousLineComment?.line === line - 1) {
 				if (lineCommentGroupStart === undefined) {
 					lineCommentGroupStart = previousLineComment.start
-					const { line: groupLine } = sourceFile.getLineAndCharacterOfPosition(
-						lineCommentGroupStart
-					)
+					const { line: groupLine } =
+						sourceFile.getLineAndCharacterOfPosition(lineCommentGroupStart)
 					findings.push(`${path}:${groupLine + 1} consecutive line comments`)
 				}
-			} else {
-				lineCommentGroupStart = undefined
-			}
+			} else lineCommentGroupStart = undefined
 			previousLineComment = isLineLeading ? { line, start } : undefined
 			continue
 		}
 		if (kind === ts.SyntaxKind.WhitespaceTrivia || kind === ts.SyntaxKind.NewLineTrivia) continue
 		previousLineComment = undefined
+		lineCommentGroupStart = undefined
+	}
+
+	return findings
+}
+
+function generatedCommentFindings(path: string, source: string): string[] {
+	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
+	const literalRanges: Array<{ start: number; end: number }> = []
+	const findings: string[] = []
+
+	function visit(node: ts.Node) {
+		if (
+			ts.isStringLiteralLike(node) ||
+			ts.isRegularExpressionLiteral(node) ||
+			node.kind === ts.SyntaxKind.TemplateHead ||
+			node.kind === ts.SyntaxKind.TemplateMiddle ||
+			node.kind === ts.SyntaxKind.TemplateTail ||
+			node.kind === ts.SyntaxKind.JsxText
+		) {
+			literalRanges.push({
+				start: node.getStart(sourceFile),
+				end: node.getEnd()
+			})
+		}
+		ts.forEachChild(node, visit)
+	}
+
+	visit(sourceFile)
+
+	function isProtected(comment: string): boolean {
+		return (
+			/^\/\*\s*@gvkit:/.test(comment) ||
+			/^\/\/\/\s*<reference\b/.test(comment) ||
+			/\b(?:eslint|prettier|svelte|@ts-|c8|istanbul)[- :]/i.test(comment) ||
+			/\b(?:SPDX-License-Identifier|Copyright|@license)\b/i.test(comment) ||
+			/\b(?:auto-?generated|generated file|generated by|do not edit)\b/i.test(comment)
+		)
+	}
+
+	const scanner = ts.createScanner(
+		ts.ScriptTarget.Latest,
+		false,
+		ts.LanguageVariant.Standard,
+		source
+	)
+	let previousExplanatoryLine: number | undefined
+	let lineCommentGroupStart: number | undefined
+	for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
+		const start = scanner.getTokenPos()
+		if (literalRanges.some((range) => start >= range.start && start < range.end)) continue
+		if (kind === ts.SyntaxKind.MultiLineCommentTrivia) {
+			if (!isProtected(scanner.getTokenText())) {
+				const { line } = sourceFile.getLineAndCharacterOfPosition(start)
+				findings.push(`${path}:${line + 1} block comment`)
+			}
+			previousExplanatoryLine = undefined
+			lineCommentGroupStart = undefined
+			continue
+		}
+		if (kind === ts.SyntaxKind.SingleLineCommentTrivia) {
+			const { line } = sourceFile.getLineAndCharacterOfPosition(start)
+			const lineStart = sourceFile.getPositionOfLineAndCharacter(line, 0)
+			const isLineLeading = source.slice(lineStart, start).trim() === ''
+			const isExplanatory = isLineLeading && !isProtected(scanner.getTokenText())
+			if (isExplanatory && previousExplanatoryLine === line - 1) {
+				if (lineCommentGroupStart === undefined) {
+					lineCommentGroupStart = line - 1
+					findings.push(`${path}:${lineCommentGroupStart + 1} consecutive line comments`)
+				}
+			} else lineCommentGroupStart = undefined
+			previousExplanatoryLine = isExplanatory ? line : undefined
+			continue
+		}
+		if (kind === ts.SyntaxKind.WhitespaceTrivia || kind === ts.SyntaxKind.NewLineTrivia) continue
+		previousExplanatoryLine = undefined
 		lineCommentGroupStart = undefined
 	}
 
@@ -236,13 +489,74 @@ async function loadGeneratedHandleFetch(): Promise<HandleFetchModule> {
 }
 
 describe('local private-service gateway topology', () => {
-	test('source standards detect block and consecutive line comments', () => {
-		const source = ['const first = 1', '// first line', '// second line', '/* block */'].join(
-			'\n'
-		)
+	test('source standards detect positional parameters and multi-line comments', () => {
+		const source = [
+			'function positional(first: string, second: string, third: string) {}',
+			'// first line',
+			'// second line',
+			'/* block */'
+		].join('\n')
 		expect(sourceStandardFindings('sample.ts', source)).toEqual([
+			'sample.ts:1 3 positional parameters',
 			'sample.ts:2 consecutive line comments',
 			'sample.ts:4 block comment'
+		])
+		expect(
+			dynamicSourceParameterFindings(
+				'sample.ts',
+				"new AsyncFunction('filesystem', 'path', 'process', source)"
+			)
+		).toEqual(['sample.ts:1 3 dynamic positional parameters'])
+	})
+
+	test('control-body standard detects invalid single-statement layout without parsing text', () => {
+		const source = [
+			"const template = `<!--@gvkit:if auth-->if (directive) { return 'template' }<!--@gvkit:endif-->`",
+			"const object = { if: 'property', body: { return: 'value' } }",
+			'if (ready) {',
+			'\treturn object',
+			'} else {',
+			'\tconsume(object)',
+			'}',
+			'for (let index = 0; index < 1; index++) {',
+			'\tconsume(index)',
+			'}',
+			'for (const key in object) {',
+			'\tconsume(key)',
+			'}',
+			'for (const value of values) {',
+			'\tconsume(value)',
+			'}',
+			'while (ready) {',
+			'\tready = false',
+			'}',
+			'do {',
+			'\tready = false',
+			'} while (ready)',
+			'if (ready) {',
+			'\treturn consume(',
+			'\t\tobject',
+			'\t)',
+			'}',
+			'if (split)',
+			'\treturn object',
+			'if (multiline) return consume(',
+			'\tobject',
+			')',
+			'if (first) return first',
+			'else if (second) return second'
+		].join('\n')
+
+		expect(inlineControlBodyFindings('sample.ts', source)).toEqual([
+			'sample.ts:3 (if, braced)',
+			'sample.ts:5 (else, braced)',
+			'sample.ts:8 (for, braced)',
+			'sample.ts:11 (for-in, braced)',
+			'sample.ts:14 (for-of, braced)',
+			'sample.ts:17 (while, braced)',
+			'sample.ts:20 (do, braced)',
+			'sample.ts:29 (if, split)',
+			'sample.ts:30 (if, unbraced multi-line)'
 		])
 	})
 
@@ -253,9 +567,51 @@ describe('local private-service gateway topology', () => {
 		expect(findings).toEqual([])
 	})
 
-	test('gateway-owned source and emitted code use unbraced single-statement throws', () => {
-		const sourceFindings = gatewayOwnedSourcePaths.flatMap((path) =>
-			bracedThrowLocations(path, readFileSync(join(fixturesDir, '..', path), 'utf8'))
+	test('generated gateway, preview, service, and dynamic source use named options', () => {
+		const emittedFindings = generatedGatewaySources().flatMap(({ path, content }) =>
+			positionalParameterFindings(path, content)
+		)
+		const previewTestPath = 'tests/contracts/gateway-preview-workflows.test.ts'
+		const dynamicFindings = dynamicSourceParameterFindings(
+			previewTestPath,
+			readFileSync(join(fixturesDir, '..', previewTestPath), 'utf8')
+		)
+		expect([...emittedFindings, ...dynamicFindings]).toEqual([])
+	})
+
+	test('generated comment standard rejects explanatory blocks and consecutive lines', () => {
+		const source = [
+			"const literal = `// first\\n// second`",
+			'/* explanatory block */',
+			'// first explanation',
+			'// second explanation',
+			'/* eslint-disable -- generated declarations need broad ambient types */',
+			'/// <reference types="@cloudflare/workers-types" />',
+			'/*@gvkit:if feature*/',
+			'/*! Copyright Example. SPDX-License-Identifier: MIT */',
+			'// Generated by a required tool. Do not edit.',
+			'// This one-line comment records a non-obvious constraint.'
+		].join('\n')
+
+		expect(generatedCommentFindings('sample.ts', source)).toEqual([
+			'sample.ts:2 block comment',
+			'sample.ts:3 consecutive line comments'
+		])
+	})
+
+	test('generated gateway, service, OpenAPI, preview, and Cloudflare type comments stay concise', () => {
+		const findings = generatedGatewaySources({
+			includeSharedBackendAndCloudflareTypes: true
+		}).flatMap(({ path, content }) => generatedCommentFindings(path, content))
+		expect(findings).toEqual([])
+	})
+
+	test('gateway-owned source and emitted code use inline single-statement control bodies', () => {
+		const sourceFindings = gatewayEffortSourcePaths.flatMap((path) =>
+			inlineControlBodyFindings(
+				path,
+				readFileSync(join(fixturesDir, '..', path), 'utf8')
+			)
 		)
 		const emittedFindings = readdirSync(fixturesDir)
 			.filter((name) => name.endsWith('.jsonc'))
@@ -273,10 +629,12 @@ describe('local private-service gateway topology', () => {
 								path.startsWith('packages/backend/') ||
 								path === 'apps/web/src/hooks.server.ts' ||
 								path === 'apps/web/vite.config.ts' ||
-								path === 'scripts/prepare-cloudflare-preview.mjs') &&
+								(path.startsWith('scripts/') && path.includes('cloudflare-preview'))) &&
 							/\.[cm]?[jt]sx?$/.test(path)
 					)
-					.flatMap(({ path, content }) => bracedThrowLocations(`${fixture}:${path}`, content))
+					.flatMap(({ path, content }) =>
+						inlineControlBodyFindings(`${fixture}:${path}`, content)
+					)
 			})
 
 		expect([...sourceFindings, ...emittedFindings]).toEqual([])
@@ -500,9 +858,7 @@ describe('local private-service gateway topology', () => {
 				USERS: {
 					async fetch(request) {
 						usersCalls += 1
-						if (new URL(request.url).pathname.endsWith('/slow')) {
-							return new Promise<Response>(() => undefined)
-						}
+						if (new URL(request.url).pathname.endsWith('/slow')) return new Promise<Response>(() => undefined)
 						throw new Error('transport failed')
 					}
 				}
@@ -554,10 +910,7 @@ describe('local private-service gateway topology', () => {
 		const tasks = JSON.parse(turbo!.content).tasks as Record<string, { env?: string[] }>
 		expect(tasks['@hono-skip-deploy/api-gateway#dev']?.env).toContain('API_PUBLIC_ORIGIN')
 		expect(tasks['@hono-skip-deploy/auth-worker#dev']?.env).toEqual(['SQLITE_PATH'])
-		expect(tasks['@hono-skip-deploy/users-worker#dev']?.env).toEqual([
-			'SQLITE_PATH',
-			'AUTH_URL'
-		])
+		expect(tasks['@hono-skip-deploy/users-worker#dev']?.env).toEqual(['SQLITE_PATH', 'AUTH_URL'])
 		expect(tasks['hono-skip-deploy-web#dev']?.env).toContain('GATEWAY_URL')
 		expect(gatewayIndex?.content).toContain("process.env.HOST ?? '127.0.0.1'")
 		expect(gatewayIndex?.content).toContain('process.env.PORT ?? 8786')
@@ -707,9 +1060,7 @@ describe('local private-service gateway topology', () => {
 		expect(env).toContain(
 			'BETTER_AUTH_ALLOWED_HOSTS=localhost:3000,api.localhost:3000,localhost:8786,127.0.0.1:8786'
 		)
-		expect(env).toContain(
-			'AUTH_CORS_ORIGINS=http://localhost:3000,http://api.localhost:3000'
-		)
+		expect(env).toContain('AUTH_CORS_ORIGINS=http://localhost:3000,http://api.localhost:3000')
 		expect(env).toContain('GATEWAY_PUBLIC_ORIGINS=')
 		expect(env).toContain('API_CORS_ORIGINS=')
 		expect(env).toContain('GATEWAY_UPSTREAM_TIMEOUT_MS=10000')
@@ -733,9 +1084,7 @@ describe('local private-service gateway topology', () => {
 			'## Deployment',
 			'## Cookies and CORS',
 			'## OpenAPI'
-		]) {
-			expect(migration).toContain(section)
-		}
+		]) expect(migration).toContain(section)
 		expect(migration).toContain('No automatic migration is provided')
 		expect(changeset).toContain('"gv-kit": major')
 		expect(changeset).toContain('Hono gateway')

@@ -42,8 +42,7 @@ async function materialize(fixture: string, output: string) {
 	const config = GvKitConfig.parse(
 		parseJsonc(await readFile(resolve('fixtures', `${fixture}.jsonc`), 'utf8'))
 	)
-	if (config.choices.backend !== 'hono' || config.choices.deploy !== 'docker')
-		throw new Error(`${fixture} must use the Hono Docker topology`)
+	if (config.choices.backend !== 'hono' || config.choices.deploy !== 'docker') throw new Error(`${fixture} must use the Hono Docker topology`)
 	const project = join(output, fixture)
 	await rm(project, { recursive: true, force: true })
 	await mkdir(project, { recursive: true })
@@ -60,12 +59,7 @@ async function materialize(fixture: string, output: string) {
 	return { config, project, binPath }
 }
 
-async function command({
-	program,
-	args,
-	cwd,
-	env
-}: DockerCommandOptions): Promise<CommandResult> {
+async function command({ program, args, cwd, env }: DockerCommandOptions): Promise<CommandResult> {
 	const child = spawn(program, args, {
 		cwd,
 		env: { ...process.env, ...env },
@@ -123,9 +117,7 @@ async function portAvailable(port: number): Promise<boolean> {
 
 async function runtimeWebPort(): Promise<number> {
 	if (await portAvailable(3000)) return 3000
-	for (let port = 13_000; port < 13_100; port += 1) {
-		if (await portAvailable(port)) return port
-	}
+	for (let port = 13_000; port < 13_100; port += 1) if (await portAvailable(port)) return port
 	throw new Error('Could not find a free verification port for the web ingress')
 }
 
@@ -207,10 +199,7 @@ async function waitForOtp({
 			)
 			await writeSanitizedArtifact({
 				path: logPath,
-				content: result.output.replace(
-					/(\[auth\] OTP for [^:]+: )\d{6}/g,
-					'$1[REDACTED]'
-				),
+				content: result.output.replace(/(\[auth\] OTP for [^:]+: )\d{6}/g, '$1[REDACTED]'),
 				roots: [project]
 			})
 			await appendCommandEvidence(project, {
@@ -265,30 +254,19 @@ async function signIn({
 		body: { email, otp },
 		headers: { origin }
 	})
-	if (!response.ok)
-		throw new Error(`OTP sign-in failed at ${origin}: ${response.status} ${await response.text()}`)
+	if (!response.ok) throw new Error(`OTP sign-in failed at ${origin}: ${response.status} ${await response.text()}`)
 	const jar = cookieJar(response)
 	if (!jar.header) throw new Error(`OTP sign-in at ${origin} did not set a cookie`)
-	if (jar.setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie)))
-		throw new Error(`OTP sign-in at ${origin} emitted a domain cookie`)
+	if (jar.setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie))) throw new Error(`OTP sign-in at ${origin} emitted a domain cookie`)
 	return jar
 }
 
-async function session({
-	origin,
-	jar,
-	email
-}: {
-	origin: string
-	jar: CookieJar
-	email: string
-}) {
+async function session({ origin, jar, email }: { origin: string; jar: CookieJar; email: string }) {
 	const response = await fetch(`${origin}/api/auth/get-session`, {
 		headers: { cookie: jar.header }
 	})
 	const body = (await response.json()) as { user?: { email?: string } }
-	if (!response.ok || body.user?.email !== email)
-		throw new Error(`Session at ${origin} did not return ${email}`)
+	if (!response.ok || body.user?.email !== email) throw new Error(`Session at ${origin} did not return ${email}`)
 	return { status: response.status, email: body.user.email }
 }
 
@@ -320,20 +298,11 @@ async function verifyRuntime({
 	})
 	const openApiResponse = await fetch(`${apiOrigin}/api/openapi.json`)
 	const openApi = (await openApiResponse.json()) as { servers?: { url: string }[] }
-	if (
-		directHealth.status !== 200 ||
-		webAliasHealth.status !== 200 ||
-		canonicalHostHealth.status !== 200
-	)
-		throw new Error('One or more gateway ingress health checks failed')
-	if (exactWebAlias.status !== 404 || !exactWebAlias.headers.get('x-request-id'))
-		throw new Error('Exact web-origin /api boundary did not reach the gateway')
-	if (JSON.stringify(openApi.servers) !== JSON.stringify([{ url: apiOrigin }]))
-		throw new Error('Runtime OpenAPI did not advertise the explicit independent API origin')
-	if (unknownDirectHost.status !== 421 || (await unknownDirectHost.text()) !== 'misdirected request')
-		throw new Error('Forged forwarding headers approved an unknown Docker direct host')
-	if (approvedWebWithForgedForwarding.status !== 200 || approvedApiWithForgedForwarding.status !== 200)
-		throw new Error('Caller forwarding headers overrode an approved Docker public host')
+	if ( directHealth.status !== 200 || webAliasHealth.status !== 200 || canonicalHostHealth.status !== 200 ) throw new Error('One or more gateway ingress health checks failed')
+	if (exactWebAlias.status !== 404 || !exactWebAlias.headers.get('x-request-id')) throw new Error('Exact web-origin /api boundary did not reach the gateway')
+	if (JSON.stringify(openApi.servers) !== JSON.stringify([{ url: apiOrigin }])) throw new Error('Runtime OpenAPI did not advertise the explicit independent API origin')
+	if ( unknownDirectHost.status !== 421 || (await unknownDirectHost.text()) !== 'misdirected request' ) throw new Error('Forged forwarding headers approved an unknown Docker direct host')
+	if ( approvedWebWithForgedForwarding.status !== 200 || approvedApiWithForgedForwarding.status !== 200 ) throw new Error('Caller forwarding headers overrode an approved Docker public host')
 
 	const suffix = Date.now()
 	const webEmail = `docker-web-${suffix}@example.test`
@@ -350,19 +319,18 @@ async function verifyRuntime({
 	const apiUsers = await fetch(`${apiOrigin}/api/v1/users/me`, {
 		headers: { cookie: apiJar.header }
 	})
-	if (!webUsers.ok || !apiUsers.ok)
+	if (!webUsers.ok || !apiUsers.ok) {
 		throw new Error(
 			`Versioned users route failed through an ingress: web=${webUsers.status} ${await webUsers.text()}; api=${apiUsers.status} ${await apiUsers.text()}`
 		)
+	}
 	const webUsersBody = (await webUsers.json()) as { email?: string }
 	const apiUsersBody = (await apiUsers.json()) as { email?: string }
-	if (webUsersBody.email !== webEmail || apiUsersBody.email !== apiEmail)
-		throw new Error('Versioned users route returned the wrong authenticated user')
+	if (webUsersBody.email !== webEmail || apiUsersBody.email !== apiEmail) throw new Error('Versioned users route returned the wrong authenticated user')
 
 	const ssr = await fetch(webOrigin, { headers: { cookie: webJar.header } })
 	const ssrBody = await ssr.text()
-	if (!ssr.ok || !ssrBody.includes(webEmail))
-		throw new Error('Web SSR did not load the session through the private gateway URL')
+	if (!ssr.ok || !ssrBody.includes(webEmail)) throw new Error('Web SSR did not load the session through the private gateway URL')
 
 	return {
 		project: '.',
@@ -494,16 +462,13 @@ async function main(): Promise<void> {
 	}
 	console.log(`[gateway-docker] generated project: ${generated.project}`)
 	const webHooks = await readFile(join(generated.project, 'apps/web/src/hooks.server.ts'), 'utf8')
-	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)'))
-		throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
-	if (!webHooks.includes('export const handleFetch') || !webHooks.includes('env.GATEWAY_URL'))
-		throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
+	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)')) throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
+	if (!webHooks.includes('export const handleFetch') || !webHooks.includes('env.GATEWAY_URL')) throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
 	const ingressConfig = await readFile(
 		join(generated.project, 'docker/ingress.conf.template'),
 		'utf8'
 	)
-	if (!ingressConfig.includes('location = /api') || !ingressConfig.includes('location ^~ /api/'))
-		throw new Error('generated Docker ingress omits an exact API boundary')
+	if (!ingressConfig.includes('location = /api') || !ingressConfig.includes('location ^~ /api/')) throw new Error('generated Docker ingress omits an exact API boundary')
 
 	let evidence: unknown
 	let cleanup: unknown
@@ -605,10 +570,7 @@ async function main(): Promise<void> {
 		const runtimeLogPath = join(generated.project, 'runtime.log')
 		await writeSanitizedArtifact({
 			path: runtimeLogPath,
-			content: runtimeLogs.output.replace(
-				/(\[auth\] OTP for [^:]+: )\d{6}/g,
-				'$1[REDACTED]'
-			),
+			content: runtimeLogs.output.replace(/(\[auth\] OTP for [^:]+: )\d{6}/g, '$1[REDACTED]'),
 			roots: [generated.project]
 		})
 		await appendCommandEvidence(generated.project, {

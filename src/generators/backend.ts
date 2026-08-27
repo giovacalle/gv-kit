@@ -3,7 +3,7 @@ import type { GvKitConfig } from '../schema/config.js'
 import { AUTH_SERVICE } from './hono-topology.js'
 
 /**
- * Generator for `packages/backend/` — horizontal helpers, core types, and Hono middleware.
+ * Generator for the shared backend application/core layer in `packages/backend/`.
  */
 export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 	const isHono = cfg.choices.backend === 'hono'
@@ -328,9 +328,8 @@ export async function getSession<TBindings extends Record<string, any>>(
 	const e = env as unknown as AuthEnv
 
 	let res: Response
-	if ('${AUTH_SERVICE.internalTarget}' in env && e.${AUTH_SERVICE.internalTarget}) {
-		res = await e.${AUTH_SERVICE.internalTarget}.fetch(new Request(\`https://internal\${path}\`, { headers }))
-	} else {
+	if ('${AUTH_SERVICE.internalTarget}' in env && e.${AUTH_SERVICE.internalTarget}) res = await e.${AUTH_SERVICE.internalTarget}.fetch(new Request(\`https://internal\${path}\`, { headers }))
+	else {
 		const base = e.${AUTH_SERVICE.transport.node.targetEnvironmentVariable}
 		if (!base) return null
 		res = await fetch(\`\${base}\${path}\`, { headers })

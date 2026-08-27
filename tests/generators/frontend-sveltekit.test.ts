@@ -83,9 +83,7 @@ describe('generateFrontendSveltekit — auth inclusion / exclusion', () => {
 		expect(login.content).toContain('InputOTP')
 		expect(login.content).toContain('turnstile')
 		const load = findEntry(entries, 'apps/web/src/routes/login/+page.server.ts')!
-		expect(load.content).toContain(
-			"import { PUBLIC_TURNSTILE_SITE_KEY } from '$env/static/public'"
-		)
+		expect(load.content).toContain("import { PUBLIC_TURNSTILE_SITE_KEY } from '$env/static/public'")
 		expect(load.content).not.toContain('platform?.env')
 	})
 
@@ -121,9 +119,7 @@ describe('generateFrontendSveltekit — auth inclusion / exclusion', () => {
 			'errors',
 			'submitting',
 			'turnstileTokenProxy'
-		]) {
-			expect(login).not.toContain(emailOnlySymbol)
-		}
+		]) expect(login).not.toContain(emailOnlySymbol)
 		expect(login).toContain('continueWithGoogle')
 	})
 
@@ -263,10 +259,7 @@ describe('generateFrontendSveltekit — monitoring boundary', () => {
 		const appHtml = findEntry(generateFrontendSveltekit(cfg), 'apps/web/src/app.html')!.content
 		const rootEntries = generateRoot(cfg)
 		const envExample = findEntry(rootEntries, '.env.example')!.content
-		const webGuidance = findEntry(
-			generateAiTooling(cfg),
-			'.ai/rules/web-svelte.md'
-		)!.content
+		const webGuidance = findEntry(generateAiTooling(cfg), '.ai/rules/web-svelte.md')!.content
 		const turbo = JSON.parse(findEntry(rootEntries, 'turbo.json')!.content) as {
 			tasks: Record<string, { env?: string[] }>
 		}
@@ -300,9 +293,7 @@ describe('generateFrontendSveltekit — boundary regression', () => {
 		for (const auth of AUTH_VARIANTS) {
 			const email = auth.length > 0 ? 'resend' : 'skip'
 			const entries = generateFrontendSveltekit(makeCfg({ auth, email }))
-			for (const e of entries) {
-				expect(e.path.startsWith('apps/web/src/lib/components/ui/')).toBe(false)
-			}
+			for (const e of entries) expect(e.path.startsWith('apps/web/src/lib/components/ui/')).toBe(false)
 		}
 	})
 })
@@ -341,9 +332,7 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 		expect(wrangler).toContain('"service": "demo-api"')
 		expect(wrangler).not.toContain('"binding": "AUTH"')
 		expect(wrangler).not.toContain('BETTER_AUTH_SECRET')
-		expect(
-			findEntry(honoAuth, 'apps/web/src/routes/api/auth/[...path]/+server.ts')
-		).toBeUndefined()
+		expect(findEntry(honoAuth, 'apps/web/src/routes/api/auth/[...path]/+server.ts')).toBeUndefined()
 		const session = findEntry(honoAuth, 'apps/web/src/lib/server/load-session.ts')!
 		expect(session.content).toContain("event.fetch('/api/auth/get-session'")
 		const env = findEntry(honoAuth, 'apps/web/.env.example')!
@@ -482,8 +471,7 @@ describe('generateFrontendSveltekit — hey-api / TanStack Query overlay', () =>
 			'errors,',
 			'submitting',
 			'turnstileTokenProxy'
-		])
-			expect(login).not.toContain(unused)
+		]) expect(login).not.toContain(unused)
 		expect(login).toContain('continueWithGoogle')
 	})
 })

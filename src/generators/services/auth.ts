@@ -261,8 +261,7 @@ function wranglerJsonc({
 	if (wantsEmailOTP) {
 		requiredSecrets.push('TURNSTILE_SECRET_KEY')
 		if (email === 'resend') requiredSecrets.push('RESEND_API_KEY', 'FROM_EMAIL')
-		if (email === 'notifuse')
-			requiredSecrets.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
+		if (email === 'notifuse') requiredSecrets.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
 	}
 
 	return `{
@@ -324,8 +323,7 @@ function envDts({
 
 	const nodeDb = usesSqlite ? '\t\tSQLITE_PATH?: string' : '\t\tDATABASE_URL: string'
 
-	return `// Ambient \`Env\` for OpenAPIHono<{ Bindings: Env }>; values are read from \`process.env\` at runtime.
-// Other services MUST NOT read these secrets — they call /internal/session via \`AUTH_URL\`.
+	return `// OpenAPIHono needs ambient Env types even though Node reads these values from process.env.
 declare global {
 	interface Env {
 		BETTER_AUTH_SECRET: string
@@ -583,8 +581,7 @@ export function getAuth(_env?: unknown) {
 function openapiTs(project: string): string {
 	return `import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
 
-// Documents ONLY /internal/session. The gateway-forwarded ${PUBLIC_AUTH_PREFIX}/* contract is
-// excluded because sibling services use the private binding or HTTP boundary, not a typed client.
+// Only /internal/session is typed because sibling services never call the public Better Auth routes.
 const SessionResponse = z
 	.object({
 		userId: z.string(),
@@ -713,8 +710,7 @@ function utilsTs({ wantsEmailOTP }: { wantsEmailOTP: boolean }): string {
 	const localeBlock = wantsEmailOTP
 		? `
 
-// Match a BCP-47-ish primary tag (2–3 letters) at the start of the value,
-// stopping before any subtag, region, or quality qualifier — ignore the rest.
+// Parse only the primary BCP-47 tag; ignore subtags, regions, and quality weights.
 export const LOCALE_TAG = /^\\s*([a-z]{2,3})(?![a-z])/i
 
 export function pickLocale(headers: Headers | undefined): string {
@@ -955,7 +951,7 @@ or browser-facing service URL.
 
 ## What this service does
 
-- Owns the gateway-forwarded Better Auth route implementation at \`${PUBLIC_AUTH_PREFIX}/*\`
+- Configures Better Auth directly in \`${AUTH_SERVICE.workspacePath}/src/auth.ts\` and owns its gateway-forwarded routes at \`${PUBLIC_AUTH_PREFIX}/*\`
 - Exposes \`/internal/session\` RPC for sibling services
 - Owns the auth tables (sessions, accounts, verification) in \`packages/db\`
 

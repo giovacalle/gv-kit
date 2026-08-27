@@ -210,13 +210,19 @@ function appendVary(headers: Headers, value: string): void {
 	headers.set('vary', values.join(', '))
 }
 
-function gatewayResponse(
-	response: Response,
-	requestId: string,
-	origin: string | undefined,
-	allowedCorsOrigins: string[],
+function gatewayResponse({
+	response,
+	requestId,
+	origin,
+	allowedCorsOrigins,
 	preflight = false
-): Response {
+}: {
+	response: Response
+	requestId: string
+	origin: string | undefined
+	allowedCorsOrigins: string[]
+	preflight?: boolean
+}): Response {
 	const headers = new Headers(response.headers)
 	const serviceCorsHeaders: string[] = []
 	headers.forEach((_value, name) => {
@@ -247,12 +253,8 @@ function gatewayResponse(
 		webSocket: platformResponse.webSocket
 	}
 	const result = new Response(response.body, init) as PlatformResponse
-	if ('cf' in platformResponse && !('cf' in result)) {
-		Object.defineProperty(result, 'cf', { value: platformResponse.cf })
-	}
-	if ('webSocket' in platformResponse && !('webSocket' in result)) {
-		Object.defineProperty(result, 'webSocket', { value: platformResponse.webSocket })
-	}
+	if ('cf' in platformResponse && !('cf' in result)) Object.defineProperty(result, 'cf', { value: platformResponse.cf })
+	if ('webSocket' in platformResponse && !('webSocket' in result)) Object.defineProperty(result, 'webSocket', { value: platformResponse.webSocket })
 	return result
 }
 
@@ -276,8 +278,7 @@ function publicOriginAllowlist(value: string | undefined, canonicalApiOrigin: st
 	for (const origin of origins) {
 		const url = new URL(canonicalOrigin(origin, 'publicOrigins'))
 		const current = allowed.get(url.host)
-		if (current && current.protocol !== url.protocol)
-			throw new Error('publicOrigins must not assign multiple schemes to one host')
+		if (current && current.protocol !== url.protocol) throw new Error('publicOrigins must not assign multiple schemes to one host')
 		allowed.set(url.host, { host: url.host, protocol: url.protocol.slice(0, -1) })
 	}
 	return allowed
@@ -287,8 +288,7 @@ function sameSecret(left: string | undefined, right: string | undefined): boolea
 	if (!left || !right) return false
 	let difference = left.length ^ right.length
 	const length = Math.max(left.length, right.length)
-	for (let index = 0; index < length; index += 1)
-		difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0)
+	for (let index = 0; index < length; index += 1) difference |= (left.charCodeAt(index) || 0) ^ (right.charCodeAt(index) || 0)
 	return difference === 0
 }
 
@@ -304,8 +304,7 @@ function resolvePublicOrigin({
 	const requestUrl = new URL(request.url)
 	const direct = allowed.get(requestUrl.host)
 	if (direct?.protocol === requestUrl.protocol.slice(0, -1)) return direct
-	if (!sameSecret(request.headers.get(TRUSTED_INGRESS_HEADER) ?? undefined, trustedIngressSecret))
-		return undefined
+	if (!sameSecret(request.headers.get(TRUSTED_INGRESS_HEADER) ?? undefined, trustedIngressSecret)) return undefined
 	const host = request.headers.get('x-forwarded-host')?.toLowerCase()
 	const protocol = request.headers.get('x-forwarded-proto')?.toLowerCase()
 	const forwarded = host ? allowed.get(host) : undefined
@@ -384,14 +383,22 @@ export function createGateway(
 	const timeoutMs = boundedTimeout(options.upstreamTimeoutMs)
 	const writeLog = options.logger ?? ((line: string) => console.log(line))
 
-	const respond = (c: GatewayContext, response: Response, preflight = false) =>
-		gatewayResponse(
+	const respond = ({
+		context,
+		response,
+		preflight = false
+	}: {
+		context: GatewayContext
+		response: Response
+		preflight?: boolean
+	}) =>
+		gatewayResponse({
 			response,
-			c.get('requestId'),
-			c.req.header('origin'),
+			requestId: context.get('requestId'),
+			origin: context.req.header('origin'),
 			allowedCorsOrigins,
 			preflight
-		)
+		})
 
 	app.use('*', async (c, next) => {
 		const id = requestId(c.req.header(REQUEST_ID_HEADER))
@@ -425,7 +432,7 @@ export function createGateway(
 					path: new URL(c.req.url).pathname
 				})
 			)
-			return respond(c, c.text('misdirected request', 421))
+			return respond({ context: c, response: c.text('misdirected request', 421) })
 		}
 		c.set('publicOrigin', origin)
 		await next()
@@ -442,12 +449,19 @@ export function createGateway(
 			Boolean(c.req.header('origin')) &&
 			Boolean(c.req.header('access-control-request-method'))
 		if (!isPublicPath || !isPreflight) return next()
-		return respond(c, new Response(null, { status: 204 }), true)
+		return respond({
+			context: c,
+			response: new Response(null, { status: 204 }),
+			preflight: true
+		})
 	})
 
-	app.get('/api/healthz', (c) => respond(c, c.text('ok')))
+	app.get('/api/healthz', (c) => respond({ context: c, response: c.text('ok') }))
 	app.get('/api/openapi.json', (c) =>
-		respond(c, c.json({ ...options.openApiDocument, servers: [{ url: serverOrigin }] }))
+		respond({
+			context: c,
+			response: c.json({ ...options.openApiDocument, servers: [{ url: serverOrigin }] })
+		})
 	)
 	app.all('*', async (c) => {
 		const pathname = new URL(c.req.url).pathname
@@ -461,7 +475,7 @@ export function createGateway(
 					path: pathname
 				})
 			)
-			return respond(c, c.text('not found', 404))
+			return respond({ context: c, response: c.text('not found', 404) })
 		}
 
 		writeLog(
@@ -484,7 +498,7 @@ export function createGateway(
 					target: route.target
 				})
 			)
-			return respond(c, c.text('service unavailable', 503))
+			return respond({ context: c, response: c.text('service unavailable', 503) })
 		}
 
 		try {
@@ -495,7 +509,7 @@ export function createGateway(
 				publicOrigin: c.get('publicOrigin'),
 				timeoutMs
 			})
-			return respond(c, response)
+			return respond({ context: c, response })
 		} catch (error) {
 			if (error instanceof UpstreamTimeoutError) {
 				writeLog(
@@ -508,7 +522,7 @@ export function createGateway(
 						timeoutMs
 					})
 				)
-				return respond(c, c.text('gateway timeout', 504))
+				return respond({ context: c, response: c.text('gateway timeout', 504) })
 			}
 			writeLog(
 				JSON.stringify({
@@ -519,7 +533,7 @@ export function createGateway(
 					target: route.target
 				})
 			)
-			return respond(c, c.text('bad gateway', 502))
+			return respond({ context: c, response: c.text('bad gateway', 502) })
 		}
 	})
 
@@ -683,20 +697,24 @@ function isObject(value: JsonValue | undefined): value is JsonObject {
 }
 
 function directParameterId(value: JsonValue): string | undefined {
-	if (!isObject(value) || typeof value.in !== 'string' || typeof value.name !== 'string') {
-		return undefined
-	}
+	if (!isObject(value) || typeof value.in !== 'string' || typeof value.name !== 'string') return undefined
 	const name = value.in === 'header' ? value.name.toLowerCase() : value.name
 	return value.in + ':' + name
 }
 
-function resolveParameterReference(
-	reference: string,
-	parameterComponents: Record<string, JsonValue> | undefined,
-	location: string,
-	owner: string,
+function resolveParameterReference({
+	reference,
+	parameterComponents,
+	location,
+	owner,
+	seen
+}: {
+	reference: string
+	parameterComponents: Record<string, JsonValue> | undefined
+	location: string
+	owner: string
 	seen: Set<string>
-): JsonValue {
+}): JsonValue {
 	const prefix = '#/components/parameters/'
 	const encodedName = reference.startsWith(prefix) ? reference.slice(prefix.length) : ''
 	if (!encodedName || encodedName.includes('/') || /~(?:[^01]|$)/.test(encodedName)) throw new Error('fragment "' + owner + '" uses unsupported parameter reference "' + reference + '" at ' + location)
@@ -705,47 +723,76 @@ function resolveParameterReference(
 	const definition = parameterComponents?.[name]
 	if (definition === undefined) throw new Error('fragment "' + owner + '" cannot resolve parameter reference "' + reference + '" at ' + location)
 	if (isObject(definition) && typeof definition.$ref === 'string') {
-		return resolveParameterReference(
-			definition.$ref,
+		return resolveParameterReference({
+			reference: definition.$ref,
 			parameterComponents,
 			location,
 			owner,
-			new Set([...seen, reference])
-		)
+			seen: new Set([...seen, reference])
+		})
 	}
 	if (!directParameterId(definition)) throw new Error('fragment "' + owner + '" cannot determine parameter identity for "' + reference + '" at ' + location)
 	return definition
 }
 
-function parameterDescriptor(
-	value: JsonValue,
-	parameterComponents: Record<string, JsonValue> | undefined,
-	location: string,
+function parameterDescriptor({
+	value,
+	parameterComponents,
+	location,
+	owner
+}: {
+	value: JsonValue
+	parameterComponents: Record<string, JsonValue> | undefined
+	location: string
 	owner: string
-): { definition: JsonValue; identity: string | undefined } {
+}): { definition: JsonValue; identity: string | undefined } {
 	const definition =
 		isObject(value) && typeof value.$ref === 'string'
-			? resolveParameterReference(value.$ref, parameterComponents, location, owner, new Set())
+			? resolveParameterReference({
+					reference: value.$ref,
+					parameterComponents,
+					location,
+					owner,
+					seen: new Set()
+				})
 			: value
 	return { definition, identity: directParameterId(definition) }
 }
 
-function rejectResponseLinks(response: JsonValue, location: string, owner: string): void {
+function rejectResponseLinks({
+	response,
+	location,
+	owner
+}: {
+	response: JsonValue
+	location: string
+	owner: string
+}): void {
 	if (!isObject(response) || response.links === undefined) return
 	throw new Error('fragment "' + owner + '" uses unsupported Link Objects at ' + location + '.links')
 }
 
-function validateParameters(
-	value: JsonValue | undefined,
-	location: string,
-	parameterComponents: Record<string, JsonValue> | undefined,
+function validateParameters({
+	value,
+	location,
+	parameterComponents,
+	owner
+}: {
+	value: JsonValue | undefined
+	location: string
+	parameterComponents: Record<string, JsonValue> | undefined
 	owner: string
-): void {
+}): void {
 	if (value === undefined) return
 	if (!Array.isArray(value)) throw new Error('invalid parameters at ' + location)
 	const identities = new Map<string, JsonValue>()
 	for (const [index, parameter] of value.entries()) {
-		const descriptor = parameterDescriptor(parameter, parameterComponents, location + '[' + index + ']', owner)
+		const descriptor = parameterDescriptor({
+			value: parameter,
+			parameterComponents,
+			location: location + '[' + index + ']',
+			owner
+		})
 		if (!descriptor.identity) continue
 		const current = identities.get(descriptor.identity)
 		if (current && !sameJson(current, descriptor.definition)) throw new Error('parameter collision at ' + location + '.' + descriptor.identity)
@@ -753,27 +800,38 @@ function validateParameters(
 	}
 }
 
-function mergeParameters(
-	existing: JsonValue,
-	incoming: JsonValue,
-	location: string,
-	parameterComponents: Record<string, JsonValue> | undefined,
+function mergeParameters({
+	existing,
+	incoming,
+	location,
+	parameterComponents,
+	owner
+}: {
+	existing: JsonValue
+	incoming: JsonValue
+	location: string
+	parameterComponents: Record<string, JsonValue> | undefined
 	owner: string
-): JsonValue[] {
+}): JsonValue[] {
 	if (!Array.isArray(existing) || !Array.isArray(incoming)) throw new Error('parameter collision at ' + location)
 	const merged = structuredClone(existing)
 	const identities = new Map<string, JsonValue>()
 	for (const [index, parameter] of merged.entries()) {
-		const descriptor = parameterDescriptor(parameter, parameterComponents, location + '[' + index + ']', owner)
+		const descriptor = parameterDescriptor({
+			value: parameter,
+			parameterComponents,
+			location: location + '[' + index + ']',
+			owner
+		})
 		if (descriptor.identity) identities.set(descriptor.identity, descriptor.definition)
 	}
 	for (const [index, parameter] of incoming.entries()) {
-		const descriptor = parameterDescriptor(
-			parameter,
+		const descriptor = parameterDescriptor({
+			value: parameter,
 			parameterComponents,
-			location + '[' + (merged.length + index) + ']',
+			location: location + '[' + (merged.length + index) + ']',
 			owner
-		)
+		})
 		const current = descriptor.identity ? identities.get(descriptor.identity) : undefined
 		if (current && !sameJson(current, descriptor.definition)) throw new Error('parameter collision at ' + location + '.' + descriptor.identity)
 		if (!current && !merged.some((candidate) => sameJson(candidate, parameter))) {
@@ -795,7 +853,11 @@ export function composeOpenApi(fragments: readonly LoadedFragment[]): OpenApiDoc
 		if (Object.keys(fragment.document.components?.callbacks ?? {}).length > 0) throw new Error('fragment "' + fragment.owner + '" uses unsupported callbacks at components.callbacks')
 		if (Object.keys(fragment.document.components?.links ?? {}).length > 0) throw new Error('fragment "' + fragment.owner + '" uses unsupported Link Objects at components.links')
 		for (const [name, response] of Object.entries(fragment.document.components?.responses ?? {})) {
-			rejectResponseLinks(response, 'components.responses.' + name, fragment.owner)
+			rejectResponseLinks({
+				response,
+				location: 'components.responses.' + name,
+				owner: fragment.owner
+			})
 		}
 		for (const [group, entries] of Object.entries(fragment.document.components ?? {})) {
 			const target = (components[group] ??= {})
@@ -810,40 +872,48 @@ export function composeOpenApi(fragments: readonly LoadedFragment[]): OpenApiDoc
 			const equivalentPath = pathIdentities.get(pathIdentity)
 			if (equivalentPath && equivalentPath !== path) throw new Error('path collision between templates "' + equivalentPath + '" and "' + path + '"')
 			pathIdentities.set(pathIdentity, path)
-			if (incoming.$ref !== undefined) throw new Error(
+			if (incoming.$ref !== undefined) {
+				throw new Error(
 					'fragment "' + fragment.owner + '" uses unsupported Path Item $ref at paths.' + path + '.$ref'
 				)
-			if (incoming.servers !== undefined) throw new Error(
+			}
+			if (incoming.servers !== undefined) {
+				throw new Error(
 					'fragment "' + fragment.owner + '" must not declare servers at paths.' + path + '.servers'
 				)
-			validateParameters(
-				incoming.parameters,
-				'paths.' + path + '.parameters',
-				fragment.document.components?.parameters,
-				fragment.owner
-			)
+			}
+			validateParameters({
+				value: incoming.parameters,
+				location: 'paths.' + path + '.parameters',
+				parameterComponents: fragment.document.components?.parameters,
+				owner: fragment.owner
+			})
 			for (const [method, operation] of Object.entries(incoming)) {
 				if (!methods.has(method)) continue
 				if (!isObject(operation) || typeof operation.operationId !== 'string') throw new Error('missing operationId at paths.' + path + '.' + method)
-				if (operation.callbacks !== undefined) throw new Error(
+				if (operation.callbacks !== undefined) {
+					throw new Error(
 						'fragment "' + fragment.owner + '" uses unsupported callbacks at paths.' + path + '.' + method + '.callbacks'
 					)
-				if (operation.servers !== undefined) throw new Error(
+				}
+				if (operation.servers !== undefined) {
+					throw new Error(
 						'fragment "' + fragment.owner + '" must not declare servers at paths.' + path + '.' + method + '.servers'
 					)
-				validateParameters(
-					operation.parameters,
-					'paths.' + path + '.' + method + '.parameters',
-					fragment.document.components?.parameters,
-					fragment.owner
-				)
+				}
+				validateParameters({
+					value: operation.parameters,
+					location: 'paths.' + path + '.' + method + '.parameters',
+					parameterComponents: fragment.document.components?.parameters,
+					owner: fragment.owner
+				})
 				if (isObject(operation.responses)) {
 					for (const [status, response] of Object.entries(operation.responses)) {
-						rejectResponseLinks(
+						rejectResponseLinks({
 							response,
-							'paths.' + path + '.' + method + '.responses.' + status,
-							fragment.owner
-						)
+							location: 'paths.' + path + '.' + method + '.responses.' + status,
+							owner: fragment.owner
+						})
 					}
 				}
 				const operationId = operation.operationId
@@ -863,13 +933,13 @@ export function composeOpenApi(fragments: readonly LoadedFragment[]): OpenApiDoc
 				if (existing === undefined) current[field] = structuredClone(value)
 				else if (methods.has(field)) throw new Error('method collision at ' + location)
 				else if (field === 'parameters') {
-					current[field] = mergeParameters(
+					current[field] = mergeParameters({
 						existing,
-						value,
+						incoming: value,
 						location,
-						components.parameters,
-						fragment.owner
-					)
+						parameterComponents: components.parameters,
+						owner: fragment.owner
+					})
 				} else if (!sameJson(existing, value)) throw new Error('path collision at ' + location)
 			}
 		}

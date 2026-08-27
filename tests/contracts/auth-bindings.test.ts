@@ -1,7 +1,6 @@
-import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
+import { describe, expect, test } from 'bun:test'
 import { runGenerators } from '../../src/generators/index.js'
 import { GvKitConfig } from '../../src/schema/config.js'
 import { parseJsonc } from '../util/jsonc.js'
@@ -33,15 +32,11 @@ describe('auth-worker bindings', () => {
 				expect(parsed.services ?? []).toEqual([])
 				const expected = ['BETTER_AUTH_SECRET']
 				if (cfg.choices.db === 'postgres') expected.push('DATABASE_URL')
-				if (cfg.choices.auth.includes('google')) {
-					expected.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
-				}
+				if (cfg.choices.auth.includes('google')) expected.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 				if (cfg.choices.auth.includes('emailOTP')) {
 					expected.push('TURNSTILE_SECRET_KEY')
 					if (cfg.choices.email === 'resend') expected.push('RESEND_API_KEY', 'FROM_EMAIL')
-					if (cfg.choices.email === 'notifuse') {
-						expected.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
-					}
+					if (cfg.choices.email === 'notifuse') expected.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
 				}
 				expect(parsed.secrets?.required).toEqual(expected)
 

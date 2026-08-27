@@ -40,7 +40,7 @@ export const load = async ({ platform }) => {
 };
 ```
 
-> The web Worker owns static assets and the `GATEWAY` Service Binding for SSR. It does not bind directly to auth, users, databases, KV, R2, queues, or Durable Objects. The gateway at `apps/api/wrangler.jsonc` binds to private services, and each private service owns its data capabilities under `services/<service>/wrangler.jsonc`.
+> The web Worker owns static assets and the `GATEWAY` Service Binding for SSR. It does not bind directly to auth, users, databases, KV, R2, queues, or Durable Objects. The gateway at `apps/api/wrangler.jsonc` binds to private services. Each transport/runtime adapter declares the data capabilities required by its imported application modules in `services/<service>/wrangler.jsonc`.
 
 Browser `/api` and `/api/*` traffic uses the web origin's more-specific Cloudflare routes and reaches the gateway without invoking the web Worker. Server-side SvelteKit requests use `event.fetch`; `handleFetch` forwards same-origin API requests through `platform.env.GATEWAY`.
 

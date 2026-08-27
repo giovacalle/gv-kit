@@ -439,7 +439,7 @@ Don't render a per-page title bar in the layout — every page renders its own h
 | `apps/web/src/lib/types/` folder | Types alongside owners: schemas, components, or single `lib/types.ts` |
 | `apps/web/src/lib/features/<feature>/` | Co-locate in `routes/<feature>/` — SvelteKit's route tree already is the feature boundary |
 <!--@gvkit:if hono-->
-| `apps/web/src/lib/domain/<entity>/` | Domain logic belongs in the owning private worker under `services/<service>/`; this is a client app |
+| `apps/web/src/lib/domain/<entity>/` | Put reusable application logic in `packages/backend/`; invoke it from the transport adapter under `services/<service>/` |
 <!--@gvkit:if apiClientHeyApi-->
 | `apps/web/src/lib/api/<service>.ts` | Import domain-prefixed operations from the flat `@repo/openapi-client` package |
 <!--@gvkit:else-->

@@ -51,7 +51,7 @@ function replaceRequired({
 	return source.replace(expected, replacement)
 }
 
-async function previewNames(entries: GeneratedEntry[]): Promise<PreviewNames> {
+async function previewNames({ entries }: { entries: GeneratedEntry[] }): Promise<PreviewNames> {
 	let source = entry(entries, 'scripts/cloudflare-preview-name.mjs')
 	source = replaceRequired({
 		source,
@@ -60,14 +60,17 @@ async function previewNames(entries: GeneratedEntry[]): Promise<PreviewNames> {
 	})
 	source = source.replaceAll('export function ', 'function ')
 	const load = Object.getPrototypeOf(async function () {}).constructor as new (
-		...parameters: string[]
-	) => (...arguments_: unknown[]) => Promise<PreviewNames>
+		dependenciesParameter: 'dependencies',
+		source: string
+	) => (dependencies: {
+		createHash: typeof createHash
+		process: { argv: string[] }
+		console: { log(value: string): void }
+	}) => Promise<PreviewNames>
 	return new load(
-		'createHash',
-		'process',
-		'console',
-		`${source}\nreturn { cloudflarePreviewName, cloudflarePreviewAlias, validateCloudflarePreviewAlias }`
-	)(createHash, { argv: [] }, { log: () => undefined })
+		'dependencies',
+		`const { createHash, process, console } = dependencies\n${source}\nreturn { cloudflarePreviewName, cloudflarePreviewAlias, validateCloudflarePreviewAlias }`
+	)({ createHash, process: { argv: [] }, console: { log: () => undefined } })
 }
 
 function memoryFilesystem(initialEntries: GeneratedEntry[]) {
@@ -79,7 +82,9 @@ function memoryFilesystem(initialEntries: GeneratedEntry[]) {
 				files.set(filePath, (files.get(filePath) ?? '') + content)
 			},
 			existsSync(candidate: string) {
-				return files.has(candidate) || [...files.keys()].some((file) => file.startsWith(`${candidate}/`))
+				return (
+					files.has(candidate) || [...files.keys()].some((file) => file.startsWith(`${candidate}/`))
+				)
 			},
 			readFileSync(filePath: string) {
 				const content = files.get(filePath)
@@ -109,10 +114,13 @@ function memoryFilesystem(initialEntries: GeneratedEntry[]) {
 	}
 }
 
-async function runPreviewPreparation(
-	cfg: GvKitConfig,
-	overrideEnv: Record<string, string> = {}
-) {
+async function runPreviewPreparation({
+	cfg,
+	overrideEnv = {}
+}: {
+	cfg: GvKitConfig
+	overrideEnv?: Record<string, string>
+}) {
 	const entries = runGenerators(cfg)
 	const materializedPaths = [
 		'apps/api/wrangler.jsonc',
@@ -120,13 +128,11 @@ async function runPreviewPreparation(
 		'services/auth/wrangler.jsonc',
 		'services/users/wrangler.jsonc'
 	]
-	if (entries.some(({ path }) => path === 'apps/marketing/wrangler.jsonc')) {
-		materializedPaths.push('apps/marketing/wrangler.jsonc')
-	}
+	if (entries.some(({ path }) => path === 'apps/marketing/wrangler.jsonc')) materializedPaths.push('apps/marketing/wrangler.jsonc')
 	const filesystem = memoryFilesystem(
 		materializedPaths.map((path) => ({ path, content: entry(entries, path) }))
 	)
-	const names = await previewNames(entries)
+	const names = await previewNames({ entries })
 	let source = entry(entries, 'scripts/prepare-cloudflare-preview.mjs')
 	source = replaceRequired({
 		source,
@@ -146,23 +152,26 @@ async function runPreviewPreparation(
 		replacement: 'const { cloudflarePreviewName } = injectedPreviewNames'
 	})
 	const execute = Object.getPrototypeOf(async function () {}).constructor as new (
-		...parameters: string[]
-	) => (...arguments_: unknown[]) => Promise<void>
+		dependenciesParameter: 'dependencies',
+		source: string
+	) => (dependencies: {
+		filesystem: typeof filesystem.adapter
+		path: typeof path
+		previewNames: PreviewNames
+		process: { env: Record<string, string | undefined> }
+		console: { log(value: string): void }
+	}) => Promise<void>
 	const stdout: string[] = []
 	let stderr = ''
 	try {
 		await new execute(
-			'injectedFilesystem',
-			'injectedPath',
-			'injectedPreviewNames',
-			'process',
-			'console',
-			source
-		)(
-			filesystem.adapter,
+			'dependencies',
+			`const { filesystem: injectedFilesystem, path: injectedPath, previewNames: injectedPreviewNames, process, console } = dependencies\n${source}`
+		)({
+			filesystem: filesystem.adapter,
 			path,
-			names,
-			{
+			previewNames: names,
+			process: {
 				env: {
 					GITHUB_OUTPUT: 'github-output.txt',
 					STAGING_ALIAS: 'pr-123',
@@ -173,8 +182,7 @@ async function runPreviewPreparation(
 								STAGING_D1_DATABASE_ID: '11111111-1111-4111-8111-111111111111'
 							}
 						: {
-								STAGING_DATABASE_URL:
-									'postgres://preview:preview@preview.example.test:5432/preview'
+								STAGING_DATABASE_URL: 'postgres://preview:preview@preview.example.test:5432/preview'
 							}),
 					CLOUDFLARE_PREVIEW_WEB_DOMAIN: 'app.example.com',
 					CLOUDFLARE_PREVIEW_API_DOMAIN: 'api.example.com',
@@ -182,8 +190,8 @@ async function runPreviewPreparation(
 					...overrideEnv
 				}
 			},
-			{ log: (value: string) => stdout.push(value) }
-		)
+			console: { log: (value: string) => stdout.push(value) }
+		})
 	} catch (error) {
 		stderr = error instanceof Error ? error.message : String(error)
 	}
@@ -232,7 +240,7 @@ type CleanupMode =
 	| 'missing'
 	| 'success'
 
-async function runCleanupScript(source: string, mode: CleanupMode) {
+async function runCleanupScript({ source, mode }: { source: string; mode: CleanupMode }) {
 	let executableSource = source
 	let injectedCommands = ''
 	if (mode !== 'directories-missing') {
@@ -307,7 +315,10 @@ describe('Cloudflare gateway preview contracts', () => {
 		) as {
 			jobs: Record<
 				string,
-				{ needs?: string; steps?: Array<{ name?: string; run?: string; env?: Record<string, string> }> }
+				{
+					needs?: string
+					steps?: Array<{ name?: string; run?: string; env?: Record<string, string> }>
+				}
 			>
 		}
 		expect(workflow.jobs['preview-db']?.needs).toBe('preview-ingress')
@@ -327,18 +338,26 @@ describe('Cloudflare gateway preview contracts', () => {
 		const generated = generateDeploy(makeCfg())
 		const source = entry(generated, 'scripts/verify-cloudflare-preview-ingress.mjs')
 		const execute = Object.getPrototypeOf(async function () {}).constructor as new (
-			...parameters: string[]
-		) => (...arguments_: unknown[]) => Promise<void>
+			dependenciesParameter: 'dependencies',
+			source: string
+		) => (dependencies: {
+			fetch(input: string, init?: RequestInit): Promise<Response>
+			process: { env: typeof env }
+			console: { log(value: string): void }
+		}) => Promise<void>
 		const env = {
 			CLOUDFLARE_API_TOKEN: 'verification-token',
 			CLOUDFLARE_PREVIEW_WEB_DOMAIN: 'app.example.com',
 			CLOUDFLARE_PREVIEW_API_DOMAIN: 'api.example.com',
 			CLOUDFLARE_PREVIEW_ZONE_NAME: 'example.com'
 		}
-		const verify = async (missingWildcard?: string) => {
+		const verify = async ({ missingWildcard }: { missingWildcard?: string } = {}) => {
 			const output: string[] = []
-			await new execute('fetch', 'process', 'console', source)(
-				async (input: string) => {
+			await new execute(
+				'dependencies',
+				`const { fetch, process, console } = dependencies\n${source}`
+			)({
+				fetch: async (input: string) => {
 					const url = new URL(input)
 					const name = url.searchParams.get('name')
 					const result =
@@ -349,22 +368,20 @@ describe('Cloudflare gateway preview contracts', () => {
 								: [{ name, proxied: true }]
 					return Response.json({ success: true, result })
 				},
-				{ env },
-				{ log: (value: string) => output.push(value) }
-			)
+				process: { env },
+				console: { log: (value: string) => output.push(value) }
+			})
 			return output.join('\n')
 		}
 
-		expect(await verify()).toContain(
-			'Managed Cloudflare preview ingress prerequisites verified.'
-		)
-		expect(verify('*.api.example.com')).rejects.toThrow(
+		expect(await verify()).toContain('Managed Cloudflare preview ingress prerequisites verified.')
+		expect(verify({ missingWildcard: '*.api.example.com' })).rejects.toThrow(
 			'Missing proxied shared wildcard DNS record: *.api.example.com'
 		)
 	})
 
 	test('one alias gives the gateway direct managed-domain routes and keeps private boundaries', async () => {
-		const result = await runPreviewPreparation(makeCfg())
+		const result = await runPreviewPreparation({ cfg: makeCfg() })
 		expect(result.exitCode, result.stderr).toBe(0)
 		const configs = result.configs!
 		expect(configs.gateway.name).toBe('demo-api-pr-123')
@@ -383,12 +400,8 @@ describe('Cloudflare gateway preview contracts', () => {
 			{ binding: 'AUTH', service: 'demo-auth-pr-123' },
 			{ binding: 'USERS', service: 'demo-users-pr-123' }
 		])
-		expect(configs.web.services).toEqual([
-			{ binding: 'GATEWAY', service: 'demo-api-pr-123' }
-		])
-		expect(configs.users.services).toEqual([
-			{ binding: 'AUTH', service: 'demo-auth-pr-123' }
-		])
+		expect(configs.web.services).toEqual([{ binding: 'GATEWAY', service: 'demo-api-pr-123' }])
+		expect(configs.users.services).toEqual([{ binding: 'AUTH', service: 'demo-auth-pr-123' }])
 		for (const config of Object.values(configs)) {
 			if (!config) continue
 			expect(config.workers_dev).toBe(false)
@@ -414,20 +427,19 @@ describe('Cloudflare gateway preview contracts', () => {
 	})
 
 	test('preview preparation fails closed before writing configs when managed domains are absent', async () => {
-		const result = await runPreviewPreparation(makeCfg(), {
-			CLOUDFLARE_PREVIEW_WEB_DOMAIN: ''
+		const result = await runPreviewPreparation({
+			cfg: makeCfg(),
+			overrideEnv: { CLOUDFLARE_PREVIEW_WEB_DOMAIN: '' }
 		})
 		expect(result.exitCode).not.toBe(0)
 		expect(result.stderr).toContain('CLOUDFLARE_PREVIEW_WEB_DOMAIN is required')
 		expect(result.stdout).toBe('')
-		for (const directory of ['apps/api', 'apps/web', 'services/auth', 'services/users']) {
-			expect(result.files.has(`${directory}/wrangler.staging.jsonc`)).toBe(false)
-		}
+		for (const directory of ['apps/api', 'apps/web', 'services/auth', 'services/users']) expect(result.files.has(`${directory}/wrangler.staging.jsonc`)).toBe(false)
 	})
 
 	test('preview Worker names remain bounded for cleanup', async () => {
 		const project = 'a'.repeat(55)
-		const result = await runPreviewPreparation(makeCfg({ name: project }))
+		const result = await runPreviewPreparation({ cfg: makeCfg({ name: project }) })
 		expect(result.exitCode, result.stderr).toBe(0)
 		const previewNames = Object.values(result.configs!).flatMap((config) =>
 			config && typeof config.name === 'string' ? [config.name] : []
@@ -440,7 +452,7 @@ describe('Cloudflare gateway preview contracts', () => {
 	})
 
 	test('Astro preview uses a managed hostname covered by the shared web wildcard', async () => {
-		const result = await runPreviewPreparation(makeCfg({ marketing: 'astro' }))
+		const result = await runPreviewPreparation({ cfg: makeCfg({ marketing: 'astro' }) })
 		expect(result.exitCode, result.stderr).toBe(0)
 		expect(result.configs?.marketing?.routes).toEqual([
 			{ pattern: 'pr-123-marketing.app.example.com/*', zone_name: 'example.com' }
@@ -482,7 +494,12 @@ describe('Cloudflare gateway preview contracts', () => {
 		}
 		const staging = entry(entries, '.github/workflows/deploy-staging.yml')
 		expect(staging).toContain("DEPLOY_ALL: ${{ github.event.action != 'synchronize' }}")
-		for (const target of ['@demo/auth-worker', '@demo/users-worker', '@demo/api-gateway', 'demo-web']) {
+		for (const target of [
+			'@demo/auth-worker',
+			'@demo/users-worker',
+			'@demo/api-gateway',
+			'demo-web'
+		]) {
 			expect(staging).toContain(
 				`pnpm turbo run build --filter=${target}\n            pnpm --filter ${target} deploy:staging`
 			)
@@ -499,10 +516,8 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(range).toContain('echo "deploy_all=$deploy_all"')
 
 		const production = entry(entries, '.github/workflows/deploy-production.yml')
-		expect(production).toContain('steps.scm.outputs.deploy_all == \'true\'')
-		expect(production).toContain(
-			'if [ "${{ steps.scm.outputs.deploy_all }}" = "true" ]; then'
-		)
+		expect(production).toContain("steps.scm.outputs.deploy_all == 'true'")
+		expect(production).toContain('if [ "${{ steps.scm.outputs.deploy_all }}" = "true" ]; then')
 		expect(production).not.toContain('HEAD^1')
 	})
 
@@ -526,9 +541,7 @@ describe('Cloudflare gateway preview contracts', () => {
 		const entries = generateDeploy(makeCfg())
 		const staging = entry(entries, '.github/workflows/deploy-staging.yml')
 		expect(staging).toContain('| web | `${{ steps.preview_config.outputs.web_origin }}`')
-		expect(staging).toContain(
-			'| canonical API | `${{ steps.preview_config.outputs.api_origin }}`'
-		)
+		expect(staging).toContain('| canonical API | `${{ steps.preview_config.outputs.api_origin }}`')
 		expect(staging).not.toMatch(/\| (?:auth|users) \|/)
 
 		const cleanup = entry(entries, '.github/workflows/cleanup-staging.yml')
@@ -553,41 +566,52 @@ describe('Cloudflare gateway preview contracts', () => {
 		const cleanup = entry(generated, 'scripts/cleanup-cloudflare-preview-workers.sh')
 		await shellSyntax(cleanup)
 		expect(cleanup).toContain('set -eu')
-		expect(cleanup).toContain('Could not inventory preview Workers: apps and services directories are missing.')
-		expect(cleanup).toContain('Could not inventory preview Workers: no Wrangler configurations found.')
+		expect(cleanup).toContain(
+			'Could not inventory preview Workers: apps and services directories are missing.'
+		)
+		expect(cleanup).toContain(
+			'Could not inventory preview Workers: no Wrangler configurations found.'
+		)
 		expect(cleanup).toContain('npx wrangler@4.125.0 deployments list --name "$worker_name" --json')
 		expect(cleanup).toContain('npx wrangler@4.125.0 delete --name "$worker_name" --force')
 		expect(cleanup).not.toContain('|| true')
 
-		const directoriesMissing = await runCleanupScript(cleanup, 'directories-missing')
+		const directoriesMissing = await runCleanupScript({
+			source: cleanup,
+			mode: 'directories-missing'
+		})
 		expect(directoriesMissing.exitCode).toBe(1)
 		expect(directoriesMissing.stderr).toContain(
 			'Could not inventory preview Workers: apps and services directories are missing.'
 		)
 
-		const inventoryFailure = await runCleanupScript(cleanup, 'inventory-failure')
+		const inventoryFailure = await runCleanupScript({
+			source: cleanup,
+			mode: 'inventory-failure'
+		})
 		expect(inventoryFailure.exitCode).toBe(17)
 		expect(inventoryFailure.stderr).toContain('mock deployment inventory failure')
 
-		const deletionFailure = await runCleanupScript(cleanup, 'delete-failure')
+		const deletionFailure = await runCleanupScript({
+			source: cleanup,
+			mode: 'delete-failure'
+		})
 		expect(deletionFailure.exitCode).toBe(23)
 		expect(deletionFailure.stderr).toContain('mock Worker deletion failure')
 
-		const missingWorker = await runCleanupScript(cleanup, 'missing')
+		const missingWorker = await runCleanupScript({ source: cleanup, mode: 'missing' })
 		expect(missingWorker.exitCode).toBe(0)
 		expect(missingWorker.stdout).toContain(
 			'Preview Worker demo-web-pr-123 is missing or already deleted.'
 		)
 		expect(missingWorker.stdout).not.toContain('Deleting demo-web-pr-123')
 
-		const success = await runCleanupScript(cleanup, 'success')
+		const success = await runCleanupScript({ source: cleanup, mode: 'success' })
 		expect(success.exitCode).toBe(0)
 		expect(success.stdout).toContain('Deleting demo-web-pr-123')
-		expect(success.stdout).toContain(
-			'Deleted demo-web-pr-123 and its attached preview routes.'
-		)
+		expect(success.stdout).toContain('Deleted demo-web-pr-123 and its attached preview routes.')
 
-		const names = await previewNames(generated)
+		const names = await previewNames({ entries: generated })
 		expect(names.validateCloudflarePreviewAlias('pr-123')).toBe('pr-123')
 		expect(() => names.validateCloudflarePreviewAlias('demo-web')).toThrow()
 		expect(() => names.validateCloudflarePreviewAlias('pr-0')).toThrow()
@@ -655,9 +679,9 @@ describe('Cloudflare gateway preview contracts', () => {
 		const cfg = makeCfg({ db: 'sqlite' })
 		const deployEntries = generateDeploy(cfg)
 		const staging = entry(deployEntries, '.github/workflows/deploy-staging.yml')
-		const usersPackage = JSON.parse(
-			entry(runGenerators(cfg), 'services/users/package.json')
-		) as { scripts: Record<string, string> }
+		const usersPackage = JSON.parse(entry(runGenerators(cfg), 'services/users/package.json')) as {
+			scripts: Record<string, string>
+		}
 
 		expect(staging).toContain(
 			'STAGING_SECRETS_FILE: ${{ steps.preview_secrets.outputs.auth_file }}'

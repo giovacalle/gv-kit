@@ -1,7 +1,6 @@
-import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
+import { describe, expect, test } from 'bun:test'
 import { runGenerators } from '../../src/generators/index.js'
 import { GvKitConfig } from '../../src/schema/config.js'
 import { parseJsonc } from '../util/jsonc.js'
@@ -84,9 +83,7 @@ describe('inside-frontend topology', () => {
 				if (deploy === 'cf-workers') {
 					expect(guidance, reference).toContain(`\`${reference}\``)
 					expect(planPaths, reference).toContain(reference)
-				} else {
-					expect(guidance, reference).not.toContain(`\`${reference}\``)
-				}
+				} else expect(guidance, reference).not.toContain(`\`${reference}\``)
 			}
 		})
 	}
@@ -123,12 +120,8 @@ describe('inside-frontend topology', () => {
 				}
 			})
 			const entries = runGenerators(cfg)
-			const marketingPackage = entries.find(
-				(entry) => entry.path === 'apps/marketing/package.json'
-			)
-			const mailerReadme = entries.find(
-				(entry) => entry.path === 'packages/mailer/README.md'
-			)
+			const marketingPackage = entries.find((entry) => entry.path === 'apps/marketing/package.json')
+			const mailerReadme = entries.find((entry) => entry.path === 'packages/mailer/README.md')
 			if (!marketingPackage) throw new Error('generated marketing package is missing')
 			if (!mailerReadme) throw new Error('generated mailer README is missing')
 
@@ -150,23 +143,16 @@ describe('inside-frontend topology', () => {
 		})
 
 		const expectsWebWrangler = cfg.choices.deploy === 'cf-workers'
-		test(
-			`${file} ${
-				expectsWebWrangler ? 'emits' : 'does NOT emit'
-			} apps/web/wrangler.jsonc`,
-			() => {
-				const entries = runGenerators(cfg)
-				const webWrangler = entries.find((e) => e.path === 'apps/web/wrangler.jsonc')
+		test(`${file} ${
+			expectsWebWrangler ? 'emits' : 'does NOT emit'
+		} apps/web/wrangler.jsonc`, () => {
+			const entries = runGenerators(cfg)
+			const webWrangler = entries.find((e) => e.path === 'apps/web/wrangler.jsonc')
 
-				if (expectsWebWrangler) {
-					expect(webWrangler).toBeDefined()
-					if (cfg.choices.auth.length > 0) {
-						expect(webWrangler!.content).toContain('BETTER_AUTH_SECRET')
-					}
-				} else {
-					expect(webWrangler).toBeUndefined()
-				}
-			}
-		)
+			if (expectsWebWrangler) {
+				expect(webWrangler).toBeDefined()
+				if (cfg.choices.auth.length > 0) expect(webWrangler!.content).toContain('BETTER_AUTH_SECRET')
+			} else expect(webWrangler).toBeUndefined()
+		})
 	}
 })

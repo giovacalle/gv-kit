@@ -242,7 +242,7 @@ function wranglerJsonc({ project, usesSqlite }: { project: string; usesSqlite: b
 function envDts({ usesSqlite }: { usesSqlite: boolean }): string {
 	const nodeDb = usesSqlite ? '\t\tSQLITE_PATH?: string' : '\t\tDATABASE_URL?: string'
 
-	return `// Hand-edited Env declaration; merges with wrangler-generated worker-configuration.d.ts.
+	return `// OpenAPIHono needs ambient Env types even though Node reads these values from process.env.
 declare global {
 	interface Env {
 		${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string
@@ -411,7 +411,6 @@ app.use('*', errorHandler())
 
 app.get('/healthz', (c) => c.text('ok'))
 
-// ${PUBLIC_USERS_PREFIX}/* requires a valid session.
 app.use('${PUBLIC_USERS_PREFIX}/*', requireAuth)
 
 app.route('${PUBLIC_USERS_PREFIX}', meRouter)
@@ -501,7 +500,7 @@ or browser-facing service URL.
 
 This service MUST NOT:
 
-- Import \`@repo/backend/auth\`
+- Configure Better Auth
 - Read \`BETTER_AUTH_SECRET\` or any OAuth secret
 - Query auth tables (\`account\`, \`session\`, \`verification\`, etc.) directly
 

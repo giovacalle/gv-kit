@@ -12,7 +12,7 @@ type GeneratorFn = (cfg: GvKitConfig) => FileEntry[]
 - **Tight scope.** One concern per generator (e.g., `tooling/eslint`, `apps/web/sveltekit`, `apps/api` gateway, `services/auth`).
 - **Idle-compilable.** When a feature flag is OFF, the generator either emits nothing or emits a stub that still typechecks at the project root.
 - **Stable order.** Generators may rely on `plan` to sort and de-dupe by path.
-- **Preserve the gateway topology.** `apps/api` is public ingress; deployable domain workers belong under `services/<service>`. Service generators must not add cross-service domain state to `packages/backend`.
+- **Preserve the layered gateway topology.** `packages/backend` is the shared application/core layer. `services/<service>` contains independently deployable transport/runtime adapters that may consume its modules. `apps/api` remains thin public ingress and must not become a business orchestration layer.
 
 ## Output shape
 

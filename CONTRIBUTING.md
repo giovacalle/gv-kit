@@ -67,9 +67,11 @@ building images or starting containers.
 
 ## Gateway and service boundary policy
 
-`apps/api/` is the public gateway. `services/users/` (and any future non-auth service) MUST NOT:
+`packages/backend/` is the shared backend application/core layer for reusable data access, use cases, types, helpers, and middleware. Independently deployable packages under `services/` are transport/runtime adapters and may import the application modules they need from `@repo/backend`.
 
-- import `@repo/backend/auth`
+`apps/api/` is the public gateway. Keep it limited to ingress, routing, operational middleware, OpenAPI delivery, and transparent forwarding. It must not import application use cases or orchestrate business workflows. `services/users/` (and any future non-auth service) MUST NOT:
+
+- configure Better Auth
 - read `BETTER_AUTH_SECRET` or OAuth secrets
 - query the auth tables directly
 

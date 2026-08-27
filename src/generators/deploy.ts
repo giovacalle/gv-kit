@@ -316,9 +316,7 @@ const previewApiDomain = domain('CLOUDFLARE_PREVIEW_API_DOMAIN')
 for (const [name, value] of [
 	['CLOUDFLARE_PREVIEW_WEB_DOMAIN', previewWebDomain],
 	['CLOUDFLARE_PREVIEW_API_DOMAIN', previewApiDomain]
-]) {
-	if (value !== previewZoneName && !value.endsWith('.' + previewZoneName)) throw new Error(name + ' must belong to CLOUDFLARE_PREVIEW_ZONE_NAME')
-}
+]) if (value !== previewZoneName && !value.endsWith('.' + previewZoneName)) throw new Error(name + ' must belong to CLOUDFLARE_PREVIEW_ZONE_NAME')
 if (previewWebDomain === previewApiDomain) throw new Error('Managed preview web and API domains must be distinct')
 const localHosts = ['localhost:3000', 'localhost:5173', 'localhost:8786', '127.0.0.1:8786']
 const localOrigins = [
@@ -374,12 +372,8 @@ for (const { config, configPath, normalizedPath, productionName } of sources) {
 			{ pattern: webOrigin.host + '/api/*', zone_name: previewZoneName }
 		]
 	}
-	if (normalizedPath === 'apps/web/wrangler.jsonc' && webOrigin) {
-		config.routes = [{ pattern: webOrigin.host + '/*', zone_name: previewZoneName }]
-	}
-	if (normalizedPath === 'apps/marketing/wrangler.jsonc' && marketingOrigin) {
-		config.routes = [{ pattern: marketingOrigin.host + '/*', zone_name: previewZoneName }]
-	}
+	if (normalizedPath === 'apps/web/wrangler.jsonc' && webOrigin) config.routes = [{ pattern: webOrigin.host + '/*', zone_name: previewZoneName }]
+	if (normalizedPath === 'apps/marketing/wrangler.jsonc' && marketingOrigin) config.routes = [{ pattern: marketingOrigin.host + '/*', zone_name: previewZoneName }]
 	if (isPrivateService) delete config.routes
 
 	if (process.env.PREVIEW_DB_KIND === 'd1' && Array.isArray(config.d1_databases)) {
@@ -484,12 +478,8 @@ writeSecrets('users.json', ${JSON.stringify(usersSources)})
 function marketingMonitoringEnvKeys(cfg: GvKitConfig): string[] {
 	if (cfg.choices.marketing !== 'astro') return []
 	const keys: string[] = []
-	if (cfg.choices.monitoring.includes('umami')) {
-		keys.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
-	}
-	if (cfg.choices.monitoring.includes('posthog')) {
-		keys.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
-	}
+	if (cfg.choices.monitoring.includes('umami')) keys.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
+	if (cfg.choices.monitoring.includes('posthog')) keys.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
 	return keys
 }
 
@@ -498,9 +488,7 @@ function marketingPublicEnvKeys(cfg: GvKitConfig): string[] {
 		cfg.choices.marketing === 'astro'
 			? ['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL', ...marketingMonitoringEnvKeys(cfg)]
 			: []
-	if (cfg.choices.auth.length > 0 && cfg.choices.backend === 'inside-frontend') {
-		keys.push('PUBLIC_AUTH_URL')
-	}
+	if (cfg.choices.auth.length > 0 && cfg.choices.backend === 'inside-frontend') keys.push('PUBLIC_AUTH_URL')
 	if (cfg.choices.auth.includes('emailOTP')) keys.push('PUBLIC_TURNSTILE_SITE_KEY')
 	return keys
 }
@@ -686,15 +674,11 @@ ${publicVariableChecks}
 
 function previewAuthSecretKeys(cfg: GvKitConfig): string[] {
 	const keys = ['BETTER_AUTH_SECRET']
-	if (cfg.choices.auth.includes('google')) {
-		keys.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
-	}
+	if (cfg.choices.auth.includes('google')) keys.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 	if (cfg.choices.auth.includes('emailOTP')) {
 		keys.push('TURNSTILE_SECRET_KEY')
 		if (cfg.choices.email === 'resend') keys.push('RESEND_API_KEY', 'FROM_EMAIL')
-		if (cfg.choices.email === 'notifuse') {
-			keys.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
-		}
+		if (cfg.choices.email === 'notifuse') keys.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
 	}
 	return keys
 }
@@ -740,7 +724,9 @@ function deployStagingWorkflow({
 	const previewPublicKeys = cfg.choices.auth.includes('emailOTP')
 		? ['PUBLIC_TURNSTILE_SITE_KEY']
 		: []
-	const previewIngressGate = isHono ? honoPreviewIngressGateJob({ publicKeys: previewPublicKeys }) : ''
+	const previewIngressGate = isHono
+		? honoPreviewIngressGateJob({ publicKeys: previewPublicKeys })
+		: ''
 	const basePreviewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
 	const previewDbJob = isHono
 		? basePreviewDbJob.replace('  preview-db:\n', '  preview-db:\n    needs: preview-ingress\n')
@@ -1584,9 +1570,7 @@ server {
 function webService(opts: DockerOpts): string {
 	const env: string[] = ['      ORIGIN: ${ORIGIN:-http://localhost:3000}']
 	const buildArgs = [`        TURBO_FILTER: "${opts.project}-web"`]
-	if (opts.hasMarketing) {
-		buildArgs.push('        PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}')
-	}
+	if (opts.hasMarketing) buildArgs.push('        PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}')
 	if (opts.wantsEmailOTP) {
 		buildArgs.push(
 			'        PUBLIC_TURNSTILE_SITE_KEY: ${PUBLIC_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}'
@@ -1613,9 +1597,7 @@ function webService(opts: DockerOpts): string {
 				'      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET in .env}'
 			)
 		}
-		if (opts.wantsEmailOTP && opts.emailProvider === 'resend') {
-			env.push('      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}')
-		}
+		if (opts.wantsEmailOTP && opts.emailProvider === 'resend') env.push('      RESEND_API_KEY: ${RESEND_API_KEY:?set RESEND_API_KEY in .env}')
 		if (opts.wantsEmailOTP && opts.emailProvider === 'notifuse') {
 			env.push(
 				'      NOTIFUSE_API_KEY: ${NOTIFUSE_API_KEY:?set NOTIFUSE_API_KEY in .env}',

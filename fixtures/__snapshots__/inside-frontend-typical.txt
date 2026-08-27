@@ -1,7 +1,7 @@
 .ai/rules/api-backend.md  cf849b994b5d137b
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
-.ai/rules/core-stack.md  1df225067604bebe
+.ai/rules/core-stack.md  944e1767a2532ed6
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  fe60b64681c2ba9a
 .ai/rules/core-workflow.md  c0b91360c88010c3
@@ -10,7 +10,7 @@
 .ai/rules/hooks.md  6dd03126d2ec9420
 .ai/rules/web-forms.md  ad7077ecf1b07f9c
 .ai/rules/web-seo.md  4d46fd12199ce1b5
-.ai/rules/web-svelte.md  e877ef0b77404373
+.ai/rules/web-svelte.md  3534967450f7c582
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
 .ai/rules/web-ui.md  f87ef5a718ba2b06
 .claude/agents/implement.md  4911ccc444011d04
@@ -28,12 +28,12 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
-CLAUDE.md  da5f8f73040cd697
+CLAUDE.md  ffda38869db1999c
 LICENSE  508a77d2e7b51d98
-README.md  94aff985d81c4c21
+README.md  1c673e82ca3ed4c9
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  4e97a4b718e68f84
+apps/web/CLAUDE.md  e761472bcc14996d
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  98726569aca10c3e
 apps/web/prettier.config.js  76a534fdcb4541a5

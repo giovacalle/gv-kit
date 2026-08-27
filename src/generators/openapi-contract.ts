@@ -130,20 +130,22 @@ export function composeGatewayOpenApi({
 }
 
 function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string, string>): void {
-	if (fragment.document.servers !== undefined)
-		throw new Error(`OpenAPI fragment "${fragment.owner}" must not declare servers`)
-	if (fragment.document.openapi !== '3.0.0')
+	if (fragment.document.servers !== undefined) throw new Error(`OpenAPI fragment "${fragment.owner}" must not declare servers`)
+	if (fragment.document.openapi !== '3.0.0') {
 		throw new Error(
 			`OpenAPI fragment "${fragment.owner}" uses ${fragment.document.openapi}; expected 3.0.0`
 		)
-	if (Object.keys(fragment.document.components?.callbacks ?? {}).length > 0)
+	}
+	if (Object.keys(fragment.document.components?.callbacks ?? {}).length > 0) {
 		throw new Error(
 			`OpenAPI fragment "${fragment.owner}" uses unsupported callbacks at components.callbacks`
 		)
-	if (Object.keys(fragment.document.components?.links ?? {}).length > 0)
+	}
+	if (Object.keys(fragment.document.components?.links ?? {}).length > 0) {
 		throw new Error(
 			`OpenAPI fragment "${fragment.owner}" uses unsupported Link Objects at components.links`
 		)
+	}
 	for (const [name, response] of Object.entries(fragment.document.components?.responses ?? {})) {
 		rejectResponseLinks({
 			response,
@@ -153,18 +155,21 @@ function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string
 	}
 
 	for (const [path, pathItem] of Object.entries(fragment.document.paths)) {
-		if (path === '/api/auth' || path.startsWith('/api/auth/') || !path.startsWith('/api/v1/'))
+		if (path === '/api/auth' || path.startsWith('/api/auth/') || !path.startsWith('/api/v1/')) {
 			throw new Error(
 				`OpenAPI fragment "${fragment.owner}" path "${path}" must use a public /api/v1 path`
 			)
-		if (pathItem.$ref !== undefined)
+		}
+		if (pathItem.$ref !== undefined) {
 			throw new Error(
 				`OpenAPI fragment "${fragment.owner}" uses unsupported Path Item $ref at paths.${path}.$ref`
 			)
-		if (pathItem.servers !== undefined)
+		}
+		if (pathItem.servers !== undefined) {
 			throw new Error(
 				`OpenAPI fragment "${fragment.owner}" must not declare servers at paths.${path}.servers`
 			)
+		}
 		validateParameterList({
 			value: pathItem.parameters,
 			location: `paths.${path}.parameters`,
@@ -172,32 +177,38 @@ function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string
 		})
 		for (const [method, value] of Object.entries(pathItem)) {
 			if (!HTTP_METHODS.has(method)) continue
-			if (!isJsonObject(value))
+			if (!isJsonObject(value)) {
 				throw new Error(
 					`OpenAPI fragment "${fragment.owner}" has an invalid operation at ${path}.${method}`
 				)
-			if (value.callbacks !== undefined)
+			}
+			if (value.callbacks !== undefined) {
 				throw new Error(
 					`OpenAPI fragment "${fragment.owner}" uses unsupported callbacks at paths.${path}.${method}.callbacks`
 				)
-			if (value.servers !== undefined)
+			}
+			if (value.servers !== undefined) {
 				throw new Error(
 					`OpenAPI fragment "${fragment.owner}" must not declare servers at paths.${path}.${method}.servers`
 				)
+			}
 			const operationId = value.operationId
-			if (typeof operationId !== 'string' || operationId.length === 0)
+			if (typeof operationId !== 'string' || operationId.length === 0) {
 				throw new Error(
 					`OpenAPI fragment "${fragment.owner}" is missing operationId at ${path}.${method}`
 				)
-			if (!operationId.startsWith(fragment.operationIdPrefix))
+			}
+			if (!operationId.startsWith(fragment.operationIdPrefix)) {
 				throw new Error(
 					`OpenAPI operationId "${operationId}" at ${path}.${method} must start with "${fragment.operationIdPrefix}"`
 				)
+			}
 			const firstOwner = operationOwners.get(operationId)
-			if (firstOwner)
+			if (firstOwner) {
 				throw new Error(
 					`duplicate operationId "${operationId}" in fragments "${firstOwner}" and "${fragment.owner}"`
 				)
+			}
 			operationOwners.set(operationId, fragment.owner)
 			validateParameterList({
 				value: value.parameters,
@@ -240,8 +251,7 @@ function validateParameterList({
 	fragment: OpenApiFragment
 }): void {
 	if (value === undefined) return
-	if (!Array.isArray(value))
-		throw new Error(`OpenAPI fragment "${fragment.owner}" has invalid parameters at ${location}`)
+	if (!Array.isArray(value)) throw new Error(`OpenAPI fragment "${fragment.owner}" has invalid parameters at ${location}`)
 	const parameters = new Map<string, JsonValue>()
 	for (const [index, parameter] of value.entries()) {
 		const descriptor = parameterDescriptor({
@@ -252,10 +262,11 @@ function validateParameterList({
 		})
 		if (!descriptor.identity) continue
 		const existing = parameters.get(descriptor.identity)
-		if (existing && !jsonEqual(existing, descriptor.definition))
+		if (existing && !jsonEqual(existing, descriptor.definition)) {
 			throw new Error(
 				`parameter collision at ${location}.${descriptor.identity} in fragment "${fragment.owner}"`
 			)
+		}
 		parameters.set(descriptor.identity, descriptor.definition)
 	}
 }
@@ -274,8 +285,7 @@ function mergePaths({
 	for (const [path, incoming] of Object.entries(fragment.document.paths)) {
 		const identity = path.replaceAll(/\{[^}]+\}/g, '{}')
 		const equivalentPath = pathIdentities.get(identity)
-		if (equivalentPath && equivalentPath !== path)
-			throw new Error(`path collision between templates "${equivalentPath}" and "${path}"`)
+		if (equivalentPath && equivalentPath !== path) throw new Error(`path collision between templates "${equivalentPath}" and "${path}"`)
 		pathIdentities.set(identity, path)
 		const existing = target[path]
 		if (!existing) {
@@ -318,8 +328,7 @@ function mergeParameters({
 	parameterComponents: Record<string, JsonValue> | undefined
 	owner: string
 }): JsonValue[] {
-	if (!Array.isArray(existing) || !Array.isArray(incoming))
-		throw new Error(`parameter collision at ${location}`)
+	if (!Array.isArray(existing) || !Array.isArray(incoming)) throw new Error(`parameter collision at ${location}`)
 	const merged = structuredClone(existing)
 	const byIdentity = new Map<string, JsonValue>()
 	for (const [index, parameter] of merged.entries()) {
@@ -339,13 +348,11 @@ function mergeParameters({
 			owner
 		})
 		if (!descriptor.identity) {
-			if (!merged.some((candidate) => jsonEqual(candidate, parameter)))
-				merged.push(structuredClone(parameter))
+			if (!merged.some((candidate) => jsonEqual(candidate, parameter))) merged.push(structuredClone(parameter))
 			continue
 		}
 		const current = byIdentity.get(descriptor.identity)
-		if (current && !jsonEqual(current, descriptor.definition))
-			throw new Error(`parameter collision at ${location}.${descriptor.identity}`)
+		if (current && !jsonEqual(current, descriptor.definition)) throw new Error(`parameter collision at ${location}.${descriptor.identity}`)
 		if (!current) {
 			merged.push(structuredClone(parameter))
 			byIdentity.set(descriptor.identity, descriptor.definition)
@@ -362,8 +369,7 @@ function mergeComponents(
 		const targetGroup = (target[group] ??= {})
 		for (const [name, value] of Object.entries(entries)) {
 			const existing = targetGroup[name]
-			if (existing !== undefined && !jsonEqual(existing, value))
-				throw new Error(`component collision at components.${group}.${name}`)
+			if (existing !== undefined && !jsonEqual(existing, value)) throw new Error(`component collision at components.${group}.${name}`)
 			if (existing === undefined) targetGroup[name] = structuredClone(value)
 		}
 	}
@@ -408,20 +414,23 @@ function resolveParameterReference({
 }): JsonValue {
 	const prefix = '#/components/parameters/'
 	const encodedName = reference.startsWith(prefix) ? reference.slice(prefix.length) : ''
-	if (!encodedName || encodedName.includes('/') || /~(?:[^01]|$)/.test(encodedName))
+	if (!encodedName || encodedName.includes('/') || /~(?:[^01]|$)/.test(encodedName)) {
 		throw new Error(
 			`OpenAPI fragment "${owner}" uses unsupported parameter reference "${reference}" at ${location}`
 		)
-	if (seen.has(reference))
+	}
+	if (seen.has(reference)) {
 		throw new Error(
 			`OpenAPI fragment "${owner}" has cyclic parameter reference "${reference}" at ${location}`
 		)
+	}
 	const name = encodedName.replaceAll('~1', '/').replaceAll('~0', '~')
 	const definition = parameterComponents?.[name]
-	if (definition === undefined)
+	if (definition === undefined) {
 		throw new Error(
 			`OpenAPI fragment "${owner}" cannot resolve parameter reference "${reference}" at ${location}`
 		)
+	}
 	if (isJsonObject(definition) && typeof definition.$ref === 'string') {
 		return resolveParameterReference({
 			reference: definition.$ref,
@@ -431,17 +440,16 @@ function resolveParameterReference({
 			seen: new Set([...seen, reference])
 		})
 	}
-	if (!directParameterIdentity(definition))
+	if (!directParameterIdentity(definition)) {
 		throw new Error(
 			`OpenAPI fragment "${owner}" cannot determine parameter identity for "${reference}" at ${location}`
 		)
+	}
 	return definition
 }
 
 function directParameterIdentity(value: JsonValue): string | undefined {
-	if (!isJsonObject(value) || typeof value.in !== 'string' || typeof value.name !== 'string') {
-		return undefined
-	}
+	if (!isJsonObject(value) || typeof value.in !== 'string' || typeof value.name !== 'string') return undefined
 	const name = value.in === 'header' ? value.name.toLowerCase() : value.name
 	return `${value.in}:${name}`
 }

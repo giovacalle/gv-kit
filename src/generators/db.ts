@@ -31,8 +31,7 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 		}
 	]
 
-	if (hasAuth)
-		entries.push({ path: 'packages/db/src/schema/auth.ts', content: renderAuthSchema(isSqlite) })
+	if (hasAuth) entries.push({ path: 'packages/db/src/schema/auth.ts', content: renderAuthSchema(isSqlite) })
 	if (isHono && isCf && isSqlite) {
 		entries.push({
 			path: 'packages/db/wrangler.jsonc',

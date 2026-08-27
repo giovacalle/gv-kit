@@ -5,10 +5,10 @@
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
 LICENSE  508a77d2e7b51d98
-README.md  57978be0c4e034e8
+README.md  64bee823133b3c1d
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  799754a3a0672889
+apps/web/CLAUDE.md  53a9a39ad2f3ee28
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  362ffdd2f44a302f
 apps/web/prettier.config.js  76a534fdcb4541a5

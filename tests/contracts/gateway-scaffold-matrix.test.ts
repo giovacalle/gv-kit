@@ -2,17 +2,17 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import {
+	assertPermittedWranglerInvocation,
+	redactArtifactText,
+	unsafeArtifactFindings
+} from '../../scripts/gateway-verification-evidence.js'
+import {
 	buildRunMetadata,
 	COVERAGE_RATIONALE,
 	GATEWAY_SCAFFOLD_MATRIX,
 	uncoveredMaterialInteractions,
 	uncoveredMaterialValues
 } from '../../scripts/verify-gateway-scaffold-matrix.js'
-import {
-	assertPermittedWranglerInvocation,
-	redactArtifactText,
-	unsafeArtifactFindings
-} from '../../scripts/gateway-verification-evidence.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../../src/pipeline/plan.js'
 import { GvKitConfig } from '../../src/schema/config.js'
@@ -65,9 +65,9 @@ describe('gateway generated-workspace verification matrix', () => {
 		)
 		const config = GvKitConfig.parse(raw)
 		const plan = buildScaffoldPlan(config)
-		const rootPackage = JSON.parse(
-			plan.find(({ path }) => path === 'package.json')!.content
-		) as { scripts: Record<string, string> }
+		const rootPackage = JSON.parse(plan.find(({ path }) => path === 'package.json')!.content) as {
+			scripts: Record<string, string>
+		}
 		const webGuidance = plan.find(({ path }) => path === '.ai/rules/web-svelte.md')!.content
 		const generatedText = plan
 			.filter(({ path }) => /\.(?:json|md|svelte|ts)$/.test(path))
@@ -152,15 +152,14 @@ describe('gateway generated-workspace verification matrix', () => {
 			['exec', 'wrangler', 'types'],
 			['exec', 'wrangler', 'deploy'],
 			['exec', 'wrangler', '--dry-run', 'deploy']
-		]) {
-			expect(() => assertPermittedWranglerInvocation(args)).toThrow()
-		}
+		]) expect(() => assertPermittedWranglerInvocation(args)).toThrow()
 	})
 
 	test('partial entry reports require reconciliation until the full matrix completes', () => {
-		const partial = buildRunMetadata([GATEWAY_SCAFFOLD_MATRIX[0]!], [
-			{ id: GATEWAY_SCAFFOLD_MATRIX[0]!.id }
-		])
+		const partial = buildRunMetadata(
+			[GATEWAY_SCAFFOLD_MATRIX[0]!],
+			[{ id: GATEWAY_SCAFFOLD_MATRIX[0]!.id }]
+		)
 		expect(partial).toMatchObject({
 			scope: 'entry',
 			state: 'partial',
@@ -213,9 +212,7 @@ describe('gateway generated-workspace verification matrix', () => {
 		const local = readFileSync(join(root, 'scripts/verify-gateway-local.ts'), 'utf8')
 		expect(local).toContain("'RESEND_API_KEY'")
 		expect(local).toContain("'NOTIFUSE_API_KEY'")
-		expect(local).toContain(
-			'for (const name of LOCAL_ENVIRONMENT_NAMES) delete environment[name]'
-		)
+		expect(local).toContain('for (const name of LOCAL_ENVIRONMENT_NAMES) delete environment[name]')
 		expect(local).toContain("['cf-workers', 'docker', 'skip']")
 		expect(local).toContain("deploy === 'docker' ? 'http://localhost:3000'")
 	})

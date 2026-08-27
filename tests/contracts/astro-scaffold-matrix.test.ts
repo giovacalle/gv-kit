@@ -60,9 +60,7 @@ describe('Astro generated-project verification matrix', () => {
 		for (const unsupported of UNSUPPORTED_ASTRO_CASES) {
 			const parsed = GvKitConfig.safeParse(unsupported.config)
 			expect(parsed.success).toBe(false)
-			if (!parsed.success) {
-				expect(parsed.error.issues.map((issue) => issue.message)).toContain(unsupported.expected)
-			}
+			if (!parsed.success) expect(parsed.error.issues.map((issue) => issue.message)).toContain(unsupported.expected)
 		}
 	})
 

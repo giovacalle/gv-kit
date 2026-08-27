@@ -185,9 +185,7 @@ describe('generateAiTooling — Astro marketing guidance', () => {
 				codex: '.codex/agents/astro-marketer.toml',
 				opencode: '.opencode/agents/astro-marketer.md'
 			} as const
-			for (const [tool, specialist] of Object.entries(specialistByTool)) {
-				expect(p.includes(specialist)).toBe((selected as readonly string[]).includes(tool))
-			}
+			for (const [tool, specialist] of Object.entries(specialistByTool)) expect(p.includes(specialist)).toBe((selected as readonly string[]).includes(tool))
 		})
 	}
 
@@ -233,6 +231,7 @@ describe('generated Hono gateway guidance', () => {
 			const backendRule = content(entries, '.ai/rules/api-backend.md')
 			const webRule = content(entries, '.ai/rules/web-svelte.md')
 			const webInstructions = content(entries, 'apps/web/CLAUDE.md')
+			const rootReadme = content(entries, 'README.md')
 			const guidance = entries
 				.filter(
 					(entry) =>
@@ -259,25 +258,39 @@ describe('generated Hono gateway guidance', () => {
 			expect(coreRule).toContain('`@repo/backend/middleware/auth` transport')
 			expect(coreRule).toContain('`/internal/session`')
 			expect(coreRule).toContain('`AUTH` binding')
+			expect(coreRule).toContain('shared backend application/core layer')
+			expect(coreRule).toContain('transport/runtime adapters')
+			expect(coreRule).toMatch(
+				/does not import application use\s+cases or orchestrate business workflows/
+			)
 			expect(coreRule).toContain('must not import or mount a private service application')
 			expect(coreRule).toContain('never hairpin through the gateway')
 			expect(coreRule).toContain('credentialed wildcard CORS')
-			expect(coreRule).toContain('must not gain a public route, workers.dev hostname, or preview URL')
+			expect(coreRule).toContain(
+				'must not gain a public route, workers.dev hostname, or preview URL'
+			)
 			expect(coreRule).not.toContain('/src/lib/auth-client.ts')
 			expect(coreRule).not.toContain('Each consumer keeps a local small transport client')
 			expect(backendRule).toContain('public Hono gateway lives at `apps/api/`')
-			expect(backendRule).toContain('private workers live under `services/<service>/`')
+			expect(backendRule).toContain('transport/runtime adapters live under `services/<service>/`')
 			expect(backendRule).toContain('flat `@repo/openapi-client` package')
 			expect(backendRule).toContain('same-origin `/api/*`')
 			expect(backendRule).toContain("web Worker's `GATEWAY` Service Binding")
 			expect(backendRule).toContain('Never import a service app into the gateway')
 			expect(backendRule).toContain('Never send an internal service call through the gateway')
 			expect(backendRule).toContain('Never combine credentials with a wildcard CORS origin')
+			expect(backendRule).toContain('shared backend application/core layer')
+			expect(backendRule).toContain('transport/runtime adapters')
 			expect(webRule).toContain('Flat generated client for the public gateway contract')
 			expect(webRule).toContain("web Worker's `GATEWAY` Service Binding")
 			expect(webInstructions).toContain('`apps/api/` is the public API gateway')
 			expect(webInstructions).toContain('only backend Service Binding is `GATEWAY`')
+			expect(rootReadme).toContain('shared backend application/core layer')
+			expect(rootReadme).toContain('transport/runtime adapters')
 			expect(guidance).toContain('`@repo/openapi-client`')
+			expect(guidance).not.toMatch(
+				/horizontal helpers(?: only)?|horizontal concerns|packages\/backend[^\n]*(?:no domain logic|ONLY)|cross-service (?:domain logic|domain state|infra)/i
+			)
 			expect(guidance).not.toContain('apps/api/<service>')
 			expect(guidance).not.toContain('apps/api/<svc>')
 			expect(guidance).not.toContain('SvelteKit calls a service via the appropriate URL/binding')
@@ -288,9 +301,7 @@ describe('generated Hono gateway guidance', () => {
 				const settings = content(entries, '.claude/settings.json')
 				expect(settings).toContain('Read(./services/**/.dev.vars)')
 				expect(settings).not.toContain('Read(./apps/api/**/.dev.vars)')
-			} else {
-				expect(entries.some((entry) => entry.path === '.claude/settings.json')).toBe(false)
-			}
+			} else expect(entries.some((entry) => entry.path === '.claude/settings.json')).toBe(false)
 
 			if (selected === 'codex') {
 				const agents = content(entries, 'AGENTS.md')
@@ -326,7 +337,7 @@ describe('generated Hono gateway guidance', () => {
 
 		expect(guidance).toContain('flat `@repo/openapi-client` package')
 		expect(guidance).toContain('domain-prefixed operations')
-		expect(guidance).toContain("request-scoped `fetch`")
+		expect(guidance).toContain('request-scoped `fetch`')
 		expect(guidance).toContain('official Better Auth client')
 		expect(guidance).toContain('Do not send owned API operations through Better Auth')
 		expect(inventory).toContainEqual({
@@ -338,6 +349,58 @@ describe('generated Hono gateway guidance', () => {
 			resolvedPath: '.ai/rules/web-query.md'
 		})
 		expectCapabilityPathsToResolve(entries)
+	})
+
+	for (const { label, auth, email } of [
+		{ label: 'auth', auth: ['emailOTP'] as const, email: 'resend' as const },
+		{ label: 'no-auth', auth: [] as const, email: 'skip' as const }
+	]) {
+		test(`${label} guidance resolves the generated auth owner and session seam`, () => {
+			const entries = runGenerators(
+				makeCfg(['claude', 'codex', 'opencode'], { auth: [...auth], email })
+			)
+			const guidance = markdownGuidance(entries)
+			const backendPackage = JSON.parse(content(entries, 'packages/backend/package.json')) as {
+				exports: Record<string, string>
+			}
+			const planPaths = entries.map(({ path }) => path)
+
+			expect(guidance).not.toContain('@repo/backend/auth')
+			expect(guidance).not.toMatch(/auth factory/i)
+			expect(guidance).toContain('`services/auth/src/auth.ts`')
+			expect(guidance).toMatch(/configures Better Auth directly/i)
+			expect(guidance).toContain('`@repo/backend/middleware/auth`')
+			expect(planPaths).toContain('services/auth/src/auth.ts')
+			expect(backendPackage.exports['./auth']).toBeUndefined()
+			expect(backendPackage.exports['./middleware/auth']).toBe('./src/middleware/auth/index.ts')
+			expect(planPaths).toContain(
+				`packages/backend/${backendPackage.exports['./middleware/auth']!.replace(/^\.\//, '')}`
+			)
+		})
+	}
+})
+
+describe('generated integrated-backend guidance', () => {
+	test('describes packages/backend as the shared application layer', () => {
+		const entries = runGenerators(
+			makeCfg(['claude', 'codex', 'opencode'], { backend: 'inside-frontend' })
+		)
+		const guidance = markdownGuidance(entries)
+		const backendPackage = JSON.parse(content(entries, 'packages/backend/package.json')) as {
+			exports: Record<string, string>
+		}
+
+		expect(guidance).toContain('shared backend application/core layer')
+		expect(guidance).toContain('data access, use cases, types, helpers, and middleware')
+		expect(guidance).not.toMatch(
+			/horizontal helpers(?: only)?|horizontal concerns|packages\/backend[^\n]*(?:no domain logic|ONLY)|cross-service (?:domain logic|domain state|infra)/i
+		)
+		expect(guidance).not.toMatch(
+			/@repo\/backend\/(?:auth|middleware\/auth)|services\/auth|auth factory/i
+		)
+		expect(entries.some(({ path }) => path.startsWith('services/auth/'))).toBe(false)
+		expect(backendPackage.exports['./auth']).toBeUndefined()
+		expect(backendPackage.exports['./middleware/auth']).toBeUndefined()
 	})
 })
 

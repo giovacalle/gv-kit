@@ -24,12 +24,8 @@ export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 		{ path: '.env.example', content: renderEnvExample(cfg) },
 		{ path: 'LICENSE', content: LICENSE_MIT }
 	]
-	if (cfg.choices.backend === 'hono') {
-		entries.push({ path: 'scripts/local.mjs', content: renderLocalScript(cfg) })
-	}
-	if (cfg.choices.backend === 'hono' && cfg.choices.deploy === 'cf-workers') {
-		entries.push({ path: '.env.cloudflare.example', content: renderCloudflareEnvExample(cfg) })
-	}
+	if (cfg.choices.backend === 'hono') entries.push({ path: 'scripts/local.mjs', content: renderLocalScript(cfg) })
+	if (cfg.choices.backend === 'hono' && cfg.choices.deploy === 'cf-workers') entries.push({ path: '.env.cloudflare.example', content: renderCloudflareEnvExample(cfg) })
 	return entries
 }
 
@@ -49,9 +45,7 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 		scripts['openapi:compose'] = `pnpm --filter ${gatewayPackage} openapi:compose`
 		scripts['openapi:check'] = `pnpm --filter ${gatewayPackage} openapi:check`
 	}
-	if (cfg.choices.apiClient === 'hey-api') {
-		scripts.codegen = 'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen'
-	}
+	if (cfg.choices.apiClient === 'hey-api') scripts.codegen = 'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen'
 
 	const postinstall: string[] = []
 	if (cfg.choices.i18n === 'paraglide') {
@@ -59,9 +53,7 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 			'test ! -f packages/i18n/project.inlang/settings.json || pnpm --filter @repo/i18n build'
 		)
 	}
-	if (cfg.choices.apiClient === 'hey-api') {
-		postinstall.push('test ! -f packages/openapi-client/openapi-ts.config.ts || pnpm codegen')
-	}
+	if (cfg.choices.apiClient === 'hey-api') postinstall.push('test ! -f packages/openapi-client/openapi-ts.config.ts || pnpm codegen')
 	if (postinstall.length > 0) scripts.postinstall = postinstall.join(' && ')
 	if (cfg.choices.deploy === 'cf-workers') {
 		scripts['deploy:production'] = 'turbo run deploy:production --affected'
@@ -137,16 +129,10 @@ function renderTurboJson(cfg: GvKitConfig): string {
 	]
 	if (cfg.choices.marketing === 'astro') {
 		publicBuildEnv.push('PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL')
-		if (cfg.choices.monitoring.includes('umami')) {
-			publicBuildEnv.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
-		}
-		if (cfg.choices.monitoring.includes('posthog')) {
-			publicBuildEnv.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
-		}
+		if (cfg.choices.monitoring.includes('umami')) publicBuildEnv.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
+		if (cfg.choices.monitoring.includes('posthog')) publicBuildEnv.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
 	}
-	if (cfg.choices.auth.length > 0 && cfg.choices.backend === 'inside-frontend') {
-		publicBuildEnv.push('PUBLIC_AUTH_URL')
-	}
+	if (cfg.choices.auth.length > 0 && cfg.choices.backend === 'inside-frontend') publicBuildEnv.push('PUBLIC_AUTH_URL')
 	if (cfg.choices.auth.includes('emailOTP')) publicBuildEnv.push('PUBLIC_TURNSTILE_SITE_KEY')
 	const tasks: Record<string, unknown> = {
 		build: {
@@ -200,16 +186,10 @@ function renderHonoDevTasks(cfg: GvKitConfig) {
 	const task = (env: string[]) => ({ dependsOn: ['^build'], cache: false, persistent: true, env })
 	const databaseEnv = cfg.choices.db === 'postgres' ? 'DATABASE_URL' : 'SQLITE_PATH'
 	const authEnv = [databaseEnv]
-	if (cfg.choices.auth.length > 0) {
-		authEnv.push('BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS')
-	}
-	if (cfg.choices.auth.includes('google')) {
-		authEnv.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
-	}
+	if (cfg.choices.auth.length > 0) authEnv.push('BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS')
+	if (cfg.choices.auth.includes('google')) authEnv.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 	if (cfg.choices.email === 'resend') authEnv.push('RESEND_API_KEY', 'FROM_EMAIL')
-	if (cfg.choices.email === 'notifuse') {
-		authEnv.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
-	}
+	if (cfg.choices.email === 'notifuse') authEnv.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
 	if (cfg.choices.auth.includes('emailOTP')) authEnv.push('TURNSTILE_SECRET_KEY')
 
 	const webEnv: string[] = [HONO_GATEWAY.transport.node.targetEnvironmentVariable]
@@ -234,12 +214,7 @@ function renderHonoDevTasks(cfg: GvKitConfig) {
 		]),
 		[`${cfg.choices.name}-web#dev`]: task(webEnv)
 	}
-	if (cfg.choices.marketing === 'astro') {
-		tasks[`${cfg.choices.name}-marketing#dev`] = task([
-			'PUBLIC_MARKETING_URL',
-			'PUBLIC_APP_URL'
-		])
-	}
+	if (cfg.choices.marketing === 'astro') tasks[`${cfg.choices.name}-marketing#dev`] = task(['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL'])
 	return tasks
 }
 
@@ -255,16 +230,10 @@ function renderLocalScript(cfg: GvKitConfig): string {
 		USERS_SERVICE.transport.node.targetEnvironmentVariable
 	]
 	if (cfg.choices.db === 'postgres') required.push('DATABASE_URL')
-	if (cfg.choices.auth.length > 0) {
-		required.push('BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS')
-	}
-	if (cfg.choices.auth.includes('google')) {
-		required.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
-	}
+	if (cfg.choices.auth.length > 0) required.push('BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS')
+	if (cfg.choices.auth.includes('google')) required.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 	if (cfg.choices.auth.includes('emailOTP')) required.push('TURNSTILE_SECRET_KEY')
-	if (cfg.choices.marketing === 'astro') {
-		required.push('PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL')
-	}
+	if (cfg.choices.marketing === 'astro') required.push('PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL')
 	if (cfg.choices.auth.includes('emailOTP')) required.push('PUBLIC_TURNSTILE_SITE_KEY')
 
 	const prepareTask =
@@ -389,11 +358,8 @@ function renderReadme(cfg: GvKitConfig): string {
 	const stackLines: string[] = []
 	if (cfg.choices.marketing === 'astro') stackLines.push('- Marketing: Astro')
 	stackLines.push(`- Application: SvelteKit`)
-	if (cfg.choices.backend === 'hono') {
-		stackLines.push('- Backend: Hono gateway with private services')
-	} else {
-		stackLines.push('- Backend: SvelteKit endpoints (no separate API)')
-	}
+	if (cfg.choices.backend === 'hono') stackLines.push('- Backend: Hono gateway with private services')
+	else stackLines.push('- Backend: SvelteKit endpoints (no separate API)')
 	stackLines.push(`- Database: ${databaseLabel(cfg)} via Drizzle`)
 	if (cfg.choices.auth.length > 0) {
 		const methods = cfg.choices.auth.join(', ')
@@ -440,10 +406,10 @@ ${quickstart}
 ## Environment
 
 ${
-		cfg.choices.backend === 'hono'
-			? 'Copy `.env.example` to `.env`, fill the required values, then run `pnpm local:prepare` once. Root `pnpm dev` loads this file and starts the complete local topology with Turbo strict environment filtering. Production Worker secrets go through `wrangler secret put <NAME>` rather than `.env`.'
-			: 'Copy `.env.example` to `.env` and fill in any secrets your services need.\nFor workers, secrets go through `wrangler secret put <NAME>` rather than `.env`.'
-	}
+	cfg.choices.backend === 'hono'
+		? 'Copy `.env.example` to `.env`, fill the required values, then run `pnpm local:prepare` once. Root `pnpm dev` loads this file and starts the complete local topology with Turbo strict environment filtering. Production Worker secrets go through `wrangler secret put <NAME>` rather than `.env`.'
+		: 'Copy `.env.example` to `.env` and fill in any secrets your services need.\nFor workers, secrets go through `wrangler secret put <NAME>` rather than `.env`.'
+}
 ${renderPublicOrigins(cfg)}
 ${renderCloudflareDatabaseSetup(cfg)}
 
@@ -455,7 +421,7 @@ ${stackLines.join('\n')}
 
 - \`apps/web/\` — SvelteKit application
 ${cfg.choices.marketing === 'astro' ? '- `apps/marketing/` — static Astro marketing site and public SEO endpoints\n' : ''}${cfg.choices.backend === 'hono' ? '- `apps/api/` — Hono API gateway\n- `services/<service>/` — private Hono services\n' : ''}- \`packages/db/\` — Drizzle schema + client factory
-- \`packages/backend/\` — shared backend helpers (logger, error helpers, middleware)
+- \`packages/backend/\` — shared backend application/core layer (data access, use cases, types, helpers, middleware)
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages and runtime\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — one flat client generated from the gateway contract\n' : ''}${
 		cfg.choices.aiTooling.length > 0
 			? `\nSee \`.ai/rules/\` for architecture rules, in particular the service\nboundary policy.\n`
@@ -498,7 +464,13 @@ function renderApiTopology(cfg: GvKitConfig): string {
 	return `
 ## API topology
 
-\`apps/api/\` is the only public API application. Both ingress paths reach the same gateway contract:
+\`packages/backend/\` is the shared backend application/core layer for reusable data access,
+use cases, types, helpers, and middleware. Independently deployable \`services/<service>/\`
+packages are transport/runtime adapters and may import the application modules they need.
+
+\`apps/api/\` is the only public API application. It handles ingress, routing, operational
+middleware, OpenAPI delivery, and transparent forwarding. It does not import application use
+cases or orchestrate business workflows. Both ingress paths reach the same gateway contract:
 
 - the web origin's \`/api/*\` alias for browser traffic
 - the canonical API origin for integrations and independent clients
@@ -524,9 +496,7 @@ atomic, so adjacent versions must remain compatible during rollout.
 }
 
 function databaseLabel(cfg: GvKitConfig): string {
-	if (cfg.choices.db === 'postgres') {
-		return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
-	}
+	if (cfg.choices.db === 'postgres') return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
 	return cfg.choices.deploy === 'cf-workers' ? 'SQLite (Cloudflare D1)' : 'SQLite'
 }
 
@@ -606,13 +576,9 @@ function renderEnvExample(cfg: GvKitConfig): string {
 				lines.push(
 					'BETTER_AUTH_ALLOWED_HOSTS=localhost:3000,api.localhost:3000,localhost:8786,127.0.0.1:8786'
 				)
-				lines.push(
-					'AUTH_CORS_ORIGINS=http://localhost:3000,http://api.localhost:3000'
-				)
+				lines.push('AUTH_CORS_ORIGINS=http://localhost:3000,http://api.localhost:3000')
 			} else {
-				lines.push(
-					'BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,localhost:8786,127.0.0.1:8786'
-				)
+				lines.push('BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,localhost:8786,127.0.0.1:8786')
 				lines.push('AUTH_CORS_ORIGINS=http://localhost:5173')
 			}
 		} else {

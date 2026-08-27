@@ -12,9 +12,7 @@ export type VerificationCommandEvidence = {
 
 export function redactArtifactText(input: string, roots: string[] = []): string {
 	let output = input
-	for (const root of [...roots].sort((left, right) => right.length - left.length)) {
-		if (root) output = output.replaceAll(root, '$WORKSPACE')
-	}
+	for (const root of [...roots].sort((left, right) => right.length - left.length)) if (root) output = output.replaceAll(root, '$WORKSPACE')
 	return output
 		.replace(/\/Users\/[^/\s"'`]+/g, '/Users/[REDACTED]')
 		.replace(/\/home\/[^/\s"'`]+/g, '/home/[REDACTED]')
@@ -99,19 +97,7 @@ export async function appendCommandEvidence(
 export async function readCommandEvidence(project: string): Promise<VerificationCommandEvidence[]> {
 	const records = JSON.parse(await readFile(`${project}/command-evidence.json`, 'utf8')) as unknown
 	if (!Array.isArray(records)) throw new Error('specialized command evidence is not an array')
-	for (const record of records) {
-		if (
-			typeof record !== 'object' ||
-			record === null ||
-			typeof record.name !== 'string' ||
-			typeof record.command !== 'string' ||
-			!['passed', 'failed', 'skipped'].includes(record.outcome) ||
-			typeof record.durationMs !== 'number' ||
-			typeof record.exitCode !== 'number' ||
-			typeof record.logPath !== 'string'
-		)
-			throw new Error('specialized command evidence has an invalid record')
-	}
+	for (const record of records) if ( typeof record !== 'object' || record === null || typeof record.name !== 'string' || typeof record.command !== 'string' || !['passed', 'failed', 'skipped'].includes(record.outcome) || typeof record.durationMs !== 'number' || typeof record.exitCode !== 'number' || typeof record.logPath !== 'string' ) throw new Error('specialized command evidence has an invalid record')
 	return records as VerificationCommandEvidence[]
 }
 
@@ -121,6 +107,5 @@ export function assertPermittedWranglerInvocation(args: string[]): void {
 	const wranglerArgs = args.slice(index + 1)
 	const deploy = wranglerArgs.indexOf('deploy')
 	const dryRun = wranglerArgs.indexOf('--dry-run')
-	if (deploy !== 0 || dryRun <= deploy)
-		throw new Error('Verifier may execute Wrangler only as `wrangler deploy ... --dry-run`')
+	if (deploy !== 0 || dryRun <= deploy) throw new Error('Verifier may execute Wrangler only as `wrangler deploy ... --dry-run`')
 }

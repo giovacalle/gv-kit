@@ -14,7 +14,7 @@
 
 SvelteKit owns every HTTP entry point. Put endpoint handlers in `+server.ts`, form actions and server loads in `+page.server.ts`, and shared server-only code under `apps/web/src/lib/server/`.
 
-Server handlers may use `@repo/db` directly. Reusable database setup stays in `packages/db/`, and shared HTTP helpers stay in `packages/backend/`.
+Server handlers may use `@repo/db` directly and consume the shared backend application/core layer in `packages/backend/`. That package may contain reusable data access, use cases, types, helpers, and middleware. Reusable database setup stays in `packages/db/`.
 
 ## Generated layout
 

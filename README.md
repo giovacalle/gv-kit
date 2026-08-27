@@ -19,7 +19,7 @@ A Turborepo monorepo with:
 - **`apps/web`** — SvelteKit (Svelte 5 runes, Tailwind 4) on your chosen runtime
 - **`apps/api`** — public Hono API gateway when `backend=hono`
 - **`services/auth`** + **`services/users`** — independently deployable private Hono Workers
-- **`packages/backend`** — primitives only: `core`, `auth` factory, `helpers`, plus `middleware` for hono mode
+- **`packages/backend`** — shared backend application/core layer for reusable data access, use cases, types, helpers, and middleware
 - **`packages/db`** — Drizzle (Postgres or SQLite, deploy-aware driver)
 - **`packages/i18n`** — Paraglide v2 (optional)
 - **`packages/openapi-client`** — one flat Hey API client generated from the composed gateway contract + TanStack Query (optional)
@@ -95,7 +95,9 @@ Astro remains static-first on both supported deploy targets: Workers Static Asse
 
 ### Gateway and service boundary (when `backend=hono`)
 
-`apps/api/` is the only public Hono API application. Both ingress paths reach it without changing paths:
+`packages/backend/` is the shared backend application/core layer for reusable data access, use cases, types, helpers, and middleware. Independently deployable packages under `services/` are transport/runtime adapters and may import the application modules they need from `@repo/backend`.
+
+`apps/api/` is the only public Hono API application. It handles ingress, routing, operational middleware, OpenAPI delivery, and transparent forwarding. It does not import application use cases or orchestrate business workflows. Both ingress paths reach it without changing paths:
 
 - the web origin's same-origin `/api/*` alias for browser traffic
 - the canonical API origin for integrations and independent clients
@@ -106,7 +108,7 @@ SvelteKit SSR uses a request-scoped gateway transport. Cloudflare uses the web W
 
 `services/auth/` is the **only** Worker that:
 - holds `BETTER_AUTH_SECRET` and OAuth secrets
-- imports `@repo/backend/auth`
+- configures Better Auth directly in `services/auth/src/auth.ts`
 - owns `/api/auth/*` and the private `/internal/session` endpoint
 
 `services/users/` and any future domain service:
@@ -124,7 +126,7 @@ Deployments run preview-ingress validation, database migration, private services
 
 ### Inside-frontend mode
 
-When `backend=inside-frontend`, the SvelteKit Worker is the only deployable surface. Auth, API routes, and the Hono app all live in `apps/web` via `+server.ts`. The same `@repo/backend/auth` factory is consumed directly. One Worker, no cross-Worker secret leakage possible.
+When `backend=inside-frontend`, the SvelteKit application is the only deployable unit and server endpoints live under `apps/web`. Authentication choices are Hono-only, so this topology emits neither `services/auth` nor private auth transport guidance.
 
 ## Commands
 

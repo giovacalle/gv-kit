@@ -8,7 +8,7 @@ This guide does not split databases, move backend package logic, add a mobile cl
 
 Move the public gateway to `apps/api/`. Move independently deployable services from the old `apps/api/auth/` and `apps/api/users/` layout to `services/auth/` and `services/users/`.
 
-The gateway must route requests to services through explicit transports. It must not import or mount either service's Hono application. Keep shared horizontal middleware in `packages/backend/`; do not move service-owned domain logic there as part of this migration.
+The gateway must route requests to services through explicit transports. It must not import or mount either service's Hono application, import application use cases, or orchestrate business workflows. Keep reusable data access, use cases, types, helpers, and middleware in the shared `packages/backend/` application/core layer. Deployable services are transport/runtime adapters and may import the application modules they need from that package.
 
 ## Routes
 

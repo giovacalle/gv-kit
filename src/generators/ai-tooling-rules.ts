@@ -19,10 +19,8 @@ export function generateAiToolingRules(cfg: GvKitConfig): FileEntry[] {
 		{ path: '.ai/rules/db-drizzle.md', content: renderDbRule(cfg) }
 	]
 
-	if (cfg.choices.email !== 'skip')
-		entries.push({ path: '.ai/rules/email-templates.md', content: renderEmailRule(cfg) })
-	if (cfg.choices.marketing === 'astro')
-		entries.push({ path: '.ai/rules/marketing-astro.md', content: renderMarketingAstroRule() })
+	if (cfg.choices.email !== 'skip') entries.push({ path: '.ai/rules/email-templates.md', content: renderEmailRule(cfg) })
+	if (cfg.choices.marketing === 'astro') entries.push({ path: '.ai/rules/marketing-astro.md', content: renderMarketingAstroRule() })
 
 	const fixtureRules = renderTemplate({
 		tree: 'root',
@@ -96,7 +94,7 @@ auth, database, or backend secrets reached the bundle.
 /* ------------------------------------------------------------------ */
 
 export function renderCoreStackRule(cfg: GvKitConfig): string {
-	if (cfg.choices.backend !== 'hono')
+	if (cfg.choices.backend !== 'hono') {
 		return `# Stack
 
 This project deploys as a **single SvelteKit unit** under \`apps/web/\`.
@@ -106,7 +104,7 @@ All HTTP entry points and server-side data access stay in that unit.
 
 - \`apps/web/\` — SvelteKit app, contains all HTTP entry points
 - \`packages/db/\` — Drizzle schema + client factory (\`createDb(env)\`)
-- \`packages/backend/\` — shared helpers (logger, error helpers, middleware)
+- \`packages/backend/\` — shared backend application/core layer (data access, use cases, types, helpers, middleware)
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\n' : ''}
 
 ## Request lifecycle
@@ -123,23 +121,25 @@ of unrelated route folders so future changes stay local.
 
 - All HTTP entry points are SvelteKit handlers (\`+server.ts\` / \`+page.server.ts\`)
 - \`packages/db\` is the sole DB consumer entry point
-- \`packages/backend\` holds horizontal helpers only — no domain logic
+- \`packages/backend\` holds reusable data access, use cases, types, helpers, and middleware
 `
+	}
 
 	return `# Stack
 
 \`apps/api/\` is the public Hono API gateway. The web origin's \`/api/*\` alias
 and canonical API origin reach the same gateway. Independently deployable private
-Hono workers live under \`services/\`. Browser and SSR code depend on the
-gateway contract, never on a private service's deployment address.
+Hono workers under \`services/\` are transport/runtime adapters. They invoke the
+shared backend application/core layer in \`packages/backend/\`. Browser and SSR
+code depend on the gateway contract, never on a private service's deployment address.
 
 ## Layout
 
 - \`apps/web/\` — SvelteKit app
 - \`apps/api/\` — public Hono API gateway
-- \`services/<service>/\` — independently deployable private Hono workers (e.g. \`auth\`, \`users\`)
+- \`services/<service>/\` — independently deployable private transport/runtime adapters (e.g. \`auth\`, \`users\`)
 - \`packages/db/\` — Drizzle schema + client factory
-- \`packages/backend/\` — horizontal helpers (logger, error helpers, middleware) ONLY
+- \`packages/backend/\` — shared backend application/core layer (data access, use cases, types, helpers, middleware)
 ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\n' : ''}${cfg.choices.apiClient === 'hey-api' ? '- `packages/openapi-client/` — flat client generated from `apps/api/openapi.json`\n' : ''}
 
 ## Request lifecycle
@@ -157,6 +157,9 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\
 
 - **The gateway owns public API ingress.** It must not import or mount a private service application.
   Private workers under \`services/\` have no browser-facing route.
+- **The gateway stays thin.** It handles ingress, routing, operational middleware,
+  OpenAPI delivery, and transparent forwarding. It does not import application use
+  cases or orchestrate business workflows.
 - **Private services stay private.** They must not gain a public route, workers.dev hostname, or preview URL.
 - **Auth is a service.** Served EXCLUSIVELY by \`${AUTH_SERVICE.workspacePath}/\`. No other
   service exposes auth endpoints.
@@ -165,20 +168,20 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages\
   through an explicit \`${AUTH_SERVICE.internalTarget}\` binding on Cloudflare or the private
   \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` URL on Node and Docker. Do not generate a duplicate
   local auth client or extract a service SDK.
-- **No cross-service infra in \`packages/backend\`.** That package is reserved
-  for truly horizontal concerns. Auth state, billing state, RBAC live with
-  their owning service.
+- **Application modules are shared.** \`packages/backend/\` is the shared backend
+  application/core layer for reusable data access, use cases, types, helpers, and
+  middleware. Service adapters may import any application modules they need.
 - **OpenAPI ownership stays with services.** Each domain service owns a deterministic fragment.
   The gateway composes \`apps/api/openapi.json\` and serves it at \`/api/openapi.json\`. Better Auth
   stays outside that document.${cfg.choices.apiClient === 'hey-api' ? ' Hey API generates one flat client from it.' : ' No API client package is generated.'}
 - **Bindings are explicit per deployable.** The web Worker binds only to the
-  gateway. The gateway binds to its private services. Each private service owns
-  its data and service bindings. No shared \`env\` blob.
+  gateway. The gateway binds to its private services. Each private service declares
+  the data and service bindings required by its runtime adapter. No shared \`env\` blob.
 
 ## Forbidden patterns
 
 - Browser or SSR code calling \`${AUTH_SERVICE.workspacePath}/\` or \`${USERS_SERVICE.workspacePath}/\` directly
-- \`${USERS_SERVICE.workspacePath}/\` importing from \`@repo/backend/auth\`
+- \`${USERS_SERVICE.workspacePath}/\` configuring Better Auth or reading its secrets
 - \`${USERS_SERVICE.workspacePath}/\` reading \`BETTER_AUTH_SECRET\`
 - Any service other than \`${AUTH_SERVICE.workspacePath}/\` querying \`user\`, \`session\`,
   \`account\`, or \`verification\` tables directly
@@ -209,14 +212,16 @@ export function renderBackendRule(cfg: GvKitConfig): string {
 
 ${
 	isHono
-		? `The public Hono gateway lives at \`apps/api/\`. Independently deployable
-private workers live under \`services/<service>/\`, each with its own
-dependencies, bindings, and runtime entry.`
+		? `The public Hono gateway lives at \`apps/api/\`. The shared backend
+application/core layer lives at \`packages/backend/\`. Independently deployable
+transport/runtime adapters live under \`services/<service>/\`, each with its own
+dependencies, bindings, and runtime entry. They may import the application modules
+they need from \`@repo/backend\`.`
 		: `Backend logic lives in SvelteKit endpoints (\`+server.ts\`, \`+page.server.ts\`)
 inside \`apps/web/\`. A single deployable unit.`
 }`)
 
-	if (isHono)
+	if (isHono) {
 		sections.push(`## Gateway boundary
 
 - \`apps/api/\` owns every public API route. Private workers live under
@@ -225,12 +230,16 @@ ${gatewayConsumer} On Cloudflare, the web Worker's \`GATEWAY\` Service Binding c
   Node and Docker use the private gateway URL.
 - Only the gateway calls private services for public API work. A private service
   calls another private service directly for an internal domain flow.
+- Keep the gateway limited to ingress, routing, operational middleware, OpenAPI
+  delivery, and transparent forwarding. It does not import application use cases
+  or orchestrate business workflows.
 - Never import a service app into the gateway. Forward requests through the
   explicit target transport instead.
 - Never send an internal service call through the gateway. Use a direct private
   binding or private URL.
 - Never combine credentials with a wildcard CORS origin. Use an explicit origin
   allowlist and reject unknown origins.`)
+	}
 
 	sections.push(`## Errors: \`HttpError\` + factory
 
@@ -271,10 +280,10 @@ ${
 }`)
 	}
 
-	if (isHono)
+	if (isHono) {
 		sections.push(`## Domain layering — \`packages/backend/src/core/\`
 
-The domain layer is split into **data-access** and **use-cases**.
+The shared backend application/core layer is split into **data-access** and **use-cases**.
 
 **Data access (\`core/data-access/**\`)**
 - Pure drizzle. No \`throw\`, no domain errors, no HTTP concerns.
@@ -286,16 +295,17 @@ The domain layer is split into **data-access** and **use-cases**.
 **Use cases (\`core/use-cases/**\`)**
 - Coordinate one or more DAO calls; throw \`HttpError\` via \`errors.*\` from \`@repo/backend/helpers\`.
 - Never reach into HTTP. No \`Request\`, \`Response\`, \`c.json\`, no \`Context\`.
-- Don't import \`@repo/backend/auth\` or \`@repo/backend/middleware\` — that's a layering break.
+- Don't import transport middleware into core use cases — that's a layering break.
 
 **Both layers**
 - 1–2 args → positional. 3+ → named bag.
 - Inline single-statement bodies. No verbose JSDoc.`)
+	}
 
 	sections.push(`## What NOT to do
 
 - No \`as any\` in worker code
-- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths${isHono ? '\n- No \\`@repo/backend/auth\\` import outside of `' + AUTH_SERVICE.workspacePath + '/`' : ''}
+- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths${isHono ? '\n- No Better Auth configuration outside of `' + AUTH_SERVICE.workspacePath + '/src/auth.ts`' : ''}
 - No hand-written \`Env\` interface — let wrangler generate it
 - No \`wrangler.toml\` — \`wrangler.jsonc\` only`)
 

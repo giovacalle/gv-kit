@@ -287,8 +287,12 @@ function dynamicSourceParameterFindings(path: string, source: string): string[] 
 }
 
 function generatedGatewaySources({
-	includeSharedBackendAndCloudflareTypes = false
-}: { includeSharedBackendAndCloudflareTypes?: boolean } = {}): Array<{
+	includeSharedBackendAndCloudflareTypes = false,
+	includeAuthSchemaAndCleanup = false
+}: {
+	includeSharedBackendAndCloudflareTypes?: boolean
+	includeAuthSchemaAndCleanup?: boolean
+} = {}): Array<{
 	path: string
 	content: string
 }> {
@@ -307,11 +311,17 @@ function generatedGatewaySources({
 				generated.path.startsWith('scripts/') && generated.path.includes('cloudflare-preview')
 			const isSharedBackend = generated.path.startsWith('packages/backend/')
 			const isCloudflareType = generated.path.endsWith('worker-configuration.bootstrap.d.ts')
+			const isAuthSchema = generated.path === 'packages/db/src/schema/auth.ts'
+			const isCleanupScript =
+				generated.path === 'scripts/cleanup-cloudflare-preview-workers.sh'
+			const isSupportedSource =
+				isTypeScriptOrJavaScript || (includeAuthSchemaAndCleanup && isCleanupScript)
 			const isIncluded =
 				isGatewayOrService ||
 				isPreviewTool ||
-				(includeSharedBackendAndCloudflareTypes && (isSharedBackend || isCloudflareType))
-			if (!isTypeScriptOrJavaScript || !isIncluded) continue
+				(includeSharedBackendAndCloudflareTypes && (isSharedBackend || isCloudflareType)) ||
+				(includeAuthSchemaAndCleanup && (isAuthSchema || isCleanupScript))
+			if (!isSupportedSource || !isIncluded) continue
 
 			const key = `${generated.path}\0${generated.content}`
 			if (!sources.has(key)) {
@@ -419,7 +429,18 @@ function sourceStandardFindings(path: string, source: string): string[] {
 	return findings
 }
 
+function generatedShellCommentFindings(path: string, source: string): string[] {
+	const explanatoryLines = source
+		.split('\n')
+		.map((line, index) => ({ line: index, text: line.trimStart() }))
+		.filter(({ text }) => text.startsWith('#') && !text.startsWith('#!'))
+	if (explanatoryLines.length <= 1) return []
+	return [`${path}:${explanatoryLines[0]!.line + 1} multiple explanatory line comments`]
+}
+
 function generatedCommentFindings(path: string, source: string): string[] {
+	if (path.endsWith('.sh')) return generatedShellCommentFindings(path, source)
+
 	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
 	const literalRanges: Array<{ start: number; end: number }> = []
 	const findings: string[] = []
@@ -724,11 +745,18 @@ describe('local private-service gateway topology', () => {
 			'sample.ts:2 block comment',
 			'sample.ts:3 consecutive line comments'
 		])
+		expect(
+			generatedCommentFindings(
+				'sample.sh',
+				['#!/bin/sh', '# first explanation', '', '# second explanation', 'echo done'].join('\n')
+			)
+		).toEqual(['sample.sh:2 multiple explanatory line comments'])
 	})
 
-	test('generated gateway, service, OpenAPI, preview, and Cloudflare type comments stay concise', () => {
+	test('generated gateway, service, schema, preview, cleanup, and Cloudflare type comments stay concise', () => {
 		const findings = generatedGatewaySources({
-			includeSharedBackendAndCloudflareTypes: true
+			includeSharedBackendAndCloudflareTypes: true,
+			includeAuthSchemaAndCleanup: true
 		}).flatMap(({ path, content }) => generatedCommentFindings(path, content))
 		expect(findings).toEqual([])
 	})

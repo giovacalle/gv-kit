@@ -299,9 +299,9 @@ function assertPreviewTopology({
 	}
 	for (const name of ['gateway', 'web', 'users'] as const) if (JSON.stringify(preview[name].services) !== JSON.stringify(expectedServices[name])) throw new Error(`${name} preview Service Bindings are not isolated`)
 	if (preview.gateway.vars?.API_PUBLIC_ORIGIN !== apiOrigin) throw new Error('gateway preview OpenAPI origin is not explicit')
-	const localHosts = 'localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786'
+	const localHosts = 'localhost:3000,localhost:5173,api.localhost:8786'
 	const localOrigins =
-		'http://localhost:3000,http://localhost:5173,http://localhost:8786,http://127.0.0.1:8786'
+		'http://localhost:3000,http://localhost:5173,http://api.localhost:8786'
 	if (preview.gateway.vars?.GATEWAY_PUBLIC_ORIGINS !== `${webOrigin},${apiOrigin},${localOrigins}`) throw new Error('gateway preview public-origin allowlist contains the wrong origins')
 	if (preview.gateway.vars?.API_CORS_ORIGINS !== `${webOrigin},${localOrigins}`) throw new Error('gateway preview CORS contains the wrong origins')
 	if (preview.gateway.vars?.GATEWAY_UPSTREAM_TIMEOUT_MS !== '10000') throw new Error('gateway preview timeout is not explicit')

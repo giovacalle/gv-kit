@@ -135,11 +135,13 @@ describe('generateRoot — Astro project shape', () => {
 		])
 		const env = content(entries, '.env.example')
 		expect(env).not.toContain('PUBLIC_AUTH_URL')
-		expect(env).toContain('API_PUBLIC_ORIGIN=http://localhost:8786')
+		expect(env).toContain('API_PUBLIC_ORIGIN=http://api.localhost:8786')
 		expect(env).toContain(
-			'BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,localhost:8786,127.0.0.1:8786'
+			'BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,api.localhost:8786'
 		)
-		expect(env).toContain('AUTH_CORS_ORIGINS=http://localhost:5173')
+		expect(env).toContain(
+			'AUTH_CORS_ORIGINS=http://localhost:5173,http://api.localhost:8786'
+		)
 		expect(env).not.toContain('<preview-web-host>')
 		expect(env).toContain('PUBLIC_TURNSTILE_SITE_KEY=')
 		expect(env).toContain('FROM_EMAIL=')

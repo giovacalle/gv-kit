@@ -279,10 +279,7 @@ describe('database ownership terminology contract', () => {
 
 					const authSchema = content(entries, 'packages/db/src/schema/auth.ts')
 					expect(authSchema).toContain(
-						'// packages/backend may read user records for domain use cases.'
-					)
-					expect(authSchema).toContain(
-						'// Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.'
+						'// packages/backend may read user records for domain use cases; Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.'
 					)
 					expect(coreRule).toContain(
 						'shared application modules may read `authSchema.user` for domain use cases'

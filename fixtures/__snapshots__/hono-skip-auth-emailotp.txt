@@ -24,7 +24,7 @@
 .claude/settings.json  f9ff1f57215baabd
 .claude/stack.json  ae9c20a329df8d7b
 .commitlintrc.json  1a921be1aa693bb1
-.env.example  6cad86c70e7d13fb
+.env.example  e7b372f829e4c60c
 .gitignore  a836122283bb33eb
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -102,7 +102,7 @@ packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  ecf29b6a20b6c71a
 packages/db/src/client.ts  e335c72cca40e4af
 packages/db/src/index.ts  4d7894d63bb774e7
-packages/db/src/schema/auth.ts  4d9e5e44f18058f8
+packages/db/src/schema/auth.ts  71db1ba4142a3e70
 packages/db/src/schema/index.ts  ea3f70eeb56a54d5
 packages/db/src/schema/sample.ts  77dbb23fb54706d5
 packages/db/tsconfig.json  d91487a4887bf974
@@ -272,7 +272,7 @@ services/auth/package.json  8b1860e29ab86dcf
 services/auth/src/app.ts  ecb37c3b53c18e2c
 services/auth/src/auth.ts  b807e0b1cd6761ae
 services/auth/src/index.ts  d67465b9372c4f2f
-services/auth/src/lib/utils.ts  200d92ebee6e8ff8
+services/auth/src/lib/utils.ts  9e57e2981206e11f
 services/auth/src/openapi.ts  b922bbe79c06c508
 services/auth/tsconfig.json  f5cee125f468d286
 services/auth/tsup.config.ts  a3467e861d36d694

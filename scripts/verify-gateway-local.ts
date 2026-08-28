@@ -8,6 +8,7 @@ import { GvKitConfig, type GvKitConfig as Config } from '../src/schema/config.js
 import { appendCommandEvidence, writeSanitizedArtifact } from './gateway-verification-evidence.js'
 
 const PNPM_VERSION = '11.1.1'
+const LOCAL_API_ORIGIN = 'http://api.localhost:8786'
 const LOCAL_CORS_ORIGINS = 'http://localhost:3000,http://localhost:5173'
 const LOCAL_ENVIRONMENT_NAMES = [
 	'API_CORS_ORIGINS',
@@ -71,9 +72,17 @@ type RecordedRequest = {
 
 type AuthTarget = ReturnType<typeof Bun.serve>
 
-type CookieJar = {
-	header: string
-	setCookies: string[]
+type BrowserCookie = {
+	attributes: string[]
+	hostname: string
+	name: string
+	path: string
+	secure: boolean
+	value: string
+}
+
+type BrowserCookieStore = {
+	cookies: BrowserCookie[]
 }
 
 function parseArgs(argv: string[]): { contract: boolean; fixture: string; output: string } {
@@ -246,7 +255,7 @@ async function localAuthWhenReady() {
 	let latest: Response | undefined
 	while (Date.now() < deadline) {
 		try {
-			latest = await fetch('http://127.0.0.1:8786/api/auth/get-session', {
+			latest = await fetch(`${LOCAL_API_ORIGIN}/api/auth/get-session`, {
 				headers: { origin: 'http://localhost:5173' }
 			})
 			if ( latest.status === 200 && latest.headers.get('access-control-allow-origin') === 'http://localhost:5173' && latest.headers.get('access-control-allow-credentials') === 'true' ) return latest
@@ -276,6 +285,19 @@ async function stop(command: RunningCommand): Promise<void> {
 
 function localWebOrigin(deploy: Config['choices']['deploy']): string {
 	return deploy === 'docker' ? 'http://localhost:3000' : 'http://localhost:5173'
+}
+
+function requireAdvertisedApiOrigin(
+	runtimeOpenApi: { servers?: { url: string }[] },
+	exercisedOrigin: string
+): string {
+	const advertisedOrigin = runtimeOpenApi.servers?.[0]?.url
+	if (runtimeOpenApi.servers?.length !== 1 || advertisedOrigin !== exercisedOrigin) {
+		throw new Error(
+			`runtime OpenAPI advertised ${advertisedOrigin ?? 'no origin'} but verification exercised ${exercisedOrigin}`
+		)
+	}
+	return advertisedOrigin
 }
 
 function processInventory(command: RunningCommand, deploy: Config['choices']['deploy']) {
@@ -336,23 +358,30 @@ async function verifyGatewayTopology({
 	authUrl: string
 	deploy: Config['choices']['deploy']
 }) {
-	const gatewayHealth = await requestWhenReady('http://127.0.0.1:8786/api/healthz')
-	const openApiResponse = await requestWhenReady('http://127.0.0.1:8786/api/openapi.json')
+	const gatewayHealth = await requestWhenReady(`${LOCAL_API_ORIGIN}/api/healthz`)
+	const openApiResponse = await requestWhenReady(`${LOCAL_API_ORIGIN}/api/openapi.json`)
 	const runtimeOpenApi = (await openApiResponse.json()) as { servers?: { url: string }[] }
+	const advertisedApiOrigin = requireAdvertisedApiOrigin(runtimeOpenApi, LOCAL_API_ORIGIN)
 	const webHealth = await requestWhenReady(`${localWebOrigin(deploy)}/api/healthz`)
 	const direct = await requestWhenReady('http://127.0.0.1:8788/healthz')
-	const known = await fetch('http://127.0.0.1:8786/api/v1/users/me', {
+	const known = await fetch(`${LOCAL_API_ORIGIN}/api/v1/users/me`, {
 		headers: { cookie: 'session=verification' }
 	})
-	const redirect = await fetch('http://127.0.0.1:8786/api/auth/redirect', {
+	const redirect = await fetch(`${LOCAL_API_ORIGIN}/api/auth/redirect`, {
 		redirect: 'manual'
 	})
-	const unknown = await fetch('http://127.0.0.1:8786/api/unknown')
+	const unknown = await fetch(`${LOCAL_API_ORIGIN}/api/unknown`)
 	const evidence = {
 		project: '.',
 		processInventory: processInventory(command, deploy),
 		gatewayHealth: { status: gatewayHealth.status, body: await gatewayHealth.text() },
-		openApi: { status: openApiResponse.status, servers: runtimeOpenApi.servers },
+		openApi: {
+			status: openApiResponse.status,
+			servers: runtimeOpenApi.servers,
+			advertisedOrigin: advertisedApiOrigin,
+			exercisedOrigin: LOCAL_API_ORIGIN,
+			exactMatch: true
+		},
 		webAliasHealth: { status: webHealth.status, body: await webHealth.text() },
 		knownPrefix: { status: known.status, body: await known.text() },
 		unknownPrefix: { status: unknown.status, body: await unknown.text() },
@@ -371,7 +400,7 @@ async function verifyGatewayTopology({
 	}
 	if (evidence.gatewayHealth.status !== 200 || evidence.gatewayHealth.body !== 'ok') throw new Error('independent gateway health failed')
 	if (evidence.webAliasHealth.status !== 200 || evidence.webAliasHealth.body !== 'ok') throw new Error('web same-origin alias health failed')
-	if ( evidence.openApi.status !== 200 || JSON.stringify(evidence.openApi.servers) !== JSON.stringify([{ url: 'http://localhost:8786' }]) ) throw new Error('runtime OpenAPI did not advertise the configured local canonical origin')
+	if (evidence.openApi.status !== 200) throw new Error('runtime OpenAPI did not return 200')
 	if (evidence.knownPrefix.status !== 401) throw new Error('known users prefix was not forwarded')
 	if (evidence.unknownPrefix.status !== 404) throw new Error('unknown gateway prefix did not return 404')
 	if (evidence.directDebugHealth.status !== 200) throw new Error('users debug service did not start')
@@ -394,9 +423,10 @@ async function verifyCloudflareTopology({
 	command: RunningCommand
 	authUrl: string
 }) {
-	const gatewayHealth = await healthWhenReady('http://127.0.0.1:8786/api/healthz')
-	const openApiResponse = await requestWhenReady('http://127.0.0.1:8786/api/openapi.json')
+	const gatewayHealth = await healthWhenReady(`${LOCAL_API_ORIGIN}/api/healthz`)
+	const openApiResponse = await requestWhenReady(`${LOCAL_API_ORIGIN}/api/openapi.json`)
 	const runtimeOpenApi = (await openApiResponse.json()) as { servers?: { url: string }[] }
+	const advertisedApiOrigin = requireAdvertisedApiOrigin(runtimeOpenApi, LOCAL_API_ORIGIN)
 	const webHealth = await healthWhenReady('http://localhost:5173/api/healthz')
 	const authHealth = await healthWhenReady(`${authUrl}/healthz`)
 	const usersHealth = await healthWhenReady('http://127.0.0.1:8788/healthz')
@@ -410,14 +440,20 @@ async function verifyCloudflareTopology({
 			auth: authHealth,
 			users: usersHealth
 		},
-		openApi: { status: openApiResponse.status, servers: runtimeOpenApi.servers },
+		openApi: {
+			status: openApiResponse.status,
+			servers: runtimeOpenApi.servers,
+			advertisedOrigin: advertisedApiOrigin,
+			exercisedOrigin: LOCAL_API_ORIGIN,
+			exactMatch: true
+		},
 		localAuthEnvironment: {
 			status: authSession.status,
 			allowOrigin: authSession.headers.get('access-control-allow-origin'),
 			credentials: authSession.headers.get('access-control-allow-credentials')
 		}
 	}
-	if ( evidence.openApi.status !== 200 || JSON.stringify(evidence.openApi.servers) !== JSON.stringify([{ url: 'http://localhost:8786' }]) ) throw new Error('Cloudflare OpenAPI did not advertise the local canonical origin')
+	if (evidence.openApi.status !== 200) throw new Error('Cloudflare OpenAPI did not return 200')
 	if ( evidence.localAuthEnvironment.status !== 200 || evidence.localAuthEnvironment.allowOrigin !== 'http://localhost:5173' || evidence.localAuthEnvironment.credentials !== 'true' ) throw new Error('Cloudflare auth did not receive the local host and CORS contract')
 	await writeSanitizedArtifact({
 		path: join(project, 'evidence.json'),
@@ -456,30 +492,111 @@ async function waitForOtp(command: RunningCommand, email: string): Promise<strin
 	throw new Error(`Timed out waiting for the local OTP for ${email}`)
 }
 
-function cookieJar(response: Response): CookieJar {
-	const setCookies = response.headers.getSetCookie()
-	return {
-		header: setCookies.map((cookie) => cookie.split(';', 1)[0]).join('; '),
-		setCookies
-	}
+function defaultCookiePath(pathname: string): string {
+	if (!pathname.startsWith('/') || pathname === '/') return '/'
+	const lastSlash = pathname.lastIndexOf('/')
+	return lastSlash === 0 ? '/' : pathname.slice(0, lastSlash)
 }
 
-function redactedCookies(jar: CookieJar) {
-	return jar.setCookies.map((cookie) => {
-		const [pair = '', ...attributes] = cookie.split(';').map((part) => part.trim())
-		const name = pair.slice(0, pair.indexOf('='))
-		return { name, value: '[redacted]', attributes }
-	})
+function cookiePathMatches(requestPath: string, cookiePath: string): boolean {
+	if (requestPath === cookiePath) return true
+	if (!requestPath.startsWith(cookiePath)) return false
+	return cookiePath.endsWith('/') || requestPath[cookiePath.length] === '/'
+}
+
+function responseCookiesIntoStore({
+	store,
+	response,
+	origin
+}: {
+	store: BrowserCookieStore
+	response: Response
+	origin: string
+}): string[] {
+	const source = new URL(origin)
+	const setCookies = response.headers.getSetCookie()
+	for (const setCookie of setCookies) {
+		const [pair = '', ...attributes] = setCookie.split(';').map((part) => part.trim())
+		const separator = pair.indexOf('=')
+		if (separator < 1) throw new Error(`invalid Set-Cookie from ${origin}`)
+		const attributeValues = new Map(
+			attributes.map((attribute) => {
+				const attributeSeparator = attribute.indexOf('=')
+				return attributeSeparator < 0
+					? [attribute.toLowerCase(), '']
+					: [
+							attribute.slice(0, attributeSeparator).toLowerCase(),
+							attribute.slice(attributeSeparator + 1)
+						]
+			})
+		)
+		if (attributeValues.has('domain')) throw new Error(`OTP sign-in for ${origin} emitted a domain cookie`)
+		const secure = attributeValues.has('secure')
+		if (secure && source.protocol !== 'https:') continue
+		const cookie: BrowserCookie = {
+			attributes,
+			hostname: source.hostname,
+			name: pair.slice(0, separator),
+			path: attributeValues.get('path') || defaultCookiePath(source.pathname),
+			secure,
+			value: pair.slice(separator + 1)
+		}
+		const existing = store.cookies.findIndex(
+			(candidate) =>
+				candidate.hostname === cookie.hostname &&
+				candidate.name === cookie.name &&
+				candidate.path === cookie.path
+		)
+		const maxAge = Number(attributeValues.get('max-age'))
+		if (attributeValues.has('max-age') && maxAge <= 0) {
+			if (existing >= 0) store.cookies.splice(existing, 1)
+			continue
+		}
+		if (existing >= 0) store.cookies[existing] = cookie
+		else store.cookies.push(cookie)
+	}
+	return setCookies
+}
+
+function requestCookies(store: BrowserCookieStore, origin: string): BrowserCookie[] {
+	const target = new URL(origin)
+	return store.cookies
+		.filter(
+			(cookie) =>
+				cookie.hostname === target.hostname &&
+				(!cookie.secure || target.protocol === 'https:') &&
+				cookiePathMatches(target.pathname, cookie.path)
+		)
+		.sort((left, right) => right.path.length - left.path.length)
+}
+
+function browserCookieHeader(store: BrowserCookieStore, origin: string): string {
+	return requestCookies(store, origin)
+		.map((cookie) => `${cookie.name}=${cookie.value}`)
+		.join('; ')
+}
+
+function redactedBrowserCookies(cookies: BrowserCookie[]) {
+	return cookies.map(({ attributes, hostname, name, path, secure }) => ({
+		attributes,
+		hostname,
+		name,
+		path,
+		secure,
+		value: '[redacted]'
+	}))
 }
 
 async function signInWithOtp({
 	origin,
 	email,
-	command
+	command,
+	store
 }: {
 	origin: string
 	email: string
 	command: RunningCommand
+	store: BrowserCookieStore
 }) {
 	const send = await postJson({
 		url: `${origin}/api/auth/email-otp/send-verification-otp`,
@@ -494,23 +611,22 @@ async function signInWithOtp({
 		headers: { origin }
 	})
 	if (!signIn.ok) throw new Error(`OTP sign-in failed for ${origin}: ${signIn.status} ${await signIn.text()}`)
-	const jar = cookieJar(signIn)
-	if (!jar.header) throw new Error(`OTP sign-in for ${origin} did not set a cookie`)
-	if (jar.setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie))) throw new Error(`OTP sign-in for ${origin} emitted a domain cookie`)
-	return jar
+	const setCookies = responseCookiesIntoStore({ store, response: signIn, origin })
+	if (setCookies.length === 0 || !browserCookieHeader(store, origin)) throw new Error(`OTP sign-in for ${origin} did not set an applicable browser cookie`)
+	return setCookies
 }
 
 async function verifySession({
 	origin,
-	jar,
+	store,
 	email
 }: {
 	origin: string
-	jar: CookieJar
+	store: BrowserCookieStore
 	email: string
 }) {
 	const response = await fetch(`${origin}/api/auth/get-session`, {
-		headers: { cookie: jar.header }
+		headers: { cookie: browserCookieHeader(store, origin) }
 	})
 	if (!response.ok) throw new Error(`session load failed for ${origin}: ${response.status}`)
 	const session = (await response.json()) as { user?: { email?: string } }
@@ -557,7 +673,7 @@ async function verifyOperationalRuntime(project: string) {
 		},
 		{
 			openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
-			canonicalApiOrigin: 'http://localhost:8786',
+			canonicalApiOrigin: LOCAL_API_ORIGIN,
 			publicOrigins: publicOrigin,
 			corsOrigins: LOCAL_CORS_ORIGINS,
 			logger: (line) => logs.push(line),
@@ -676,13 +792,14 @@ async function verifyDualOriginAuth({
 	deploy: Config['choices']['deploy']
 }) {
 	const webOrigin = localWebOrigin(deploy)
-	const apiOrigin = 'http://127.0.0.1:8786'
+	const apiOrigin = LOCAL_API_ORIGIN
+	if (new URL(webOrigin).hostname === new URL(apiOrigin).hostname) throw new Error('local web and canonical API origins share a browser cookie hostname')
 	const gatewayHealth = await requestWhenReady(`${apiOrigin}/api/healthz`)
 	const gatewayHealthBody = await gatewayHealth.text()
 	const openApiResponse = await requestWhenReady(`${apiOrigin}/api/openapi.json`)
 	if (openApiResponse.status !== 200) throw new Error('runtime OpenAPI did not return 200')
 	const runtimeOpenApi = (await openApiResponse.json()) as { servers?: { url: string }[] }
-	if (JSON.stringify(runtimeOpenApi.servers) !== JSON.stringify([{ url: 'http://localhost:8786' }])) throw new Error('runtime OpenAPI did not advertise the configured local canonical origin')
+	const advertisedApiOrigin = requireAdvertisedApiOrigin(runtimeOpenApi, apiOrigin)
 	const webHealth = await requestWhenReady(`${webOrigin}/api/healthz`)
 	const webHealthBody = await webHealth.text()
 	const exactWebAlias = await fetch(`${webOrigin}/api`)
@@ -748,22 +865,37 @@ async function verifyDualOriginAuth({
 
 	const webEmail = 'web-origin@example.test'
 	const apiEmail = 'api-origin@example.test'
-	const webJar = await signInWithOtp({ origin: webOrigin, email: webEmail, command })
-	const apiJar = await signInWithOtp({ origin: apiOrigin, email: apiEmail, command })
-	if (webJar.header === apiJar.header) throw new Error('web and API origins received the same cookie jar')
-	const webSession = await verifySession({ origin: webOrigin, jar: webJar, email: webEmail })
-	const apiSession = await verifySession({ origin: apiOrigin, jar: apiJar, email: apiEmail })
+	const browserStore: BrowserCookieStore = { cookies: [] }
+	const beforeSignIns = redactedBrowserCookies(browserStore.cookies)
+	await signInWithOtp({ origin: webOrigin, email: webEmail, command, store: browserStore })
+	const afterWebSignIn = redactedBrowserCookies(browserStore.cookies)
+	const apiCookiesBeforeSignIn = requestCookies(browserStore, `${apiOrigin}/api/auth/get-session`)
+	if (apiCookiesBeforeSignIn.length !== 0) throw new Error('web-origin cookies leaked to the canonical API hostname')
+	await signInWithOtp({ origin: apiOrigin, email: apiEmail, command, store: browserStore })
+	const afterApiSignIn = redactedBrowserCookies(browserStore.cookies)
+	const webRequestCookies = requestCookies(browserStore, `${webOrigin}/api/auth/get-session`)
+	const apiRequestCookies = requestCookies(browserStore, `${apiOrigin}/api/auth/get-session`)
+	if (webRequestCookies.length === 0 || apiRequestCookies.length === 0) throw new Error('browser cookie matching did not retain both host-only sessions')
+	const crossHostCookie =
+		webRequestCookies.some(({ hostname }) => hostname !== new URL(webOrigin).hostname) ||
+		apiRequestCookies.some(({ hostname }) => hostname !== new URL(apiOrigin).hostname)
+	if (crossHostCookie) throw new Error('browser cookie matching leaked a session across local hostnames')
+	const webSession = await verifySession({ origin: webOrigin, store: browserStore, email: webEmail })
+	const apiSession = await verifySession({ origin: apiOrigin, store: browserStore, email: apiEmail })
 	const traceRequestId = 'local-contract-request'
 	const knownPrefix = await fetch(`${apiOrigin}/api/v1/users/me`, {
 		headers: {
-			cookie: apiJar.header,
+			cookie: browserCookieHeader(browserStore, `${apiOrigin}/api/v1/users/me`),
 			origin: webOrigin,
 			'x-request-id': traceRequestId
 		}
 	})
 	const knownBody = (await knownPrefix.json()) as { email?: string }
 	const deniedUsersCors = await fetch(`${apiOrigin}/api/v1/users/me`, {
-		headers: { cookie: apiJar.header, origin: 'https://evil.example.test' }
+		headers: {
+			cookie: browserCookieHeader(browserStore, `${apiOrigin}/api/v1/users/me`),
+			origin: 'https://evil.example.test'
+		}
 	})
 	const unknownPrefix = await fetch(`${apiOrigin}/api/unknown`)
 	if (!knownPrefix.ok || knownBody.email !== apiEmail) throw new Error('known users prefix did not return the API-origin session')
@@ -772,10 +904,14 @@ async function verifyDualOriginAuth({
 	if (deniedUsersCors.headers.get('access-control-allow-origin')) throw new Error('versioned users route allowed a denied CORS origin')
 	await waitForStructuredTrace(command, traceRequestId)
 	if (unknownPrefix.status !== 404) throw new Error('unknown gateway prefix did not return 404')
-	const ssr = await fetch(webOrigin, { headers: { cookie: webJar.header } })
+	const ssr = await fetch(webOrigin, {
+		headers: { cookie: browserCookieHeader(browserStore, webOrigin) }
+	})
 	const ssrBody = await ssr.text()
 	if (!ssr.ok || !ssrBody.includes(webEmail)) throw new Error('web SSR did not load the gateway session')
-	const sdkSsr = await fetch(`${webOrigin}/users`, { headers: { cookie: webJar.header } })
+	const sdkSsr = await fetch(`${webOrigin}/users`, {
+		headers: { cookie: browserCookieHeader(browserStore, `${webOrigin}/users`) }
+	})
 	const sdkSsrBody = await sdkSsr.text()
 	if (!sdkSsr.ok || !sdkSsrBody.includes(webEmail)) throw new Error('SSR flat client operation did not use the private gateway transport')
 
@@ -795,10 +931,17 @@ async function verifyDualOriginAuth({
 			api: `${apiOrigin}/api/auth/* -> gateway -> auth`
 		},
 		cookies: {
-			webOrigin: redactedCookies(webJar),
-			apiOrigin: redactedCookies(apiJar),
+			browserStore: {
+				beforeSignIns,
+				afterWebSignIn,
+				afterApiSignIn
+			},
+			matchedRequests: {
+				web: redactedBrowserCookies(webRequestCookies),
+				api: redactedBrowserCookies(apiRequestCookies)
+			},
 			hostOnly: true,
-			separateJars: true
+			isolatedByHostname: true
 		},
 		cors: {
 			allowed: {
@@ -849,7 +992,13 @@ async function verifyDualOriginAuth({
 			responseHeader: true
 		},
 		operational,
-		openApi: { status: openApiResponse.status, servers: runtimeOpenApi.servers },
+		openApi: {
+			status: openApiResponse.status,
+			servers: runtimeOpenApi.servers,
+			advertisedOrigin: advertisedApiOrigin,
+			exercisedOrigin: apiOrigin,
+			exactMatch: true
+		},
 		ssr: {
 			status: ssr.status,
 			user: webEmail,

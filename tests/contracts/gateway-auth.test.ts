@@ -80,14 +80,37 @@ describe('dual-origin gateway authentication', () => {
 		expect(parseAllowedHosts(undefined)).toEqual([
 			'localhost:3000',
 			'localhost:5173',
-			'localhost:8786',
-			'127.0.0.1:8786'
+			'api.localhost:8786'
 		])
 		expect(parseAllowedHosts('app.example.test,api.example.test,*.preview.example.test')).toEqual([
 			'app.example.test',
 			'api.example.test',
 			'*.preview.example.test'
 		])
+	})
+
+	test('local web and canonical API origins use separate cookie host namespaces', () => {
+		for (const fixture of ['hono-skip-auth-emailotp', 'hono-cf-workers-passwordless']) {
+			const env = planFixture(fixture).find((entry) => entry.path === '.env.example')!.content
+			const value = (name: string) => env.match(new RegExp(`^${name}=(.+)$`, 'm'))?.[1]
+			const webOrigin = value('PUBLIC_APP_URL') ?? 'http://localhost:5173'
+			const apiOrigin = value('API_PUBLIC_ORIGIN')!
+
+			expect(apiOrigin, fixture).toBe('http://api.localhost:8786')
+			expect(new URL(webOrigin).hostname, fixture).not.toBe(new URL(apiOrigin).hostname)
+			expect(value('GATEWAY_PUBLIC_ORIGINS')?.split(','), fixture).toEqual([
+				webOrigin,
+				apiOrigin
+			])
+			expect(value('BETTER_AUTH_ALLOWED_HOSTS')?.split(','), fixture).toEqual([
+				new URL(webOrigin).host,
+				new URL(apiOrigin).host
+			])
+			expect(value('AUTH_CORS_ORIGINS')?.split(','), fixture).toEqual([
+				webOrigin,
+				apiOrigin
+			])
+		}
 	})
 
 	test('auth CORS echoes approved origins and rejects unknown origins without a wildcard', async () => {

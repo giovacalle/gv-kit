@@ -778,11 +778,14 @@ export function pickLocale(headers: Headers | undefined): string {
 	return `const LOCAL_ALLOWED_HOSTS = [
 \t'localhost:3000',
 \t'localhost:5173',
-\t'localhost:8786',
-\t'127.0.0.1:8786'
+\t'api.localhost:8786'
 ]
 
-const LOCAL_CORS_ORIGINS = ['http://localhost:3000', 'http://localhost:5173']
+const LOCAL_CORS_ORIGINS = [
+\t'http://localhost:3000',
+\t'http://localhost:5173',
+\t'http://api.localhost:8786'
+]
 
 function parseList(raw: string | undefined, fallback: string[]): string[] {
 \treturn (raw ? raw.split(',') : fallback).map((value) => value.trim()).filter(Boolean)

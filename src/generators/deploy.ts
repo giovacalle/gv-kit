@@ -208,9 +208,7 @@ function cleanupCloudflarePreviewWorkersScript(): string {
 set -eu
 
 alias=$(node scripts/cloudflare-preview-name.mjs --validate "\${1:?preview alias is required}")
-# The account inventory survives Worker additions, removals, and renames in source.
-# Deleting each preview Worker also removes its attached PR-scoped routes.
-# Shared wildcard DNS records are prerequisites and are never deleted here.
+# Only validated alias-scoped Workers are deleted; their routes are removed while shared wildcard DNS remains.
 inventory_file=$(mktemp)
 trap 'rm -f "$inventory_file"' EXIT HUP INT TERM
 if ! response=$(curl -fsS "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" \\
@@ -356,12 +354,11 @@ for (const [name, value] of [
 	['CLOUDFLARE_PREVIEW_API_DOMAIN', previewApiDomain]
 ]) if (value !== previewZoneName && !value.endsWith('.' + previewZoneName)) throw new Error(name + ' must belong to CLOUDFLARE_PREVIEW_ZONE_NAME')
 if (previewWebDomain === previewApiDomain) throw new Error('Managed preview web and API domains must be distinct')
-const localHosts = ['localhost:3000', 'localhost:5173', 'localhost:8786', '127.0.0.1:8786']
+const localHosts = ['localhost:3000', 'localhost:5173', 'api.localhost:8786']
 const localOrigins = [
 	'http://localhost:3000',
 	'http://localhost:5173',
-	'http://localhost:8786',
-	'http://127.0.0.1:8786'
+	'http://api.localhost:8786'
 ]
 const sources = [...findWranglerConfigs('apps'), ...findWranglerConfigs('services')]
 	.sort()

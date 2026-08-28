@@ -322,8 +322,7 @@ function renderAuthSchema(isSqlite: boolean): string {
 	if (isSqlite) {
 		return `import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
-// packages/backend may read user records for domain use cases.
-// Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.
+// packages/backend may read user records for domain use cases; Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.
 export const user = sqliteTable('user', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull(),
@@ -377,8 +376,7 @@ export const verification = sqliteTable('verification', {
 	}
 	return `import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
 
-// packages/backend may read user records for domain use cases.
-// Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.
+// packages/backend may read user records for domain use cases; Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.
 export const user = pgTable('user', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull(),

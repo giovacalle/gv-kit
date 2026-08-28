@@ -431,16 +431,16 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(configs.gateway.vars).toEqual({
 			API_PUBLIC_ORIGIN: 'https://pr-123.api.example.com',
 			GATEWAY_PUBLIC_ORIGINS:
-				'https://pr-123.app.example.com,https://pr-123.api.example.com,http://localhost:3000,http://localhost:5173,http://localhost:8786,http://127.0.0.1:8786',
+				'https://pr-123.app.example.com,https://pr-123.api.example.com,http://localhost:3000,http://localhost:5173,http://api.localhost:8786',
 			API_CORS_ORIGINS:
-				'https://pr-123.app.example.com,http://localhost:3000,http://localhost:5173,http://localhost:8786,http://127.0.0.1:8786',
+				'https://pr-123.app.example.com,http://localhost:3000,http://localhost:5173,http://api.localhost:8786',
 			GATEWAY_UPSTREAM_TIMEOUT_MS: '10000'
 		})
 		expect(configs.auth.vars).toEqual({
 			BETTER_AUTH_ALLOWED_HOSTS:
-				'pr-123.app.example.com,pr-123.api.example.com,localhost:3000,localhost:5173,localhost:8786,127.0.0.1:8786',
+				'pr-123.app.example.com,pr-123.api.example.com,localhost:3000,localhost:5173,api.localhost:8786',
 			AUTH_CORS_ORIGINS:
-				'https://pr-123.app.example.com,https://pr-123.api.example.com,http://localhost:3000,http://localhost:5173,http://localhost:8786,http://127.0.0.1:8786'
+				'https://pr-123.app.example.com,https://pr-123.api.example.com,http://localhost:3000,http://localhost:5173,http://api.localhost:8786'
 		})
 		expect(result.githubOutput).toContain('api_origin=https://pr-123.api.example.com\n')
 		expect(result.githubOutput).toContain('web_origin=https://pr-123.app.example.com\n')
@@ -582,6 +582,7 @@ describe('Cloudflare gateway preview contracts', () => {
 
 		const cleanup = entry(entries, '.github/workflows/cleanup-staging.yml')
 		const cleanupScript = entry(entries, 'scripts/cleanup-cloudflare-preview-workers.sh')
+		const guidance = entry(runGenerators(makeCfg()), 'README.md')
 		expect(cleanup).toContain(
 			'sh scripts/cleanup-cloudflare-preview-workers.sh "${{ steps.alias.outputs.alias }}"'
 		)
@@ -590,8 +591,13 @@ describe('Cloudflare gateway preview contracts', () => {
 			'node scripts/cloudflare-preview-name.mjs --validate-name "$worker_name" "$alias"'
 		)
 		expect(cleanupScript).toContain('Deleted $worker_name and its attached preview routes.')
-		expect(cleanupScript).toContain('Shared wildcard DNS records')
+		expect(cleanupScript).toContain('shared wildcard DNS remains')
 		expect(cleanupScript).not.toMatch(/dns_records|wrangler[^\n]*dns/i)
+		expect(guidance).toContain('inventories account Workers')
+		expect(guidance).toContain('validates each name against the project namespace')
+		expect(guidance).toContain('and preview alias before deletion')
+		expect(guidance).toContain('Deleting a preview Worker also removes its PR-scoped routes')
+		expect(guidance).toContain('Shared wildcard DNS records are prerequisites and remain in place')
 		expect(cleanup).not.toContain('deleteRef')
 		expect(cleanup).not.toContain('contents: write')
 		expect(cleanup).not.toContain('git push')

@@ -26,7 +26,7 @@
 .claude/stack.json  ad3c9986c42d8dcf
 .commitlintrc.json  1a921be1aa693bb1
 .env.cloudflare.example  ee0ff9edcaeaa649
-.env.example  85ae36545ecd7086
+.env.example  c0df4c6f0124f589
 .github/workflows/cleanup-staging.yml  431607441bb293f0
 .github/workflows/deploy-production.yml  13e5c7f038033812
 .github/workflows/deploy-staging.yml  4499a72291c69abd
@@ -37,7 +37,7 @@
 AGENTS.md  31c8d3cf3a548256
 CLAUDE.md  fad66f72b2845f2b
 LICENSE  508a77d2e7b51d98
-README.md  ad883bc9e4b1be3e
+README.md  7de52de021c61beb
 apps/api/README.md  18ae3e78ce493e5e
 apps/api/openapi.json  2389e66815480b94
 apps/api/package.json  58cc721f6193b148
@@ -115,7 +115,7 @@ packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  822644acf385b8e8
 packages/db/src/client.ts  09602c79d47e2fab
 packages/db/src/index.ts  4d7894d63bb774e7
-packages/db/src/schema/auth.ts  84aeec9d7003ba7d
+packages/db/src/schema/auth.ts  4421e1a0fe0fb4ce
 packages/db/src/schema/index.ts  ea3f70eeb56a54d5
 packages/db/src/schema/sample.ts  88bf38dd19b23d2c
 packages/db/tsconfig.json  44481e7674309364
@@ -285,10 +285,10 @@ packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
-scripts/cleanup-cloudflare-preview-workers.sh  efecb829c27df8ad
+scripts/cleanup-cloudflare-preview-workers.sh  821472f1af1a2739
 scripts/cloudflare-preview-name.mjs  62928dbb81c69c1b
 scripts/local.mjs  42825d534dc30567
-scripts/prepare-cloudflare-preview.mjs  31a2c68fece964fe
+scripts/prepare-cloudflare-preview.mjs  b73ae641d89bba5c
 scripts/resolve-cloudflare-deploy-range.sh  5a1efeaeeb11ebb8
 scripts/verify-cloudflare-preview-ingress.mjs  d679b9884fed1dc2
 scripts/write-cloudflare-preview-secrets.mjs  c538262dd3ffb716
@@ -297,7 +297,7 @@ services/auth/package.json  2bb04c9fc45b0b72
 services/auth/src/app.ts  11ae3cf02cb39ae8
 services/auth/src/auth.ts  06f32838d7c9e2ae
 services/auth/src/index.ts  7cd0934010f03dbd
-services/auth/src/lib/utils.ts  200d92ebee6e8ff8
+services/auth/src/lib/utils.ts  9e57e2981206e11f
 services/auth/src/openapi.ts  102009e3a7636cef
 services/auth/tsconfig.json  8f92267ccfe597ec
 services/auth/worker-configuration.bootstrap.d.ts  1fd9c3e81d8fe016

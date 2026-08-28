@@ -470,6 +470,15 @@ function renderApiTopology(cfg: GvKitConfig): string {
 			: cfg.choices.deploy === 'docker'
 				? `- Docker: ingress publishes the web alias and canonical API. Private services have no host ports; the gateway and SSR use Compose-network URLs.`
 				: `- Local Node: the normal application path uses the gateway. Loopback service ports exist only for debugging, and SSR uses the private \`GATEWAY_URL\`.`
+	const previewCleanup =
+		cfg.choices.deploy === 'cf-workers'
+			? `
+\`scripts/cleanup-cloudflare-preview-workers.sh\` inventories account Workers so source additions,
+removals, and renames do not hide stale previews. It validates each name against the project namespace
+and preview alias before deletion. Deleting a preview Worker also removes its PR-scoped routes.
+Shared wildcard DNS records are prerequisites and remain in place.
+`
+			: ''
 
 	return `
 ## API topology
@@ -510,7 +519,7 @@ Each domain service owns a deterministic OpenAPI fragment. The gateway composes 
 into \`apps/api/openapi.json\`. ${client}
 
 ${privacy}
-
+${previewCleanup}
 Deploy in this order: database migration, private services, gateway, then web. Deployments are not
 atomic, so adjacent versions must remain compatible during rollout.
 
@@ -600,8 +609,8 @@ function renderEnvExample(cfg: GvKitConfig): string {
 				)
 				lines.push('AUTH_CORS_ORIGINS=http://localhost:3000,http://api.localhost:3000')
 			} else {
-				lines.push('BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,localhost:8786,127.0.0.1:8786')
-				lines.push('AUTH_CORS_ORIGINS=http://localhost:5173')
+				lines.push('BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,api.localhost:8786')
+				lines.push('AUTH_CORS_ORIGINS=http://localhost:5173,http://api.localhost:8786')
 			}
 		} else {
 			lines.push('BETTER_AUTH_URL=http://localhost:5173')
@@ -665,16 +674,17 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push('')
 		lines.push('# Public gateway ingress')
 		lines.push('# Canonical API origin advertised by the gateway OpenAPI endpoint')
+		if (cfg.choices.deploy !== 'docker') lines.push('# api.localhost resolves to loopback without a hosts-file entry in browsers')
 		lines.push(
 			cfg.choices.deploy === 'docker'
 				? 'API_PUBLIC_ORIGIN=http://api.localhost:3000'
-				: 'API_PUBLIC_ORIGIN=http://localhost:8786'
+				: 'API_PUBLIC_ORIGIN=http://api.localhost:8786'
 		)
 		lines.push('# Public origins accepted by the gateway boundary')
 		lines.push(
 			cfg.choices.deploy === 'docker'
 				? 'GATEWAY_PUBLIC_ORIGINS=http://localhost:3000,http://api.localhost:3000,http://localhost:8786,http://127.0.0.1:8786'
-				: `GATEWAY_PUBLIC_ORIGINS=http://localhost:${webAliasPort},http://localhost:8786,http://127.0.0.1:8786`
+				: `GATEWAY_PUBLIC_ORIGINS=http://localhost:${webAliasPort},http://api.localhost:8786`
 		)
 		if (!isCf) {
 			lines.push('# Shared only by the private Node SSR transport and gateway')

@@ -35,7 +35,7 @@
 CLAUDE.md  a5f10f76e1094ea3
 LICENSE  508a77d2e7b51d98
 README.md  eea9bc0f48a13f82
-apps/api/README.md  18ae3e78ce493e5e
+apps/api/README.md  75ec2f93c8f0fe33
 apps/api/openapi.json  da0caca873fb436f
 apps/api/package.json  2a7e715818fb1344
 apps/api/scripts/compose-openapi.ts  bb8cd9336590896a

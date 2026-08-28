@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
 import { access, mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { createServer } from 'node:net'
+import { createConnection, createServer } from 'node:net'
 import { join, resolve } from 'node:path'
 import { parseJsonc } from '../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../src/pipeline/plan.js'
@@ -38,16 +38,18 @@ type ComposeArgumentsOptions =
 	| { composeCommand: 'config'; format?: 'json' }
 	| { composeCommand: 'up'; build?: boolean; detached?: boolean }
 
-function parseArgs(argv: string[]): { fixture: string; output: string } {
+function parseArgs(argv: string[]): { contract: boolean; fixture: string; output: string } {
+	let contract = false
 	let fixture = 'hono-docker-emailotp-only'
 	let output = resolve('.scratch/gateway-docker')
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index]
-		if (arg === '--fixture') fixture = argv[++index] ?? fixture
+		if (arg === '--contract') contract = true
+		else if (arg === '--fixture') fixture = argv[++index] ?? fixture
 		else if (arg === '--output') output = resolve(argv[++index] ?? output)
 		else throw new Error(`Unknown argument: ${arg}`)
 	}
-	return { fixture, output }
+	return { contract, fixture, output }
 }
 
 async function materialize(fixture: string, output: string) {
@@ -69,6 +71,43 @@ async function materialize(fixture: string, output: string) {
 		mode: 0o755
 	})
 	return { config, project, binPath }
+}
+
+async function installStreamingProbe(project: string): Promise<void> {
+	const path = join(project, 'services/users/src/app.ts')
+	const app = await readFile(path, 'utf8')
+	const authBoundary = "app.use('/api/v1/users/*', requireAuth)"
+	const probe = `let firstUploadChunkReceived = false
+
+app.get('/api/v1/users/__verify/stream', () => {
+	const body = new ReadableStream<Uint8Array>({
+		start(controller) {
+			controller.enqueue(new TextEncoder().encode('first\\n'))
+			setTimeout(() => {
+				controller.enqueue(new TextEncoder().encode('second\\n'))
+				controller.close()
+			}, 1000)
+		}
+	})
+	return new Response(body, { headers: { 'content-type': 'text/plain' } })
+})
+
+app.post('/api/v1/users/__verify/upload', async (c) => {
+	const reader = c.req.raw.body?.getReader()
+	if (!reader) return c.text('request body required', 400)
+	const first = await reader.read()
+	firstUploadChunkReceived = !first.done
+	while (!(await reader.read()).done) {}
+	return c.text('uploaded')
+})
+
+app.get('/api/v1/users/__verify/upload-status', (c) =>
+	c.json({ firstUploadChunkReceived })
+)
+
+${authBoundary}`
+	if (!app.includes(authBoundary)) throw new Error('Could not install the Docker streaming probe')
+	await writeFile(path, app.replace(authBoundary, probe))
 }
 
 async function captureCommandResult({
@@ -178,6 +217,84 @@ async function requestWhenReady(url: string, init?: RequestInit): Promise<Respon
 		await Bun.sleep(500)
 	}
 	throw new Error(`Timed out waiting for ${url}: ${String(lastError)}`)
+}
+
+async function verifyDelayedResponse(url: string) {
+	const started = performance.now()
+	const response = await fetch(url)
+	const reader = response.body?.getReader()
+	if (!response.ok || !reader) throw new Error(`Streaming response failed at ${url}`)
+	const first = await reader.read()
+	const firstChunkAtMs = Math.round(performance.now() - started)
+	const firstText = new TextDecoder().decode(first.value)
+	if (first.done || firstText !== 'first\n') throw new Error(`First response chunk was buffered at ${url}`)
+	let remainder = ''
+	while (true) {
+		const chunk = await reader.read()
+		if (chunk.done) break
+		remainder += new TextDecoder().decode(chunk.value)
+	}
+	const completedAtMs = Math.round(performance.now() - started)
+	if (remainder !== 'second\n' || completedAtMs - firstChunkAtMs < 500) throw new Error(`Delayed response chunks were not streamed at ${url}`)
+	return { firstChunkAtMs, completedAtMs }
+}
+
+async function verifyChunkedRequest(url: string, statusUrl: string) {
+	const target = new URL(url)
+	const firstChunk = 'first-upload-chunk'
+	const secondChunk = 'second-upload-chunk'
+	const socket = createConnection({ host: '127.0.0.1', port: Number(target.port) })
+	let rawResponse = ''
+	const completed = new Promise<string>((done) => {
+		socket.on('data', (chunk) => (rawResponse += chunk.toString()))
+		socket.on('end', () => done(rawResponse))
+		socket.on('error', () => done(rawResponse))
+	})
+	await new Promise<void>((done, reject) => {
+		socket.once('connect', done)
+		socket.once('error', reject)
+	})
+	socket.write(
+		`POST ${target.pathname} HTTP/1.1\r\nHost: ${target.host}\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n`
+	)
+	socket.write(`${Buffer.byteLength(firstChunk).toString(16)}\r\n${firstChunk}\r\n`)
+
+	const deadline = Date.now() + 2_000
+	let firstChunkObserved = false
+	while (Date.now() < deadline) {
+		const status = await fetch(statusUrl)
+		const body = (await status.json()) as { firstUploadChunkReceived?: boolean }
+		if (body.firstUploadChunkReceived) {
+			firstChunkObserved = true
+			break
+		}
+		await Bun.sleep(25)
+	}
+	if (!firstChunkObserved) {
+		socket.destroy()
+		throw new Error('Gateway upstream did not receive the first chunk before upload completion')
+	}
+
+	socket.write(`${Buffer.byteLength(secondChunk).toString(16)}\r\n${secondChunk}\r\n0\r\n\r\n`)
+	const response = await completed
+	const status = Number(response.match(/^HTTP\/1\.1 (\d{3})/)?.[1] ?? 0)
+	if (status !== 200 || !response.includes('uploaded')) throw new Error(`Chunked upload did not complete through Docker ingress: status ${status}`)
+	return { firstChunkObservedBeforeUploadCompletion: true, status }
+}
+
+async function verifyStreamingRuntime() {
+	const path = '/api/v1/users/__verify/stream'
+	const uploadPath = '/api/v1/users/__verify/upload'
+	return {
+		responses: {
+			webAlias: await verifyDelayedResponse(`${webOrigin}${path}`),
+			canonicalApiHost: await verifyDelayedResponse(`${apiOrigin}${path}`)
+		},
+		request: await verifyChunkedRequest(
+			`${apiOrigin}${uploadPath}`,
+			`${apiOrigin}${uploadPath}-status`
+		)
+	}
 }
 
 function cookieJar(response: Response): CookieJar {
@@ -317,12 +434,14 @@ async function verifyRuntime({
 	project,
 	env,
 	inventory,
-	config
+	config,
+	contract
 }: {
 	project: string
 	env: NodeJS.ProcessEnv
 	inventory: unknown
 	config: GvKitConfig
+	contract: boolean
 }) {
 	const hasAuth = config.choices.auth.length > 0
 	const hasMarketing = config.choices.marketing === 'astro'
@@ -353,6 +472,7 @@ async function verifyRuntime({
 	const marketingHealth = hasMarketing
 		? await requestWhenReady(`${marketingOrigin}/healthz`)
 		: undefined
+	const streaming = contract ? await verifyStreamingRuntime() : undefined
 	if ( directHealth.status !== 200 || webAliasHealth.status !== 200 || canonicalHostHealth.status !== 200 ) throw new Error('One or more gateway ingress health checks failed')
 	if (exactWebAlias.status !== 404 || !exactWebAlias.headers.get('x-request-id')) throw new Error('Exact web-origin /api boundary did not reach the gateway')
 	if (JSON.stringify(openApi.servers) !== JSON.stringify([{ url: apiOrigin }])) throw new Error('Runtime OpenAPI did not advertise the explicit independent API origin')
@@ -375,6 +495,7 @@ async function verifyRuntime({
 		return {
 			project: '.',
 			inventory,
+			streaming,
 			ingress: {
 				exactWebAlias: {
 					url: `${webOrigin}/api`,
@@ -446,6 +567,7 @@ async function verifyRuntime({
 	return {
 		project: '.',
 		inventory,
+		streaming,
 		ingress: {
 			exactWebAlias: {
 				url: `${webOrigin}/api`,
@@ -619,6 +741,7 @@ async function assertCleanup(project: string, env: NodeJS.ProcessEnv) {
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2))
 	const generated = await materialize(args.fixture, args.output)
+	if (args.contract) await installStreamingProbe(generated.project)
 	const hasAuth = generated.config.choices.auth.length > 0
 	const hasMarketing = generated.config.choices.marketing === 'astro'
 	const webPort = await availableRuntimePort(3000, 13_000)
@@ -772,7 +895,8 @@ async function main(): Promise<void> {
 				project: generated.project,
 				env,
 				inventory,
-				config: generated.config
+				config: generated.config,
+				contract: args.contract
 			})
 			const runtimeServices = await runtimeServiceInventory({
 				project: generated.project,

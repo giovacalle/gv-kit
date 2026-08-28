@@ -1655,6 +1655,9 @@ server {
 
 	location = /api {
 		proxy_pass http://gateway_upstream;
+		proxy_http_version 1.1;
+		proxy_request_buffering off;
+		proxy_buffering off;
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
@@ -1664,6 +1667,9 @@ server {
 
 	location ^~ /api/ {
 		proxy_pass http://gateway_upstream;
+		proxy_http_version 1.1;
+		proxy_request_buffering off;
+		proxy_buffering off;
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
@@ -1686,6 +1692,9 @@ server {
 
 	location / {
 		proxy_pass http://gateway_upstream;
+		proxy_http_version 1.1;
+		proxy_request_buffering off;
+		proxy_buffering off;
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};

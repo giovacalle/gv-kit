@@ -48,7 +48,10 @@ export function generateGateway(cfg: GvKitConfig): FileEntry[] {
 			content: composeOpenApiTs(project, runtime)
 		},
 		{ path: 'apps/api/src/app.ts', content: appTs() },
-		{ path: 'apps/api/src/index.ts', content: indexTs(runtime) },
+		{
+			path: 'apps/api/src/index.ts',
+			content: indexTs({ runtime, streamsChunkedIngress: cfg.choices.deploy === 'docker' })
+		},
 		{ path: 'apps/api/README.md', content: readme() }
 	]
 
@@ -542,7 +545,13 @@ export function createGateway(
 `
 }
 
-function indexTs(runtime: Runtime): string {
+function indexTs({
+	runtime,
+	streamsChunkedIngress
+}: {
+	runtime: Runtime
+	streamsChunkedIngress: boolean
+}): string {
 	if (runtime === 'cf-workers') {
 		return `import openApiDocument from '../openapi.json' with { type: 'json' }
 
@@ -572,7 +581,7 @@ function httpTarget(origin: string): GatewayTarget {
 		fetch(request) {
 			const incoming = new URL(request.url)
 			const upstream = new URL(\`\${incoming.pathname}\${incoming.search}\`, origin)
-			const forwarded = new Request(upstream, request)
+			const forwarded = new Request(upstream, request)${streamsChunkedIngress ? "\n\t\t\tforwarded.headers.delete('transfer-encoding')" : ''}
 			return fetch(forwarded, { redirect: 'manual' })
 		}
 	}
@@ -1032,6 +1041,19 @@ web alias and do not depend on CORS.
 defaults to 10000 on Node. Missing targets return \`503\`, transport failures return \`502\`, and
 timeouts return \`504\`. Upstream responses otherwise pass through without retries, aggregation,
 caching, authorization, or trusted-user headers.
+
+## Adjacent-version rollout
+
+Deploy database migrations, private services, the gateway, and then the web application. Treat the
+rollout window as a mixed-version runtime, not as an atomic deployment. Add fields, headers, and new
+\`/api/v1\` routes before using them. When a request changes, services must first accept both the
+previous and new request shape; deploy callers only after that additive service change is live.
+When a response changes, callers must ignore unknown additive fields and headers before services emit them.
+
+Removing or renaming a path or method, making an optional request field or header required, or changing
+status or body semantics require a coordinated rollout. So do incompatible changes to forwarded host or
+protocol, request IDs, or auth cookies. Keep the previous shape until every adjacent gateway, service,
+and web version has moved past it; otherwise deploy all affected components in one controlled window.
 
 ## Local development
 

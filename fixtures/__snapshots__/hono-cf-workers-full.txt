@@ -38,7 +38,7 @@ AGENTS.md  31c8d3cf3a548256
 CLAUDE.md  fad66f72b2845f2b
 LICENSE  508a77d2e7b51d98
 README.md  7de52de021c61beb
-apps/api/README.md  18ae3e78ce493e5e
+apps/api/README.md  75ec2f93c8f0fe33
 apps/api/openapi.json  2389e66815480b94
 apps/api/package.json  58cc721f6193b148
 apps/api/scripts/compose-openapi.ts  ecbbe4f41b9d2c56

@@ -40,24 +40,27 @@ export function generateGateway(cfg: GvKitConfig): FileEntry[] {
 		fragments: [createUsersOpenApiFragment({ project, hasAuth: cfg.choices.auth.length > 0 })]
 	})
 	const entries: FileEntry[] = [
-		{ path: 'apps/api/package.json', content: packageJson({ project, runtime }) },
-		{ path: 'apps/api/tsconfig.json', content: tsconfig(runtime) },
+		{ path: 'apps/api/package.json', content: renderGatewayPackageJson({ project, runtime }) },
+		{ path: 'apps/api/tsconfig.json', content: renderGatewayTsconfig(runtime) },
 		{ path: 'apps/api/openapi.json', content: stringifyOpenApi(checkedOpenApi) },
 		{
 			path: 'apps/api/scripts/compose-openapi.ts',
-			content: composeOpenApiTs(project, runtime)
+			content: renderGatewayOpenApiComposerSource(project, runtime)
 		},
-		{ path: 'apps/api/src/app.ts', content: appTs() },
+		{ path: 'apps/api/src/app.ts', content: renderGatewayAppSource() },
 		{
 			path: 'apps/api/src/index.ts',
-			content: indexTs({ runtime, streamsChunkedIngress: cfg.choices.deploy === 'docker' })
+			content: renderGatewayEntrySource({
+				runtime,
+				streamsChunkedIngress: cfg.choices.deploy === 'docker'
+			})
 		},
-		{ path: 'apps/api/README.md', content: readme() }
+		{ path: 'apps/api/README.md', content: renderGatewayReadme(runtime) }
 	]
 
 	if (runtime === 'cf-workers') {
 		const webHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
-		const wrangler = wranglerJsonc(project, webHost)
+		const wrangler = renderGatewayWranglerConfig(project, webHost)
 		entries.push(
 			{ path: 'apps/api/wrangler.jsonc', content: wrangler },
 			{
@@ -70,7 +73,7 @@ export function generateGateway(cfg: GvKitConfig): FileEntry[] {
 	return entries
 }
 
-function packageJson({ project, runtime }: { project: string; runtime: Runtime }): string {
+function renderGatewayPackageJson({ project, runtime }: { project: string; runtime: Runtime }): string {
 	const dependencies: Record<string, string> = { hono: '^4.6.0' }
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
@@ -120,7 +123,7 @@ function packageJson({ project, runtime }: { project: string; runtime: Runtime }
 	)}\n`
 }
 
-function tsconfig(runtime: Runtime): string {
+function renderGatewayTsconfig(runtime: Runtime): string {
 	const base =
 		runtime === 'cf-workers'
 			? '@repo/tooling-typescript/workers.json'
@@ -140,7 +143,7 @@ function tsconfig(runtime: Runtime): string {
 	)}\n`
 }
 
-function appTs(): string {
+function renderGatewayAppSource(): string {
 	return `import { Hono, type Context } from 'hono'
 
 export type OpenApiDocument = {
@@ -545,7 +548,7 @@ export function createGateway(
 `
 }
 
-function indexTs({
+function renderGatewayEntrySource({
 	runtime,
 	streamsChunkedIngress
 }: {
@@ -613,7 +616,7 @@ console.log(\`${HONO_GATEWAY.identity} listening on http://\${hostname}:\${port}
 `
 }
 
-function wranglerJsonc(project: string, webHost: string): string {
+function renderGatewayWranglerConfig(project: string, webHost: string): string {
 	return `{
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "${honoServiceName(project, HONO_GATEWAY)}",
@@ -623,7 +626,6 @@ function wranglerJsonc(project: string, webHost: string): string {
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
 	"preview_urls": false,
-	// Replace <domain> with the project's apex domain.
 	"routes": [
 		{ "pattern": "api.<domain>", "custom_domain": true },
 		{ "pattern": "${webHost}/api", "zone_name": "<domain>" },
@@ -651,7 +653,7 @@ function wranglerJsonc(project: string, webHost: string): string {
 `
 }
 
-function composeOpenApiTs(project: string, runtime: Runtime): string {
+function renderGatewayOpenApiComposerSource(project: string, runtime: Runtime): string {
 	return `import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
@@ -987,11 +989,11 @@ async function main(): Promise<void> {
 	console.log('Wrote apps/api/openapi.json (sha256:' + hash + ')')
 }
 
-${composeOpenApiMain(runtime)}
+${renderGatewayOpenApiMainSource(runtime)}
 `
 }
 
-function composeOpenApiMain(runtime: Runtime): string {
+function renderGatewayOpenApiMainSource(runtime: Runtime): string {
 	const guard =
 		runtime === 'cf-workers'
 			? 'const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)\nif (isMain)'
@@ -1004,7 +1006,15 @@ function composeOpenApiMain(runtime: Runtime): string {
 }`
 }
 
-function readme(): string {
+function renderGatewayReadme(runtime: Runtime): string {
+	const cloudflareDeployment =
+		runtime === 'cf-workers'
+			? `
+
+## Cloudflare deployment
+
+Before deploying to Cloudflare, replace each \`<domain>\` placeholder in \`wrangler.jsonc\` with the project's apex domain.`
+			: ''
 	return `# API gateway
 
 The gateway is the only public API application. It serves the web origin's same-origin
@@ -1012,7 +1022,7 @@ The gateway is the only public API application. It serves the web origin's same-
 services without changing request and response payloads. It must not import or mount service applications.
 
 Better Auth routes stay under \`/api/auth/*\`. Domain routes are versioned under \`/api/v1/*\`.
-Private services call one another directly and never route internal traffic back through this gateway.
+Private services call one another directly and never route internal traffic back through this gateway.${cloudflareDeployment}
 
 ## OpenAPI
 

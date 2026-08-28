@@ -840,18 +840,15 @@ function readme({
 	if (!hasAuth) {
 		return `# ${honoServiceName(project, AUTH_SERVICE)}
 
-This private service preserves the mandatory auth transport while authentication is disabled.
+This private service is a placeholder generated while authentication is disabled.
 It is reachable externally only through the gateway, where no public auth methods are mounted.
-It exposes health and always reports no active session to sibling services.
 
 ## Boundary
 
 - No public authentication methods are mounted under \`${PUBLIC_AUTH_PREFIX}/*\`.
-- \`GET /internal/session\` always returns \`401\`.
 - The service owns no authentication credentials or database access.
-- Other services still use the private \`${AUTH_SERVICE.internalTarget}\` binding or \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` URL.
 
-Do not add public ingress to this service. Select an authentication provider before adding login or session behavior.
+Do not add public ingress or authentication behavior to this service. Select an authentication provider before adding login behavior.
 `
 	}
 
@@ -1039,12 +1036,14 @@ The auth service is a private service and the Better Auth transport/runtime adap
 - Run domain business logic
 - Call other services (no \`services\` bindings, no outbound HTTP)
 
-Other services MUST call \`/internal/session\` ${
-		runtime === 'cf-workers'
-			? 'through a CF service binding'
-			: `via HTTP using \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\``
-	} —
-**never** import this service's code or read its secrets.
+Other services MUST resolve sessions through \`requireAuth\` from
+\`@repo/backend/middleware/auth\`. That shared middleware alone owns the
+${
+	runtime === 'cf-workers'
+		? `\`${AUTH_SERVICE.internalTarget}\` Service Binding transport to \`/internal/session\``
+		: `\`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` private URL transport to \`/internal/session\``
+}. Transport adapters must not call the binding, URL, or route directly, recreate
+that transport, import this service's code, or read its secrets.
 
 ${setupBlock}
 ## Schema regeneration

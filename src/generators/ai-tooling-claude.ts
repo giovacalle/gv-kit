@@ -3,6 +3,7 @@ import { renderTemplate } from '../lib/template-renderer.js'
 import type { GvKitConfig } from '../schema/config.js'
 import {
 	AUTH_SERVICE,
+	dockerServiceOrigin,
 	honoServiceName,
 	nodeDevelopmentOrigin,
 	USERS_SERVICE
@@ -273,20 +274,31 @@ marketing; route those changes to \`apps/web\` or the owning service instead.
 
 function renderServiceArchitectAgent(cfg: GvKitConfig): string {
 	const isCfWorkers = cfg.choices.deploy === 'cf-workers'
+	const isDocker = cfg.choices.deploy === 'docker'
 	const hasAuth = cfg.choices.auth.length > 0
 	const project = cfg.choices.name
+	const nodeAuthOrigin = isDocker
+		? dockerServiceOrigin(AUTH_SERVICE)
+		: nodeDevelopmentOrigin(AUTH_SERVICE)
 
 	const runtimeFiles = isCfWorkers
 		? `   - \`wrangler.jsonc\` — the only source for bindings, non-secret environment values, and required secret names. **Never \`wrangler.toml\`.**
    - \`worker-configuration.bootstrap.d.ts\` — clean-install bindings derived from the config. \`pnpm cf-typegen\` creates Wrangler's \`worker-configuration.d.ts\` and removes the bootstrap; never hand-edit either declaration or create a separate \`env.d.ts\`.`
 		: `   - \`env.d.ts\` — runtime environment declarations for the Node entry.`
 
-	const authTransport = isCfWorkers
-		? `   - Add a service binding in \`wrangler.jsonc\`: \`{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }\`.
+	const authMandate = !hasAuth
+		? ''
+		: isCfWorkers
+			? `4. If the service needs the current session, consume the shared auth boundary:
+   - Use \`@repo/backend/middleware/auth\` for private session resolution.
+   - Add a service binding in \`wrangler.jsonc\`: \`{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }\`.
    - Run \`pnpm --filter @repo/<svc> cf-typegen\` so the generated \`Env\` includes the binding.
-   - Call it via \`env.${AUTH_SERVICE.internalTarget}.fetch(new Request('https://internal/internal/session', { headers: { cookie } }))\`.`
-		: `   - Add \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string\` to \`Env\` in \`env.d.ts\` (default \`${nodeDevelopmentOrigin(AUTH_SERVICE)}\` in dev).
-   - Call \`fetch(\\\`\${env.${AUTH_SERVICE.transport.node.targetEnvironmentVariable}}/internal/session\\\`, { headers: { cookie } })\`.`
+   - Mount \`requireAuth\` from the shared middleware on protected routes. The middleware owns the deployment-aware private transport. Do not call the \`${AUTH_SERVICE.internalTarget}\` binding, \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\`, or \`/internal/session\` directly and do not create another session transport.`
+			: `4. If the service needs the current session, consume the shared auth boundary:
+   - Use \`@repo/backend/middleware/auth\` for private session resolution.
+   - Add \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string\` to \`Env\` in \`env.d.ts\` (${isDocker ? `private Compose target \`${nodeAuthOrigin}\`` : `default \`${nodeAuthOrigin}\` in local development`}).
+${isDocker ? `   - Set \`services.<svc>.environment.${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: ${nodeAuthOrigin}\` in \`compose.yaml\`.` : ''}
+   - Mount \`requireAuth\` from the shared middleware on protected routes. The middleware owns the deployment-aware private transport. Do not call the \`${AUTH_SERVICE.internalTarget}\` binding, \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\`, or \`/internal/session\` directly and do not create another session transport.`
 
 	const cloudflareConfig = isCfWorkers
 		? `## wrangler.jsonc shape
@@ -303,9 +315,7 @@ Keep private services triggerless. Do not add \`route\` or \`routes\`. Declare e
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
 	"preview_urls": false,
-	"services": [
-		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }
-	],
+	"services": ${hasAuth ? `[\n\t\t{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }\n\t]` : '[]'},
 	"vars": { "NON_SECRET_SETTING": "<value>" },
 	"secrets": { "required": ["<SECRET_NAME>"] },
 	"dev": { "ip": "127.0.0.1", "port": 8789, "host": "localhost", "inspector_port": 9231 },
@@ -323,13 +333,32 @@ Pick a UNIQUE \`dev.port\` and \`inspector_port\` per service (${AUTH_SERVICE.id
 \`\`\`ts
 declare global {
 	interface Env {
-		${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string
-		DATABASE_URL?: string
+		${hasAuth ? `${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string\n\t\t` : ''}DATABASE_URL?: string
 	}
 }
 
 export {}
 \`\`\`
+
+## src/index.ts shape
+
+${
+	hasAuth
+		? `The Node entry owns runtime binding injection; routes still resolve sessions only through the shared middleware.${isDocker ? ` Compose sets \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` to the private \`${nodeAuthOrigin}\` target.` : ''}
+
+\`\`\`ts
+const authUrl = process.env.${AUTH_SERVICE.transport.node.targetEnvironmentVariable} ?? '${nodeAuthOrigin}'
+serve({
+	fetch(request) {
+		return app.fetch(request, { ${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: authUrl })
+	},
+	port
+})
+\`\`\``
+		: `\`\`\`ts
+serve({ fetch: app.fetch, port })
+\`\`\``
+}
 `
 
 	return `---
@@ -350,15 +379,13 @@ When asked to add service \`<svc>\` (e.g. \`billing\`, \`notifications\`, \`asse
    - \`package.json\` — \`@repo/<svc>\` (private workspace package).${isCfWorkers ? ' Copy the existing `cf-typegen` bootstrap-replacement script and run it after config changes or before deploy.' : ''}
 ${runtimeFiles}
    - \`tsconfig.json\` — extends the workspace base.
-   - \`src/index.ts\` — runtime entry. ${isCfWorkers ? 'Use `export default { fetch: app.fetch }`.' : 'Use `serve({ fetch: app.fetch, port })`.'}
+   - \`src/index.ts\` — runtime entry. ${isCfWorkers ? 'Use `export default { fetch: app.fetch }`.' : hasAuth ? `Use the request-aware \`serve\` adapter shown below so \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` reaches Hono's runtime bindings.` : 'Use `serve({ fetch: app.fetch, port })`.'}
    - \`src/app.ts\` — Hono transport wiring (routes, middleware).
    - \`src/routes/\` — one file per resource. Keep handlers thin and invoke reusable application modules from \`@repo/backend\`.
 
 2. Put reusable data access, use cases, types, helpers, and middleware in \`packages/backend/\`. Service adapters may pass a DB created with \`createDb(env)\` from \`@repo/db\` into those modules. No raw drivers.
 3. Errors via \`errors.*\` from \`@repo/backend/helpers\` (\`errors.notFound\`, \`errors.badRequest\`, …). Catch \`HttpError\` once at the boundary.
-4. If the service needs the current session, consume the auth boundary:
-${authTransport}
-   - Or use the existing middleware: \`@repo/backend/middleware/auth\` (it does exactly this against the binding/URL).
+${authMandate}
 
 ## Hard constraints (REFUSE)
 
@@ -367,10 +394,10 @@ ${authTransport}
 - **REFUSE internal calls through the gateway.** Private services call one another through direct bindings or private URLs.
 - **REFUSE credentialed wildcard CORS.** Use an explicit origin allowlist and reject unknown origins.
 ${isCfWorkers ? '- **REFUSE `wrangler.toml`, public private-service triggers, and hand-written Cloudflare `Env` declarations.** Keep `workers_dev: false`, `preview_urls: false`, no routes, and use `wrangler.jsonc` plus `pnpm cf-typegen` as the source of truth.' : ''}
-${hasAuth ? `- **REFUSE to configure Better Auth outside \`${AUTH_SERVICE.workspacePath}/src/auth.ts\`.** The auth service owns Better Auth configuration and secrets.` : '- **REFUSE to mount public auth methods while no authentication provider is selected.** The private auth transport must continue to report no active session.'}
+${hasAuth ? `- **REFUSE to configure Better Auth outside \`${AUTH_SERVICE.workspacePath}/src/auth.ts\`.** The auth service owns Better Auth configuration and secrets.` : '- **REFUSE to add authentication behavior while no provider is selected.** Select a provider before adding auth schemas, routes, or session handling.'}
 - **REFUSE to put reusable application logic in a transport adapter.** Put shared data access, use cases, types, helpers, and middleware in \`packages/backend/\`, then import the required modules from the service.
 ${hasAuth ? '- **REFUSE ad hoc auth-schema queries in a transport adapter.** Put reusable domain data access in `packages/backend/`; shared application modules may read `authSchema.user` for domain use cases. Resolve session, account, and verification state through the auth boundary.' : '- **REFUSE to invent auth-schema access while authentication is disabled.** No auth schema or users use case is generated until a provider is selected.'}
-- **REFUSE to extract a shared service-client SDK** (\`packages/<svc>-client/\`). Use existing deploy-aware middleware for the auth boundary; add a service-local private transport only for a different boundary that needs one.
+- **REFUSE to extract a shared service-client SDK** (\`packages/<svc>-client/\`).${hasAuth ? ' Use the existing deploy-aware middleware for the auth boundary; add a service-local private transport only for a different boundary that needs one.' : ' Add a service-local private transport only when a generated boundary needs one.'}
 - **REFUSE to share binding or environment declarations between services.** Each \`services/<svc>/\` owns its runtime configuration.
 
 ${cloudflareConfig}

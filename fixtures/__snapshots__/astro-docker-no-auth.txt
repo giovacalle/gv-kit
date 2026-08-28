@@ -225,7 +225,7 @@ pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  d24ee43b16e5abd3
 scripts/local.mjs  c2da370aac65bf3b
-services/auth/README.md  d121b9aac288bf7e
+services/auth/README.md  4ea1b7d58122af68
 services/auth/env.d.ts  3eb96b5d8937e0da
 services/auth/package.json  e2a67ef659888709
 services/auth/src/app.ts  48898a140ad30378
@@ -233,7 +233,7 @@ services/auth/src/index.ts  d67465b9372c4f2f
 services/auth/src/openapi.ts  a891757becb6b5a0
 services/auth/tsconfig.json  f5cee125f468d286
 services/auth/tsup.config.ts  ebd50f3bd9d70df7
-services/users/README.md  796dde9030f9b5ef
+services/users/README.md  d1b39e1861be6541
 services/users/env.d.ts  1aaf5f3acb23a523
 services/users/openapi.json  c47d1938e3559930
 services/users/package.json  78eab7bd95a938ae

@@ -1,12 +1,12 @@
-.ai/rules/api-backend.md  312baec1a3e6ef50
+.ai/rules/api-backend.md  dd366ac91081cd2c
 .ai/rules/auth-flow.md  546401ee6c32a4dd
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
-.ai/rules/core-stack.md  ad35a3f8fa218c46
+.ai/rules/core-stack.md  eb71cece05f54bc3
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  dfc35b9ad8ba0a21
 .ai/rules/core-workflow.md  3cbbc129cb5f28c2
-.ai/rules/db-drizzle.md  0a989f062e66886b
+.ai/rules/db-drizzle.md  99cb60f0da83ba63
 .ai/rules/deploy-cf-workers.md  48e9f979c0732832
 .ai/rules/email-templates.md  f58e0bafccda69df
 .ai/rules/hooks.md  6dd03126d2ec9420
@@ -21,7 +21,7 @@
 .claude/agents/plan.md  f462aa3dff0bd792
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
-.claude/agents/service-architect.md  008a69def3b5bcd1
+.claude/agents/service-architect.md  37b7ade107c8381d
 .claude/settings.json  f9ff1f57215baabd
 .claude/stack.json  ad3c9986c42d8dcf
 .commitlintrc.json  1a921be1aa693bb1
@@ -292,7 +292,7 @@ scripts/prepare-cloudflare-preview.mjs  b73ae641d89bba5c
 scripts/resolve-cloudflare-deploy-range.sh  5a1efeaeeb11ebb8
 scripts/verify-cloudflare-preview-ingress.mjs  d679b9884fed1dc2
 scripts/write-cloudflare-preview-secrets.mjs  c538262dd3ffb716
-services/auth/README.md  a14bdafd721ca70f
+services/auth/README.md  92f49138a0bc4daf
 services/auth/package.json  2bb04c9fc45b0b72
 services/auth/src/app.ts  11ae3cf02cb39ae8
 services/auth/src/auth.ts  06f32838d7c9e2ae

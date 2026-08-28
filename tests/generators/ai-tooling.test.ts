@@ -66,6 +66,21 @@ function markdownGuidance(entries: ReturnType<typeof runGenerators>): string {
 		.join('\n')
 }
 
+function agentGuidance(entries: ReturnType<typeof runGenerators>): string {
+	return entries
+		.filter(
+			({ path }) =>
+				path === 'AGENTS.md' ||
+				path === 'CLAUDE.md' ||
+				path.startsWith('.ai/rules/') ||
+				path.startsWith('.claude/agents/') ||
+				path.startsWith('.codex/agents/') ||
+				path.startsWith('.opencode/agents/')
+		)
+		.map(({ content }) => content)
+		.join('\n')
+}
+
 type CapabilityPathReference = {
 	reference: string
 	resolvedPath: string
@@ -434,11 +449,12 @@ describe('generated Hono gateway guidance', () => {
 		{ label: 'auth', auth: ['emailOTP'] as const, email: 'resend' as const },
 		{ label: 'no-auth', auth: [] as const, email: 'skip' as const }
 	]) {
-		test(`${label} guidance resolves the generated auth owner and session seam`, () => {
+		test(`${label} guidance resolves only generated auth capabilities`, () => {
 			const entries = runGenerators(
 				makeCfg(['claude', 'codex', 'opencode'], { auth: [...auth], email })
 			)
 			const guidance = markdownGuidance(entries)
+			const generatedAgentGuidance = agentGuidance(entries)
 			const backendPackage = JSON.parse(content(entries, 'packages/backend/package.json')) as {
 				exports: Record<string, string>
 			}
@@ -449,18 +465,96 @@ describe('generated Hono gateway guidance', () => {
 			if (auth.length > 0) {
 				expect(guidance).toContain('`services/auth/src/auth.ts`')
 				expect(guidance).toMatch(/configures Better Auth directly/i)
+				expect(generatedAgentGuidance).toContain('`@repo/backend/middleware/auth`')
 				expect(planPaths).toContain('services/auth/src/auth.ts')
 			} else {
 				expect(guidance).not.toContain('`services/auth/src/auth.ts`')
 				expect(guidance).toMatch(/no public auth methods/i)
+				expect(generatedAgentGuidance).not.toContain('`@repo/backend/middleware/auth`')
+				expect(generatedAgentGuidance).not.toContain('`/internal/session`')
 				expect(planPaths).not.toContain('services/auth/src/auth.ts')
 			}
-			expect(guidance).toContain('`@repo/backend/middleware/auth`')
 			expect(backendPackage.exports['./auth']).toBeUndefined()
 			expect(backendPackage.exports['./middleware/auth']).toBe('./src/middleware/auth/index.ts')
 			expect(planPaths).toContain(
 				`packages/backend/${backendPackage.exports['./middleware/auth']!.replace(/^\.\//, '')}`
 			)
+		})
+	}
+
+	for (const deploy of ['skip', 'docker', 'cf-workers'] as const) {
+		test(`${deploy} authenticated guidance requires deploy-aware session middleware`, () => {
+			const entries = runGenerators(
+				makeCfg(['claude', 'codex', 'opencode'], { deploy })
+			)
+			const guidance = markdownGuidance(entries)
+			const serviceArchitect = content(entries, '.claude/agents/service-architect.md')
+			const authReadme = content(entries, 'services/auth/README.md')
+			const usersReadme = content(entries, 'services/users/README.md')
+
+			expect(guidance).toContain('`@repo/backend/middleware/auth`')
+			expect(serviceArchitect).toContain(
+				'Use `@repo/backend/middleware/auth` for private session resolution.'
+			)
+			expect(serviceArchitect).toContain(
+				'Do not call the `AUTH` binding, `AUTH_URL`, or `/internal/session` directly'
+			)
+			expect(authReadme).toContain(
+				'Other services MUST resolve sessions through `requireAuth` from\n`@repo/backend/middleware/auth`.'
+			)
+			expect(authReadme).toContain('Transport adapters must not call the binding, URL, or route directly')
+			expect(usersReadme).toContain('The middleware in `@repo/backend/middleware/auth` calls')
+			expect(guidance).not.toMatch(/\.AUTH\.fetch\s*\(/)
+			expect(guidance).not.toMatch(/fetch\s*\([^\n]*AUTH_URL[^\n]*internal\/session/)
+			expect(guidance).not.toMatch(/Other services MUST call `\/internal\/session`/)
+
+			if (deploy === 'cf-workers') {
+				expect(serviceArchitect).toContain(
+					'{ "binding": "AUTH", "service": "demo-app-auth" }'
+				)
+				expect(serviceArchitect).not.toContain('const authUrl = process.env.AUTH_URL')
+			} else {
+				expect(serviceArchitect).toContain(
+					"return app.fetch(request, { AUTH_URL: authUrl })"
+				)
+				if (deploy === 'docker') {
+					expect(serviceArchitect).toContain(
+						'services.<svc>.environment.AUTH_URL: http://auth:8787'
+					)
+					expect(serviceArchitect).toContain(
+						"const authUrl = process.env.AUTH_URL ?? 'http://auth:8787'"
+					)
+					expect(serviceArchitect).not.toContain(
+						"const authUrl = process.env.AUTH_URL ?? 'http://127.0.0.1:8787'"
+					)
+				} else {
+					expect(serviceArchitect).toContain(
+						"const authUrl = process.env.AUTH_URL ?? 'http://127.0.0.1:8787'"
+					)
+					expect(serviceArchitect).not.toContain('http://auth:8787')
+				}
+			}
+		})
+
+		test(`${deploy} no-auth Markdown does not advertise session capabilities`, () => {
+			const entries = runGenerators(
+				makeCfg(['claude', 'codex', 'opencode'], {
+					auth: [],
+					deploy,
+					email: 'skip'
+				})
+			)
+			const guidance = markdownGuidance(entries)
+			const authReadme = content(entries, 'services/auth/README.md')
+			const usersReadme = content(entries, 'services/users/README.md')
+
+			expect(guidance).not.toContain('`@repo/backend/middleware/auth`')
+			expect(guidance).not.toContain('`/internal/session`')
+			expect(guidance).not.toContain('`AUTH_URL`')
+			expect(guidance).not.toContain('`AUTH`')
+			expect(guidance).not.toMatch(/Returns the current session/i)
+			expect(authReadme).toContain('This private service is a placeholder')
+			expect(usersReadme).not.toMatch(/session|AUTH_URL|`AUTH`|middleware\/auth/i)
 		})
 	}
 })

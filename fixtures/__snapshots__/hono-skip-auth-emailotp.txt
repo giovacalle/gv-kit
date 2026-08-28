@@ -1,12 +1,12 @@
-.ai/rules/api-backend.md  312baec1a3e6ef50
+.ai/rules/api-backend.md  dd366ac91081cd2c
 .ai/rules/auth-flow.md  546401ee6c32a4dd
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
-.ai/rules/core-stack.md  2103a22dbb2b809f
+.ai/rules/core-stack.md  2d4e6a416de760ff
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  dfc35b9ad8ba0a21
 .ai/rules/core-workflow.md  3cbbc129cb5f28c2
-.ai/rules/db-drizzle.md  4b6558504de95da1
+.ai/rules/db-drizzle.md  0d4c0814445100c8
 .ai/rules/email-templates.md  42f8ee191e5bb372
 .ai/rules/hooks.md  6dd03126d2ec9420
 .ai/rules/web-api.md  14ed10491f386cfe
@@ -20,7 +20,7 @@
 .claude/agents/plan.md  f462aa3dff0bd792
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
-.claude/agents/service-architect.md  b1408c2dc9c65b7e
+.claude/agents/service-architect.md  2f2ca1b33f957ebe
 .claude/settings.json  f9ff1f57215baabd
 .claude/stack.json  ae9c20a329df8d7b
 .commitlintrc.json  1a921be1aa693bb1
@@ -266,7 +266,7 @@ pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  d4434f74c5963864
 scripts/local.mjs  94958aea9ddbf32d
-services/auth/README.md  5918e9fdbec155cc
+services/auth/README.md  ddc0227b772d580b
 services/auth/env.d.ts  be8f03f3df94a32d
 services/auth/package.json  8b1860e29ab86dcf
 services/auth/src/app.ts  ecb37c3b53c18e2c

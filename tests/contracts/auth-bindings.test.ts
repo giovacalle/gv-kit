@@ -93,13 +93,18 @@ describe('auth-worker bindings', () => {
 describe('auth-worker generator (post-rewrite)', () => {
 	for (const { file, cfg } of honoFixtures) {
 		if (cfg.choices.auth.length === 0) {
-			test(`${file} exposes only health and private unauthenticated-session transport`, () => {
+			test(`${file} preserves the runtime stub without advertising session capabilities`, () => {
 				const entries = runGenerators(cfg)
 				const app = entries.find((e) => e.path === 'services/auth/src/app.ts')!.content
+				const authReadme = entries.find((e) => e.path === 'services/auth/README.md')!.content
+				const usersReadme = entries.find((e) => e.path === 'services/users/README.md')!.content
 				expect(app).toContain("app.get('/healthz'")
 				expect(app).toContain("return c.json({ error: 'unauthorized' }, 401)")
 				expect(app).not.toContain('/api/auth')
 				expect(entries.some((e) => e.path === 'services/auth/src/auth.ts')).toBe(false)
+				expect(authReadme).toContain('This private service is a placeholder')
+				expect(authReadme).not.toMatch(/session|AUTH_URL|`AUTH`|middleware\/auth/i)
+				expect(usersReadme).not.toMatch(/session|AUTH_URL|`AUTH`|middleware\/auth/i)
 			})
 			continue
 		}
@@ -126,6 +131,13 @@ describe('auth-worker generator (post-rewrite)', () => {
 			expect(readme).toContain('Better Auth configuration and secrets stay private to this service')
 			expect(readme).toContain('`packages/backend/` owns reusable data access and use cases')
 			expect(readme).toContain('`authSchema.user`')
+			expect(readme).toContain(
+				'Other services MUST resolve sessions through `requireAuth` from\n`@repo/backend/middleware/auth`.'
+			)
+			expect(readme).toContain(
+				'Transport adapters must not call the binding, URL, or route directly'
+			)
+			expect(readme).not.toContain('Other services MUST call `/internal/session`')
 			expect(readme).not.toContain('sole owner of authentication state and secrets')
 			expect(readme).not.toMatch(/Owns the auth tables|queried only by the auth service/i)
 		})

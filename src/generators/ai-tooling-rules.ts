@@ -167,12 +167,16 @@ ${
   cases or orchestrate business workflows.
 - **Private services stay private.** They must not gain a public route, workers.dev hostname, or preview URL.
 - **Auth is a service.** Served EXCLUSIVELY by \`${AUTH_SERVICE.workspacePath}/\`. No other
-  service exposes auth endpoints.${cfg.choices.auth.length === 0 ? ' With no selected provider, it mounts no public auth methods and its private session transport always reports no active session.' : ''}
-- **Inter-service calls stay private.** Session-aware services use the existing
-  \`@repo/backend/middleware/auth\` transport, which calls \`/internal/session\`
-  through an explicit \`${AUTH_SERVICE.internalTarget}\` binding on Cloudflare or the private
-  \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` URL on Node and Docker. Do not generate a duplicate
-  local auth client or extract a service SDK.
+  service exposes auth endpoints.${cfg.choices.auth.length === 0 ? ' With no selected provider, do not add authentication behavior.' : ''}
+${
+	cfg.choices.auth.length > 0
+		? `- **Private session resolution uses shared middleware.** Session-aware services MUST use the existing
+  \`@repo/backend/middleware/auth\` transport. This shared middleware owns the deployment-aware
+  \`${AUTH_SERVICE.internalTarget}\` binding or \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` URL transport to the private auth service.
+  Transport adapters and agents must not call the binding, URL, or \`/internal/session\`
+  directly, generate a duplicate auth client, or extract a service SDK.`
+		: ''
+}
 - **Application modules are shared.** \`packages/backend/\` is the shared backend
   application/core layer for reusable data access, use cases, types, helpers, and
   middleware. Service adapters may import any application modules they need.
@@ -244,7 +248,7 @@ ${gatewayConsumer} On Cloudflare, the web Worker's \`GATEWAY\` Service Binding c
 - Never import a service app into the gateway. Forward requests through the
   explicit target transport instead.
 - Never send an internal service call through the gateway. Use a direct private
-  binding or private URL.
+  binding or private URL.${cfg.choices.auth.length > 0 ? ' For private session resolution, use `@repo/backend/middleware/auth`; that shared middleware owns the direct transport.' : ''}
 - Never combine credentials with a wildcard CORS origin. Use an explicit origin
   allowlist and reject unknown origins.`)
 	}
@@ -400,7 +404,7 @@ ${migrationCmds}
 - ${
 		cfg.choices.backend === 'hono'
 			? cfg.choices.auth.length > 0
-				? `Better Auth configuration and secrets stay private to \`${AUTH_SERVICE.workspacePath}/\`. Reusable data access and use cases belong in \`packages/backend/\`, including the generated users data access that reads \`authSchema.user\` for domain use cases. Service adapters invoke shared application modules instead of embedding ad hoc database queries. Session resolution still goes through \`/internal/session\`.`
+				? `Better Auth configuration and secrets stay private to \`${AUTH_SERVICE.workspacePath}/\`. Reusable data access and use cases belong in \`packages/backend/\`, including the generated users data access that reads \`authSchema.user\` for domain use cases. Service adapters invoke shared application modules instead of embedding ad hoc database queries. Private session resolution must use \`@repo/backend/middleware/auth\`; that middleware owns the deployment-aware auth transport.`
 				: 'No authentication schema is generated without a selected provider. Reusable data access and use cases belong in `packages/backend/`, and service adapters invoke those modules instead of embedding ad hoc queries.'
 			: 'SvelteKit server handlers in `apps/web/` use the public `@repo/db` entry point directly.'
 	}

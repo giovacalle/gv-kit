@@ -1,9 +1,9 @@
 .ai/rules/api-backend.md  7e01d17390f53328
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
-.ai/rules/core-stack.md  5cec8015cd851f9a
+.ai/rules/core-stack.md  e1100717eee55429
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
-.ai/rules/core-testing.md  dfc35b9ad8ba0a21
+.ai/rules/core-testing.md  a585cec45acdc4b7
 .ai/rules/core-workflow.md  3cbbc129cb5f28c2
 .ai/rules/db-drizzle.md  bd01f6077645f817
 .ai/rules/hooks.md  6dd03126d2ec9420
@@ -19,7 +19,7 @@
 .claude/agents/plan.md  f462aa3dff0bd792
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
-.claude/agents/service-architect.md  d0005b00d2a8d1a1
+.claude/agents/service-architect.md  daced1c1e316870c
 .claude/settings.json  f9ff1f57215baabd
 .claude/stack.json  e97b3076c57dded9
 .codex/agents/astro-marketer.toml  540288f21e6b25fd
@@ -245,7 +245,7 @@ pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  be10d7fe0d5a3039
 scripts/local.mjs  c2da370aac65bf3b
-services/auth/README.md  a75d1cf18938af87
+services/auth/README.md  f5394c2cc9b29f8b
 services/auth/env.d.ts  3eb96b5d8937e0da
 services/auth/package.json  3a86fd64e4f31edb
 services/auth/src/app.ts  48898a140ad30378
@@ -253,7 +253,7 @@ services/auth/src/index.ts  d67465b9372c4f2f
 services/auth/src/openapi.ts  62ba349129e3f6e8
 services/auth/tsconfig.json  f5cee125f468d286
 services/auth/tsup.config.ts  ebd50f3bd9d70df7
-services/users/README.md  2ee58604ef1c247a
+services/users/README.md  53425d8dac73d57c
 services/users/env.d.ts  1aaf5f3acb23a523
 services/users/openapi.json  0d19bb1172b84971
 services/users/package.json  929b3461f65dd16c

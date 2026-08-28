@@ -1,12 +1,12 @@
-.ai/rules/api-backend.md  312baec1a3e6ef50
+.ai/rules/api-backend.md  dd366ac91081cd2c
 .ai/rules/auth-flow.md  546401ee6c32a4dd
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
-.ai/rules/core-stack.md  ad35a3f8fa218c46
+.ai/rules/core-stack.md  eb71cece05f54bc3
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  dfc35b9ad8ba0a21
 .ai/rules/core-workflow.md  3cbbc129cb5f28c2
-.ai/rules/db-drizzle.md  383c175072a8e35b
+.ai/rules/db-drizzle.md  3ed290ece43f6304
 .ai/rules/deploy-cf-workers.md  d07c8dd18c2fe2a8
 .ai/rules/email-templates.md  f58e0bafccda69df
 .ai/rules/hooks.md  6dd03126d2ec9420
@@ -282,7 +282,7 @@ scripts/prepare-cloudflare-preview.mjs  b73ae641d89bba5c
 scripts/resolve-cloudflare-deploy-range.sh  5a1efeaeeb11ebb8
 scripts/verify-cloudflare-preview-ingress.mjs  d679b9884fed1dc2
 scripts/write-cloudflare-preview-secrets.mjs  01424ca79fde42c1
-services/auth/README.md  b1e86b157423744e
+services/auth/README.md  bb75ed6b892d77a2
 services/auth/package.json  5b3f5fafd1a565b0
 services/auth/src/app.ts  11ae3cf02cb39ae8
 services/auth/src/auth.ts  1fb79bea5a5f6534

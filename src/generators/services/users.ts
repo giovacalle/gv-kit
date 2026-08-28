@@ -456,8 +456,9 @@ function readme({
 	runtime: Runtime
 	hasAuth: boolean
 }): string {
-	const bindingDoc =
-		runtime === 'cf-workers'
+	const bindingDoc = !hasAuth
+		? ''
+		: runtime === 'cf-workers'
 			? `Session validation is delegated to the auth Worker via:
 
 \`\`\`
@@ -472,8 +473,21 @@ dev). The middleware in \`@repo/backend/middleware/auth\` calls
 \`/internal/session\` on that URL. **Do not extract auth state into this
 service.**`
 
-	const dev =
-		runtime === 'cf-workers'
+	const dev = !hasAuth
+		? runtime === 'cf-workers'
+			? `## Local dev
+
+\`\`\`bash
+pnpm dev
+\`\`\``
+			: `## Local dev
+
+\`\`\`bash
+pnpm dev
+\`\`\`
+
+The server listens on \`http://127.0.0.1:\${PORT ?? ${USERS_SERVICE.development.port}}\`.`
+		: runtime === 'cf-workers'
 			? `## Local dev
 
 \`\`\`bash
@@ -513,18 +527,22 @@ This service adapter MUST NOT:
 
 - Configure Better Auth
 - Read \`BETTER_AUTH_SECRET\` or any OAuth secret
-- Embed ad hoc database queries; add reusable domain data access to \`packages/backend/\`
-- Resolve session, account, or verification state from the database instead of the private auth transport
+- Embed ad hoc database queries; add reusable domain data access to \`packages/backend/\`${
+		hasAuth
+			? '\n- Resolve session, account, or verification state from the database instead of the private auth transport'
+			: ''
+	}
 
-${bindingDoc}
-
-${dev}
+${bindingDoc}${bindingDoc ? '\n\n' : ''}${dev}
 
 ## Routes and OpenAPI ownership
 
 | Route | Reachability | Description |
-| --- | --- | --- |
-| \`GET ${PUBLIC_USERS_PREFIX}/me\` | gateway-forwarded | Returns the current session |
+| --- | --- | --- |${
+		hasAuth
+			? `\n| \`GET ${PUBLIC_USERS_PREFIX}/me\` | gateway-forwarded | Returns the current session |`
+			: ''
+	}
 | \`GET /openapi.json\` | private diagnostics | Runtime view of the service contract |
 
 The checked \`openapi.json\` file is a composition input owned by this service. The gateway

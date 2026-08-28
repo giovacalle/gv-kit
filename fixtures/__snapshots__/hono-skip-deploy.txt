@@ -1,9 +1,9 @@
 .ai/rules/api-backend.md  c3113138575be6a3
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
-.ai/rules/core-stack.md  4637e7173997285a
+.ai/rules/core-stack.md  4efe90556960708d
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
-.ai/rules/core-testing.md  dfc35b9ad8ba0a21
+.ai/rules/core-testing.md  a585cec45acdc4b7
 .ai/rules/core-workflow.md  3cbbc129cb5f28c2
 .ai/rules/db-drizzle.md  bd01f6077645f817
 .ai/rules/hooks.md  6dd03126d2ec9420
@@ -18,7 +18,7 @@
 .claude/agents/plan.md  f462aa3dff0bd792
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
-.claude/agents/service-architect.md  d0005b00d2a8d1a1
+.claude/agents/service-architect.md  daced1c1e316870c
 .claude/settings.json  f9ff1f57215baabd
 .claude/stack.json  d0e3de1d0672aff5
 .commitlintrc.json  1a921be1aa693bb1
@@ -232,7 +232,7 @@ pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  098203e33ee3aae4
 scripts/local.mjs  8740e72610532613
-services/auth/README.md  06b4ce35ae059c8a
+services/auth/README.md  d32ca02795573715
 services/auth/env.d.ts  3eb96b5d8937e0da
 services/auth/package.json  c0f00a63b2d7b8fe
 services/auth/src/app.ts  48898a140ad30378
@@ -240,7 +240,7 @@ services/auth/src/index.ts  d67465b9372c4f2f
 services/auth/src/openapi.ts  d8151a8fc18f692d
 services/auth/tsconfig.json  f5cee125f468d286
 services/auth/tsup.config.ts  ebd50f3bd9d70df7
-services/users/README.md  dca263fff0882526
+services/users/README.md  eb6eafbffb323e1f
 services/users/env.d.ts  1aaf5f3acb23a523
 services/users/openapi.json  1541436316c0c18d
 services/users/package.json  384eee494261095f

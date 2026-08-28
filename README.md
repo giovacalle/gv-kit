@@ -31,6 +31,16 @@ pnpm dev
 
 If you select `backend=inside-frontend`, follow its generated README instead. That topology does not use `pnpm local:prepare`.
 
+## Reproduce a generated project
+
+Every generated project includes `project.config.jsonc`, which records its validated choices. Pass that file back to `--config` and choose a new output directory:
+
+```bash
+npx gv-kit new another-project --config path/to/project.config.jsonc
+```
+
+`--config` also continues to accept valid user-authored JSON or JSONC files under any filename.
+
 ## What you get
 
 A Turborepo monorepo with:

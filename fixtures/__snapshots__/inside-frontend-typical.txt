@@ -62,7 +62,6 @@ apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  89c6c7068f62a061
 apps/web/wrangler.jsonc  0d2d9e782ec24761
 eslint.config.js  cfd85b071f7c820c
-gv-kit.config.jsonc  6a9cdb2ebb53274e
 package.json  81edb5217f62fbb4
 packages/backend/package.json  fb793c28081659e5
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
@@ -219,5 +218,6 @@ packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e
 prettier.config.js  76a534fdcb4541a5
+project.config.jsonc  6f55c5956444dce0
 tsconfig.json  30916d65cceb0f5a
 turbo.json  7ad18044dd3cf3fa

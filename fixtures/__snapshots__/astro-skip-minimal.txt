@@ -47,7 +47,6 @@ apps/web/svelte.config.js  5c32ff96e10d06c8
 apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  669d0b2cc2b254e0
 eslint.config.js  cfd85b071f7c820c
-gv-kit.config.jsonc  f58447807daeb7d8
 package.json  a72f9f03b74b9f69
 packages/backend/package.json  02118c52884fb692
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
@@ -197,5 +196,6 @@ packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e
 prettier.config.js  76a534fdcb4541a5
+project.config.jsonc  4475fcb3090a5a2c
 tsconfig.json  30916d65cceb0f5a
 turbo.json  7afe6cdf277dc0da

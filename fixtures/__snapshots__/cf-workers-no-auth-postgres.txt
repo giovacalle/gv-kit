@@ -10,7 +10,7 @@
 .ai/rules/hooks.md  6dd03126d2ec9420
 .ai/rules/web-api.md  8f027dd15c042049
 .ai/rules/web-forms.md  18d060e15c611273
-.ai/rules/web-query.md  60b60d49e5399d1f
+.ai/rules/web-query.md  1a9635274e87346a
 .ai/rules/web-seo.md  4d46fd12199ce1b5
 .ai/rules/web-svelte.md  a8e7d4c7d35ab181
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
@@ -77,7 +77,6 @@ apps/web/vite.config.ts  0a45dc271573782d
 apps/web/worker-configuration.bootstrap.d.ts  d767dca7e4dc9ba8
 apps/web/wrangler.jsonc  0847d988ca9219a3
 eslint.config.js  cfd85b071f7c820c
-gv-kit.config.jsonc  5563eeebb24bab6b
 package.json  b399fbeb8e1b91c0
 packages/backend/package.json  145bc3a2014848b3
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
@@ -239,6 +238,7 @@ packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
+project.config.jsonc  85b13936f934aa80
 scripts/cleanup-cloudflare-preview-workers.sh  821472f1af1a2739
 scripts/cloudflare-preview-name.mjs  3fa3cd326cc47371
 scripts/local.mjs  0f244e642556a6c9

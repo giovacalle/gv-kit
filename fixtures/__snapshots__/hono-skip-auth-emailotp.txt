@@ -11,7 +11,7 @@
 .ai/rules/hooks.md  6dd03126d2ec9420
 .ai/rules/web-api.md  14ed10491f386cfe
 .ai/rules/web-forms.md  18d060e15c611273
-.ai/rules/web-query.md  60b60d49e5399d1f
+.ai/rules/web-query.md  1a9635274e87346a
 .ai/rules/web-seo.md  4d46fd12199ce1b5
 .ai/rules/web-svelte.md  a2beba6572662631
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
@@ -81,7 +81,6 @@ apps/web/svelte.config.js  5c32ff96e10d06c8
 apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  0a45dc271573782d
 eslint.config.js  cfd85b071f7c820c
-gv-kit.config.jsonc  61d823b0c34d873e
 package.json  494a5ca0670108ac
 packages/backend/package.json  bb33cd33c03ac00e
 packages/backend/src/core/data-access/users.ts  3cee1df896a23f1b
@@ -265,6 +264,7 @@ packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
+project.config.jsonc  d4434f74c5963864
 scripts/local.mjs  94958aea9ddbf32d
 services/auth/README.md  5918e9fdbec155cc
 services/auth/env.d.ts  be8f03f3df94a32d

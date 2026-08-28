@@ -1164,6 +1164,11 @@ describe('local private-service gateway topology', () => {
 		const publicReadme = readFileSync(join(fixturesDir, '..', 'README.md'), 'utf8')
 		expect(publicReadme).toContain('For the default Hono scaffold')
 		expect(publicReadme).toContain(canonicalHonoQuickstart)
+		expect(publicReadme).toContain('## Reproduce a generated project')
+		expect(publicReadme).toContain('project.config.jsonc')
+		expect(publicReadme).toContain(
+			'npx gv-kit new another-project --config path/to/project.config.jsonc'
+		)
 
 		for (const fixture of ['hono-skip-deploy', 'hono-docker-full', 'hono-cf-workers-full']) {
 			const rootReadme = planFixture(fixture).find((entry) => entry.path === 'README.md')?.content ?? ''

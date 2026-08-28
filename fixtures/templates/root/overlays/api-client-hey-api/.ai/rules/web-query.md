@@ -41,8 +41,8 @@ export const load = async ({ fetch, url }) => {
 Wrap option args in a function — `createQuery(() => options)` — so reactive
 inputs (a search term, filters, an id) re-run the query. Access results
 directly with runes, no `$`: `profile.data`, `profile.isPending`,
-`profile.isError`. For paginated endpoints the generator also emits
-`<op>InfiniteOptions` for `createInfiniteQuery`.
+`profile.isError`. Paginated endpoints also expose `<op>InfiniteOptions` for
+`createInfiniteQuery`.
 
 ## The QueryClient is per-request
 

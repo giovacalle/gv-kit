@@ -5,7 +5,7 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
-Dockerfile  a9438afd325c5b92
+Dockerfile  78a93d664b8725c2
 LICENSE  508a77d2e7b51d98
 README.md  bbb37ca9f6114cc8
 apps/web/.env.example  e3b0c44298fc1c14
@@ -38,7 +38,6 @@ apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  669d0b2cc2b254e0
 docker-compose.yml  28d2582ea750ed60
 eslint.config.js  cfd85b071f7c820c
-gv-kit.config.jsonc  da1974e50b47759b
 package.json  647935ac86fe81fa
 packages/backend/package.json  02118c52884fb692
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
@@ -188,5 +187,6 @@ packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  8237172ec4a5735e
 prettier.config.js  76a534fdcb4541a5
+project.config.jsonc  120d73ebb7ae8e50
 tsconfig.json  30916d65cceb0f5a
 turbo.json  a71501a3945d1141

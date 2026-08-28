@@ -11,7 +11,7 @@
 .ai/rules/hooks.md  6dd03126d2ec9420
 .ai/rules/web-api.md  14ed10491f386cfe
 .ai/rules/web-forms.md  18d060e15c611273
-.ai/rules/web-query.md  60b60d49e5399d1f
+.ai/rules/web-query.md  1a9635274e87346a
 .ai/rules/web-seo.md  4d46fd12199ce1b5
 .ai/rules/web-svelte.md  a2beba6572662631
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
@@ -85,7 +85,6 @@ apps/web/vite.config.ts  e8dee2244bca3ff3
 docker-compose.yml  90870fca69160eac
 docker/ingress.conf.template  9fb8b1ac9911eb4c
 eslint.config.js  cfd85b071f7c820c
-gv-kit.config.jsonc  9186f864e0bbfcce
 package.json  0dc57ba0ed5e45b3
 packages/backend/package.json  bb33cd33c03ac00e
 packages/backend/src/core/data-access/users.ts  3cee1df896a23f1b
@@ -269,6 +268,7 @@ packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
+project.config.jsonc  007fc3497b84e5cb
 scripts/local.mjs  731c0914b86da035
 services/auth/README.md  7f8bbf535f293d73
 services/auth/env.d.ts  2429f91154245b46

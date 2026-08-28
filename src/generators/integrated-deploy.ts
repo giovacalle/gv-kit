@@ -594,7 +594,23 @@ interface DockerOpts {
 	wantsEmailOTP: boolean
 	wantsUmami: boolean
 	wantsPosthog: boolean
-	emailProvider: 'resend' | 'notifuse' | null
+	emailProvider: Exclude<GvKitConfig['choices']['email'], 'skip'> | null
+}
+
+function integratedEmailProvider(
+	email: GvKitConfig['choices']['email']
+): Exclude<GvKitConfig['choices']['email'], 'skip'> | null {
+	switch (email) {
+		case 'skip':
+			return null
+		case 'resend':
+		case 'notifuse':
+			return email
+		default: {
+			const _exhaustive: never = email
+			return _exhaustive
+		}
+	}
 }
 
 function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
@@ -608,7 +624,7 @@ function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
 		wantsEmailOTP: cfg.choices.auth.includes('emailOTP'),
 		wantsUmami: cfg.choices.monitoring.includes('umami'),
 		wantsPosthog: cfg.choices.monitoring.includes('posthog'),
-		emailProvider: cfg.choices.email === 'skip' ? null : cfg.choices.email
+		emailProvider: integratedEmailProvider(cfg.choices.email)
 	}
 
 	return [
@@ -679,11 +695,11 @@ ENTRYPOINT ["nginx", "-g", "daemon off;"]
 
 	return `# syntax=docker/dockerfile:1.7
 #
-# Build any service from the repo root:
-#   docker build --target web-runtime --build-arg TURBO_FILTER=<project>-web -t web .
-#   docker build --target api-runtime --build-arg APP_PATH=apps/api/auth --build-arg TURBO_FILTER=@<project>/auth-worker -t auth .
+# Build the Docker images from the repo root:
+#   docker build --target web-runtime --build-arg TURBO_FILTER=${opts.project}-web -t web .
+#   docker build --target migrate-runtime --build-arg TURBO_FILTER=@repo/db -t migrate .
 #
-# Compose orchestrates these via \`target:\` and \`args:\`.
+# Compose uses the same targets and build arguments.
 
 ARG NODE_VERSION=24
 ARG PNPM_VERSION=11.1.1

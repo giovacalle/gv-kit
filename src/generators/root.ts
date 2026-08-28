@@ -478,6 +478,18 @@ function renderApiTopology(cfg: GvKitConfig): string {
 use cases, types, helpers, and middleware. Independently deployable \`services/<service>/\`
 packages are transport/runtime adapters and may import the application modules they need.
 
+${
+	cfg.choices.auth.length > 0
+		? `Better Auth configuration and secrets stay private to \`services/auth/\`. \`packages/backend/\`
+owns reusable data access and use cases, including the generated users data access that reads
+\`authSchema.user\` for domain use cases. \`services/users/\` invokes that shared users use case as
+a transport/runtime adapter; it does not gain access to Better Auth secrets or permission to
+embed ad hoc database queries.`
+		: `No authentication schema or users use case is generated without a selected provider.
+Service adapters still keep reusable data access in \`packages/backend/\` instead of embedding
+ad hoc database queries.`
+}
+
 \`apps/api/\` is the only public API application. It handles ingress, routing, operational
 middleware, OpenAPI delivery, and transparent forwarding. It does not import application use
 cases or orchestrate business workflows. Both ingress paths reach the same gateway contract:

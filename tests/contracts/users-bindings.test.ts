@@ -70,6 +70,23 @@ describe('users-worker bindings', () => {
 			expect(appTs!.content).toContain('requireAuth')
 		})
 
+		if (cfg.choices.auth.length > 0) {
+			test(`${file} documents shared users data access without exclusive auth-table ownership`, () => {
+				const entries = runGenerators(cfg)
+				const readme = entries.find((e) => e.path === 'services/users/README.md')!.content
+				const dataAccess = entries.find(
+					(e) => e.path === 'packages/backend/src/core/data-access/users.ts'
+				)!.content
+
+				expect(readme).toContain('transport/runtime adapter')
+				expect(readme).toContain('`@repo/backend/core/use-cases/users`')
+				expect(readme).toContain('`authSchema.user`')
+				expect(readme).toContain('Better Auth configuration and secrets')
+				expect(readme).not.toMatch(/query auth tables \(`account`|never read auth secrets or query auth tables/i)
+				expect(dataAccess).toContain('from(authSchema.user)')
+			})
+		}
+
 		test(`${file} users-worker does NOT emit removed auth-client / require-auth / env.ts`, () => {
 			const entries = runGenerators(cfg)
 			const removedPaths = [

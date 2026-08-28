@@ -188,8 +188,11 @@ ${
 - Browser or SSR code calling \`${AUTH_SERVICE.workspacePath}/\` or \`${USERS_SERVICE.workspacePath}/\` directly
 - \`${USERS_SERVICE.workspacePath}/\` configuring Better Auth or reading its secrets
 - \`${USERS_SERVICE.workspacePath}/\` reading \`BETTER_AUTH_SECRET\`
-- Any service other than \`${AUTH_SERVICE.workspacePath}/\` querying \`user\`, \`session\`,
-  \`account\`, or \`verification\` tables directly
+${
+	cfg.choices.auth.length > 0
+		? '- Embedding ad hoc auth-schema queries in a transport adapter. Put reusable domain data access in `packages/backend/`; shared application modules may read `authSchema.user` for domain use cases. Resolve session, account, and verification state through the private auth boundary.'
+		: '- Inventing auth-schema access while authentication is disabled. No auth schema or users use case is generated until a provider is selected.'
+}
 - Adding a per-service public client package or fetch wrapper
 - Sending an internal service call through the gateway
 - Configuring credentialed wildcard CORS; use an explicit origin allowlist
@@ -394,7 +397,13 @@ ${migrationCmds}
 ## Boundary
 
 - \`packages/db\` does NOT contain application business logic
-- ${cfg.choices.backend === 'hono' ? `Only \`${AUTH_SERVICE.workspacePath}/\` queries the auth tables. Other services that need session data go through \`/internal/session\`.` : 'SvelteKit server handlers in `apps/web/` use the public `@repo/db` entry point directly.'}
+- ${
+		cfg.choices.backend === 'hono'
+			? cfg.choices.auth.length > 0
+				? `Better Auth configuration and secrets stay private to \`${AUTH_SERVICE.workspacePath}/\`. Reusable data access and use cases belong in \`packages/backend/\`, including the generated users data access that reads \`authSchema.user\` for domain use cases. Service adapters invoke shared application modules instead of embedding ad hoc database queries. Session resolution still goes through \`/internal/session\`.`
+				: 'No authentication schema is generated without a selected provider. Reusable data access and use cases belong in `packages/backend/`, and service adapters invoke those modules instead of embedding ad hoc queries.'
+			: 'SvelteKit server handlers in `apps/web/` use the public `@repo/db` entry point directly.'
+	}
 `
 }
 

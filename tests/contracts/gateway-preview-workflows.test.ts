@@ -23,9 +23,11 @@ const baseChoices: Choices = {
 
 type GeneratedEntry = { path: string; content: string }
 type PreviewNames = {
+	cloudflarePreviewProject: string
 	cloudflarePreviewName(productionName: string, alias: string): string
 	cloudflarePreviewAlias(previewId: string): string
 	validateCloudflarePreviewAlias(alias: string): string
+	validateCloudflarePreviewName(previewName: string, alias: string): string
 }
 
 function makeCfg(overrides: Partial<Choices> = {}): GvKitConfig {
@@ -59,6 +61,7 @@ async function previewNames({ entries }: { entries: GeneratedEntry[] }): Promise
 		replacement: ''
 	})
 	source = source.replaceAll('export function ', 'function ')
+	source = source.replace('export const cloudflarePreviewProject', 'const cloudflarePreviewProject')
 	const load = Object.getPrototypeOf(async function () {}).constructor as new (
 		dependenciesParameter: 'dependencies',
 		source: string
@@ -69,7 +72,7 @@ async function previewNames({ entries }: { entries: GeneratedEntry[] }): Promise
 	}) => Promise<PreviewNames>
 	return new load(
 		'dependencies',
-		`const { createHash, process, console } = dependencies\n${source}\nreturn { cloudflarePreviewName, cloudflarePreviewAlias, validateCloudflarePreviewAlias }`
+		`const { createHash, process, console } = dependencies\n${source}\nreturn { cloudflarePreviewProject, cloudflarePreviewName, cloudflarePreviewAlias, validateCloudflarePreviewAlias, validateCloudflarePreviewName }`
 	)({ createHash, process: { argv: [] }, console: { log: () => undefined } })
 }
 
@@ -129,9 +132,13 @@ async function runPreviewPreparation({
 		'services/users/wrangler.jsonc'
 	]
 	if (entries.some(({ path }) => path === 'apps/marketing/wrangler.jsonc')) materializedPaths.push('apps/marketing/wrangler.jsonc')
-	const filesystem = memoryFilesystem(
-		materializedPaths.map((path) => ({ path, content: entry(entries, path) }))
-	)
+	const filesystem = memoryFilesystem([
+		...materializedPaths.map((path) => ({ path, content: entry(entries, path) })),
+		{
+			path: 'services/auth/node_modules/dependency/wrangler.jsonc',
+			content: JSON.stringify({ name: `${cfg.choices.name}-dependency-worker` })
+		}
+	])
 	const names = await previewNames({ entries })
 	let source = entry(entries, 'scripts/prepare-cloudflare-preview.mjs')
 	source = replaceRequired({
@@ -148,8 +155,13 @@ async function runPreviewPreparation({
 	})
 	source = replaceRequired({
 		source,
-		expected: "import { cloudflarePreviewName } from './cloudflare-preview-name.mjs'",
-		replacement: 'const { cloudflarePreviewName } = injectedPreviewNames'
+		expected: `import {
+	cloudflarePreviewName,
+	cloudflarePreviewProject,
+	validateCloudflarePreviewAlias
+} from './cloudflare-preview-name.mjs'`,
+		replacement:
+			'const { cloudflarePreviewName, cloudflarePreviewProject, validateCloudflarePreviewAlias } = injectedPreviewNames'
 	})
 	const execute = Object.getPrototypeOf(async function () {}).constructor as new (
 		dependenciesParameter: 'dependencies',
@@ -182,7 +194,9 @@ async function runPreviewPreparation({
 								STAGING_D1_DATABASE_ID: '11111111-1111-4111-8111-111111111111'
 							}
 						: {
-								STAGING_DATABASE_URL: 'postgres://preview:preview@preview.example.test:5432/preview'
+								STAGING_DATABASE_URL: 'postgres://preview:preview@preview.example.test:5432/preview',
+								STAGING_NEON_BRANCH_NAME: `${cfg.choices.name}-db-pr-123`,
+								STAGING_NEON_BRANCH_ID: 'br-preview-123'
 							}),
 					CLOUDFLARE_PREVIEW_WEB_DOMAIN: 'app.example.com',
 					CLOUDFLARE_PREVIEW_API_DOMAIN: 'api.example.com',
@@ -218,7 +232,8 @@ async function runPreviewPreparation({
 						? config('apps/marketing')
 						: undefined
 				},
-		githubOutput: filesystem.files.get('github-output.txt')
+		githubOutput: filesystem.files.get('github-output.txt'),
+		manifest: filesystem.files.get('cloudflare-preview-manifest.json')
 	}
 }
 
@@ -233,70 +248,74 @@ async function shellSyntax(source: string): Promise<void> {
 	if (exitCode !== 0) throw new Error(`Generated shell syntax failed:\n${stderr}`)
 }
 
-type CleanupMode =
-	| 'directories-missing'
-	| 'inventory-failure'
-	| 'delete-failure'
-	| 'missing'
-	| 'success'
+type CleanupMode = 'inventory-failure' | 'malformed-inventory' | 'delete-failure' | 'missing' | 'success'
 
-async function runCleanupScript({ source, mode }: { source: string; mode: CleanupMode }) {
-	let executableSource = source
-	let injectedCommands = ''
-	if (mode !== 'directories-missing') {
-		executableSource = replaceRequired({
-			source,
-			expected: `set --
-[ ! -d apps ] || set -- "$@" apps
-[ ! -d services ] || set -- "$@" services`,
-			replacement: 'set -- apps services'
-		})
-		injectedCommands = `find() {
-	printf '%s\\n' 'apps/web/wrangler.jsonc'
-}
-sed() {
-	printf '%s\\n' 'demo-web'
-}
-head() {
-	command head "$@"
-}
-node() {
-	if [ "$1" != 'scripts/cloudflare-preview-name.mjs' ] || [ "$2" != 'demo-web' ] || [ "$3" != 'pr-123' ]; then
-		return 91
-	fi
-	printf '%s\\n' 'demo-web-pr-123'
-}
-npx() {
-	if [ "$2" = 'deployments' ]; then
-		if [ "$MOCK_CLEANUP" = 'inventory-failure' ]; then
-			echo 'mock deployment inventory failure' >&2
-			return 17
-		fi
-		if [ "$MOCK_CLEANUP" = 'missing' ]; then
-			printf '%s\\n' '[]'
-		else
-			printf '%s\\n' '[{"id":"deployment"}]'
-		fi
+async function runCleanupScript({
+	source,
+	mode,
+	validWorkers
+}: {
+	source: string
+	mode: CleanupMode
+	validWorkers: string[]
+}) {
+	const inventoryEntries =
+		mode === 'missing'
+			? []
+			: [
+					...validWorkers.map((id) => ({ id })),
+					{ id: 'demo-web' },
+					{ id: 'pv-unrelated-project-worker-pr-123' }
+				]
+	const inventory = JSON.stringify({
+		success: true,
+		errors: [],
+		messages: [],
+		result: mode === 'malformed-inventory' ? [{ id: 42 }] : inventoryEntries
+	})
+	const injectedCommands = `node() {
+	if [ "$1" != 'scripts/cloudflare-preview-name.mjs' ]; then return 91; fi
+	if [ "$2" = '--validate' ] && [ "$3" = 'pr-123' ]; then
+		printf '%s\\n' 'pr-123'
 		return 0
 	fi
-	if [ "$2" = 'delete' ]; then
-		if [ "$MOCK_CLEANUP" = 'delete-failure' ]; then
-			echo 'mock Worker deletion failure' >&2
-			return 23
-		fi
-		return 0
+	if [ "$2" = '--validate-name' ] && [ "$4" = 'pr-123' ]; then
+		case ",$MOCK_VALID_WORKERS," in
+			*,"$3",*) printf '%s\\n' "$3"; return 0 ;;
+		esac
+		return 1
 	fi
 	return 92
 }
-jq() {
-	input=$(cat)
-	if [ "$input" = '[]' ]; then printf '0\\n'; else printf '1\\n'; fi
+curl() {
+	if [ "$MOCK_CLEANUP" = 'inventory-failure' ]; then
+		echo 'mock Worker inventory failure' >&2
+		return 17
+	fi
+	case " $* " in
+		*page=*|*per_page=*) return 93 ;;
+	esac
+	printf '%s\\n' "$MOCK_INVENTORY"
+}
+npx() {
+	if [ "$2" != 'delete' ]; then return 92; fi
+	if [ "$MOCK_CLEANUP" = 'delete-failure' ] && [ "$4" = "${validWorkers[0] ?? ''}" ]; then
+		echo 'mock Worker deletion failure' >&2
+		return 23
+	fi
+	return 0
 }`
-	}
 	const child = Bun.spawn(['sh', '-s', '--', 'pr-123'], {
 		cwd: import.meta.dir,
-		env: { ...Bun.env, MOCK_CLEANUP: mode },
-		stdin: new Blob([`${injectedCommands}\n${executableSource}`]),
+		env: {
+			...Bun.env,
+			CLOUDFLARE_ACCOUNT_ID: 'verification-account',
+			CLOUDFLARE_API_TOKEN: 'verification-token',
+			MOCK_CLEANUP: mode,
+			MOCK_INVENTORY: inventory,
+			MOCK_VALID_WORKERS: validWorkers.join(',')
+		},
+		stdin: new Blob([`${injectedCommands}\n${source}`]),
 		stdout: 'pipe',
 		stderr: 'pipe'
 	})
@@ -384,10 +403,11 @@ describe('Cloudflare gateway preview contracts', () => {
 		const result = await runPreviewPreparation({ cfg: makeCfg() })
 		expect(result.exitCode, result.stderr).toBe(0)
 		const configs = result.configs!
-		expect(configs.gateway.name).toBe('demo-api-pr-123')
-		expect(configs.web.name).toBe('demo-web-pr-123')
-		expect(configs.auth.name).toBe('demo-auth-pr-123')
-		expect(configs.users.name).toBe('demo-users-pr-123')
+		const names = await previewNames({ entries: result.entries })
+		expect(configs.gateway.name).toBe(names.cloudflarePreviewName('demo-api', 'pr-123'))
+		expect(configs.web.name).toBe(names.cloudflarePreviewName('demo-web', 'pr-123'))
+		expect(configs.auth.name).toBe(names.cloudflarePreviewName('demo-auth', 'pr-123'))
+		expect(configs.users.name).toBe(names.cloudflarePreviewName('demo-users', 'pr-123'))
 		expect(configs.gateway.routes).toEqual([
 			{ pattern: 'pr-123.api.example.com/*', zone_name: 'example.com' },
 			{ pattern: 'pr-123.app.example.com/api', zone_name: 'example.com' },
@@ -397,11 +417,11 @@ describe('Cloudflare gateway preview contracts', () => {
 			{ pattern: 'pr-123.app.example.com/*', zone_name: 'example.com' }
 		])
 		expect(configs.gateway.services).toEqual([
-			{ binding: 'AUTH', service: 'demo-auth-pr-123' },
-			{ binding: 'USERS', service: 'demo-users-pr-123' }
+			{ binding: 'AUTH', service: configs.auth.name },
+			{ binding: 'USERS', service: configs.users.name }
 		])
-		expect(configs.web.services).toEqual([{ binding: 'GATEWAY', service: 'demo-api-pr-123' }])
-		expect(configs.users.services).toEqual([{ binding: 'AUTH', service: 'demo-auth-pr-123' }])
+		expect(configs.web.services).toEqual([{ binding: 'GATEWAY', service: configs.gateway.name }])
+		expect(configs.users.services).toEqual([{ binding: 'AUTH', service: configs.auth.name }])
 		for (const config of Object.values(configs)) {
 			if (!config) continue
 			expect(config.workers_dev).toBe(false)
@@ -424,6 +444,22 @@ describe('Cloudflare gateway preview contracts', () => {
 		})
 		expect(result.githubOutput).toContain('api_origin=https://pr-123.api.example.com\n')
 		expect(result.githubOutput).toContain('web_origin=https://pr-123.app.example.com\n')
+		expect(JSON.parse(result.manifest ?? '')).toEqual({
+			schemaVersion: 1,
+			project: 'demo',
+			alias: 'pr-123',
+			workers: [
+				{ config: 'apps/api/wrangler.jsonc', productionName: 'demo-api', name: configs.gateway.name },
+				{ config: 'apps/web/wrangler.jsonc', productionName: 'demo-web', name: configs.web.name },
+				{ config: 'services/auth/wrangler.jsonc', productionName: 'demo-auth', name: configs.auth.name },
+				{ config: 'services/users/wrangler.jsonc', productionName: 'demo-users', name: configs.users.name }
+			],
+			database: {
+				kind: 'd1',
+				name: 'demo-db-pr-123',
+				id: '11111111-1111-4111-8111-111111111111'
+			}
+		})
 	})
 
 	test('preview preparation fails closed before writing configs when managed domains are absent', async () => {
@@ -446,7 +482,7 @@ describe('Cloudflare gateway preview contracts', () => {
 		)
 		for (const name of previewNames) {
 			expect(name.length).toBeLessThanOrEqual(63)
-			expect(name).toMatch(/-[0-9a-f]{10}-pr-123$/)
+			expect(name).toMatch(/^pv-[0-9a-f]{16}-[0-9a-f]{10}-pr-123$/)
 		}
 		expect(new Set(previewNames).size).toBe(previewNames.length)
 	})
@@ -549,78 +585,101 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(cleanup).toContain(
 			'sh scripts/cleanup-cloudflare-preview-workers.sh "${{ steps.alias.outputs.alias }}"'
 		)
-		expect(cleanupScript).toContain('find "$@" -name wrangler.jsonc')
+		expect(cleanupScript).toContain('/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts')
 		expect(cleanupScript).toContain(
-			'worker_name=$(node scripts/cloudflare-preview-name.mjs "$base_name" "$alias")'
+			'node scripts/cloudflare-preview-name.mjs --validate-name "$worker_name" "$alias"'
 		)
 		expect(cleanupScript).toContain('Deleted $worker_name and its attached preview routes.')
 		expect(cleanupScript).toContain('Shared wildcard DNS records')
-		expect(cleanupScript).not.toMatch(/dns_records|api\.cloudflare\.com|wrangler[^\n]*dns/i)
+		expect(cleanupScript).not.toMatch(/dns_records|wrangler[^\n]*dns/i)
 		expect(cleanup).not.toContain('deleteRef')
 		expect(cleanup).not.toContain('contents: write')
 		expect(cleanup).not.toContain('git push')
 	})
 
-	test('cleanup fails closed on inventory and deletion errors', async () => {
+	test('cleanup inventories topology drift, rejects unsafe names, and reports partial failures', async () => {
 		const generated = generateDeploy(makeCfg())
 		const cleanup = entry(generated, 'scripts/cleanup-cloudflare-preview-workers.sh')
+		const names = await previewNames({ entries: generated })
+		const driftedWorkers = ['demo-billing', 'demo-members', 'demo-users'].map((productionName) =>
+			names.cloudflarePreviewName(productionName, 'pr-123')
+		)
 		await shellSyntax(cleanup)
 		expect(cleanup).toContain('set -eu')
-		expect(cleanup).toContain(
-			'Could not inventory preview Workers: apps and services directories are missing.'
-		)
-		expect(cleanup).toContain(
-			'Could not inventory preview Workers: no Wrangler configurations found.'
-		)
-		expect(cleanup).toContain('npx wrangler@4.125.0 deployments list --name "$worker_name" --json')
+		expect(cleanup).toContain('Could not inventory preview Workers from Cloudflare.')
+		expect(cleanup).toContain('Cloudflare returned a malformed preview Worker inventory.')
+		expect(cleanup).not.toContain('result_info')
+		expect(cleanup).not.toContain('data-urlencode')
 		expect(cleanup).toContain('npx wrangler@4.125.0 delete --name "$worker_name" --force')
+		expect(cleanup).not.toContain('find "$@" -name wrangler.jsonc')
 		expect(cleanup).not.toContain('|| true')
-
-		const directoriesMissing = await runCleanupScript({
-			source: cleanup,
-			mode: 'directories-missing'
-		})
-		expect(directoriesMissing.exitCode).toBe(1)
-		expect(directoriesMissing.stderr).toContain(
-			'Could not inventory preview Workers: apps and services directories are missing.'
-		)
 
 		const inventoryFailure = await runCleanupScript({
 			source: cleanup,
-			mode: 'inventory-failure'
+			mode: 'inventory-failure',
+			validWorkers: driftedWorkers
 		})
-		expect(inventoryFailure.exitCode).toBe(17)
-		expect(inventoryFailure.stderr).toContain('mock deployment inventory failure')
+		expect(inventoryFailure.exitCode).toBe(1)
+		expect(inventoryFailure.stderr).toContain('Could not inventory preview Workers from Cloudflare.')
+
+		const malformedInventory = await runCleanupScript({
+			source: cleanup,
+			mode: 'malformed-inventory',
+			validWorkers: driftedWorkers
+		})
+		expect(malformedInventory.exitCode).toBe(1)
+		expect(malformedInventory.stderr).toContain(
+			'Cloudflare returned a malformed preview Worker inventory.'
+		)
 
 		const deletionFailure = await runCleanupScript({
 			source: cleanup,
-			mode: 'delete-failure'
+			mode: 'delete-failure',
+			validWorkers: driftedWorkers
 		})
-		expect(deletionFailure.exitCode).toBe(23)
+		expect(deletionFailure.exitCode).toBe(1)
 		expect(deletionFailure.stderr).toContain('mock Worker deletion failure')
+		expect(deletionFailure.stderr).toContain('1 preview Worker deletion(s) failed.')
+		for (const worker of driftedWorkers) expect(deletionFailure.stdout).toContain(`Deleting ${worker}`)
 
-		const missingWorker = await runCleanupScript({ source: cleanup, mode: 'missing' })
-		expect(missingWorker.exitCode).toBe(0)
-		expect(missingWorker.stdout).toContain(
-			'Preview Worker demo-web-pr-123 is missing or already deleted.'
-		)
-		expect(missingWorker.stdout).not.toContain('Deleting demo-web-pr-123')
+		const missingWorkers = await runCleanupScript({
+			source: cleanup,
+			mode: 'missing',
+			validWorkers: driftedWorkers
+		})
+		expect(missingWorkers.exitCode).toBe(0)
+		expect(missingWorkers.stdout).not.toContain('Deleting ')
 
-		const success = await runCleanupScript({ source: cleanup, mode: 'success' })
+		const success = await runCleanupScript({
+			source: cleanup,
+			mode: 'success',
+			validWorkers: driftedWorkers
+		})
 		expect(success.exitCode).toBe(0)
-		expect(success.stdout).toContain('Deleting demo-web-pr-123')
-		expect(success.stdout).toContain('Deleted demo-web-pr-123 and its attached preview routes.')
+		for (const worker of driftedWorkers) {
+			expect(success.stdout).toContain(`Deleting ${worker}`)
+			expect(success.stdout).toContain(`Deleted ${worker} and its attached preview routes.`)
+		}
+		expect(success.stdout).not.toContain('demo-web')
+		expect(success.stdout).not.toContain('pv-unrelated-project-worker-pr-123')
 
-		const names = await previewNames({ entries: generated })
 		expect(names.validateCloudflarePreviewAlias('pr-123')).toBe('pr-123')
 		expect(() => names.validateCloudflarePreviewAlias('demo-web')).toThrow()
 		expect(() => names.validateCloudflarePreviewAlias('pr-0')).toThrow()
-		expect(() => names.validateCloudflarePreviewAlias(`pr-${'1'.repeat(46)}`)).toThrow()
+		expect(() => names.validateCloudflarePreviewAlias(`pr-${'1'.repeat(30)}`)).toThrow()
+		const firstDriftedWorker = driftedWorkers[0]!
+		expect(names.validateCloudflarePreviewName(firstDriftedWorker, 'pr-123')).toBe(
+			firstDriftedWorker
+		)
+		expect(() => names.validateCloudflarePreviewName('demo-web', 'pr-123')).toThrow()
+		expect(() => names.validateCloudflarePreviewName(firstDriftedWorker, 'pr-124')).toThrow()
+		expect(() => names.cloudflarePreviewName('unrelated-web', 'pr-123')).toThrow()
 
 		const workflow = entry(generated, '.github/workflows/cleanup-staging.yml')
 		expect(workflow).toContain('preview cleanup cannot inventory resources')
 		expect(workflow).not.toContain('|| true')
-		expect(workflow).not.toContain('if: always()')
+		expect(workflow).toContain("if: always() && steps.alias.outcome == 'success'")
+		expect(workflow).toContain('Preview cleanup completed with $failures failed resource group(s).')
 	})
 
 	test('web Worker never handles inbound browser API aliases', () => {
@@ -655,6 +714,16 @@ describe('Cloudflare gateway preview contracts', () => {
 			'STAGING_SECRETS_FILE: ${{ steps.preview_secrets.outputs.users_file }}'
 		)
 		expect(staging).not.toContain('wrangler secret put')
+		expect(staging).toContain('secret_dir="$RUNNER_TEMP/gateway-preview-secrets"')
+		expect(staging).toContain(
+			'run: rm -rf "$RUNNER_TEMP/gateway-preview-secrets"'
+		)
+		expect(staging.match(/\$RUNNER_TEMP\/gateway-preview-secrets/g)).toHaveLength(2)
+		for (const generated of deployEntries) {
+			expect(generated.content, generated.path).not.toMatch(
+				/\bgv-kit\b|\bthe scaffolder\b|\bthe generator\b|\bthis CLI\b/i
+			)
+		}
 		expect(staging.indexOf('Remove private Worker preview secret files')).toBeGreaterThan(
 			staging.indexOf('Deploy users Worker')
 		)

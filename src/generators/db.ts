@@ -322,7 +322,8 @@ function renderAuthSchema(isSqlite: boolean): string {
 	if (isSqlite) {
 		return `import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
-// Owned exclusively by the auth service. NO other service may query these tables.
+// packages/backend may read user records for domain use cases.
+// Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.
 export const user = sqliteTable('user', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull(),
@@ -376,7 +377,8 @@ export const verification = sqliteTable('verification', {
 	}
 	return `import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
 
-// Owned exclusively by the auth service. NO other service may query these tables.
+// packages/backend may read user records for domain use cases.
+// Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.
 export const user = pgTable('user', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull(),
@@ -524,9 +526,18 @@ Then run \`pnpm db:generate\` and review the diff.
 
 ${
 	isHono
-		? `\`@repo/db\` exports schema and a client factory. It does NOT contain auth
-business logic — that lives in the auth service. Other services consume the
-schema they own; the auth tables here are queried only by the auth service.`
+		? hasAuth
+			? `\`@repo/db\` exports schema and a client factory; it contains no application
+business logic. Better Auth configuration and secrets stay private to
+\`services/auth/\`. Reusable data access and use cases belong in
+\`packages/backend/\`, including the generated users data access that reads
+\`authSchema.user\` for domain use cases. Service adapters invoke those shared
+modules instead of embedding ad hoc database queries. Session resolution still
+uses the private auth transport.`
+			: `\`@repo/db\` exports schema and a client factory; it contains no application
+business logic. No authentication schema is generated without a selected
+provider. Reusable data access and use cases belong in \`packages/backend/\`,
+and service adapters invoke those modules instead of embedding ad hoc queries.`
 		: `\`@repo/db\` exports schema and a client factory. SvelteKit server handlers
 in \`apps/web/\` consume that public package entry point. Keep application
 business logic outside this package.`

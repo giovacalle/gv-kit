@@ -117,6 +117,8 @@ Astro remains static-first on both supported deploy targets: Workers Static Asse
 
 `packages/backend/` is the shared backend application/core layer for reusable data access, use cases, types, helpers, and middleware. Independently deployable packages under `services/` are transport/runtime adapters and may import the application modules they need from `@repo/backend`.
 
+Better Auth configuration and secrets stay private to `services/auth/`. `packages/backend/` owns reusable data access and use cases, including the generated users data access that reads `authSchema.user` for domain use cases. `services/users/` invokes that shared users use case as a transport/runtime adapter; it does not gain access to Better Auth secrets or permission to embed ad hoc database queries.
+
 `apps/api/` is the only public Hono API application. It handles ingress, routing, operational middleware, OpenAPI delivery, and transparent forwarding. It does not import application use cases or orchestrate business workflows. Both ingress paths reach it without changing paths:
 
 - the web origin's same-origin `/api/*` alias for browser traffic
@@ -135,7 +137,7 @@ SvelteKit SSR uses a request-scoped gateway transport. Cloudflare uses the web W
 - have no public production route
 - declare only required private bindings, such as `AUTH` for session resolution
 - use the deploy-aware `@repo/backend/middleware/auth` transport for `/internal/session`
-- never read auth secrets or query auth tables
+- never configure Better Auth, read auth secrets, or embed ad hoc database queries in the transport adapter
 - own deterministic OpenAPI fragments consumed by gateway composition
 
 Each domain service owns a deterministic OpenAPI fragment. The gateway composes those fragments into `apps/api/openapi.json`, the only Hey API input. Browser domain calls import flat operations from `@repo/openapi-client` and use same-origin `/api` and `/api/*`. Better Auth keeps its own client.

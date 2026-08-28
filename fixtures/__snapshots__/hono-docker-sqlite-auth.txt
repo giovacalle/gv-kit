@@ -2,11 +2,11 @@
 .ai/rules/auth-flow.md  546401ee6c32a4dd
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
-.ai/rules/core-stack.md  07afc24d8733f048
+.ai/rules/core-stack.md  2103a22dbb2b809f
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  dfc35b9ad8ba0a21
 .ai/rules/core-workflow.md  3cbbc129cb5f28c2
-.ai/rules/db-drizzle.md  0ca3af319701b4f4
+.ai/rules/db-drizzle.md  4b6558504de95da1
 .ai/rules/email-templates.md  42f8ee191e5bb372
 .ai/rules/hooks.md  6dd03126d2ec9420
 .ai/rules/web-api.md  14ed10491f386cfe
@@ -20,7 +20,7 @@
 .claude/agents/plan.md  f462aa3dff0bd792
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
-.claude/agents/service-architect.md  e2d5ecacd8278743
+.claude/agents/service-architect.md  b1408c2dc9c65b7e
 .claude/settings.json  f9ff1f57215baabd
 .claude/stack.json  616c92c02d6fb68e
 .commitlintrc.json  1a921be1aa693bb1
@@ -33,7 +33,7 @@
 CLAUDE.md  4ee7e1bbec795542
 Dockerfile  2faa3417a06da936
 LICENSE  508a77d2e7b51d98
-README.md  ad4475ed214189cf
+README.md  1274255affb917e7
 apps/api/README.md  18ae3e78ce493e5e
 apps/api/openapi.json  45ed7826034388c6
 apps/api/package.json  72bede691c0be1f4
@@ -100,13 +100,13 @@ packages/backend/src/middleware/error-handler.ts  e067b583aa792d3c
 packages/backend/src/middleware/index.ts  0de27dc7c47e8d8f
 packages/backend/src/middleware/logger.ts  4db96e8b8fed2beb
 packages/backend/tsconfig.json  8b32452841b0fe8e
-packages/db/README.md  34e7f3b811b3dfc9
+packages/db/README.md  da655222471b986b
 packages/db/drizzle.config.ts  e4f7a9364c09743b
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  ecf29b6a20b6c71a
 packages/db/src/client.ts  e335c72cca40e4af
 packages/db/src/index.ts  4d7894d63bb774e7
-packages/db/src/schema/auth.ts  636e62704a5c916a
+packages/db/src/schema/auth.ts  4d9e5e44f18058f8
 packages/db/src/schema/index.ts  ea3f70eeb56a54d5
 packages/db/src/schema/sample.ts  77dbb23fb54706d5
 packages/db/tsconfig.json  d91487a4887bf974
@@ -270,7 +270,7 @@ packages/ui/tsconfig.json  55963b0422d6d5c7
 pnpm-workspace.yaml  c95f84b1e1a3b589
 prettier.config.js  76a534fdcb4541a5
 scripts/local.mjs  731c0914b86da035
-services/auth/README.md  650a34a3eed71ad5
+services/auth/README.md  7f8bbf535f293d73
 services/auth/env.d.ts  2429f91154245b46
 services/auth/package.json  75345c9e5825ee19
 services/auth/src/app.ts  ecb37c3b53c18e2c
@@ -280,7 +280,7 @@ services/auth/src/lib/utils.ts  200d92ebee6e8ff8
 services/auth/src/openapi.ts  b5835352998de8aa
 services/auth/tsconfig.json  f5cee125f468d286
 services/auth/tsup.config.ts  a3467e861d36d694
-services/users/README.md  a34051e80714ef52
+services/users/README.md  a3b1ed3f6ac6d20b
 services/users/env.d.ts  1aaf5f3acb23a523
 services/users/openapi.json  f0fe190495fab830
 services/users/package.json  412978afe26f7766

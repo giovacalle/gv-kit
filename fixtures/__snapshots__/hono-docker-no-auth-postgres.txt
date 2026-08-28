@@ -7,7 +7,7 @@
 .prettierignore  00ccef47c63de1e9
 Dockerfile  863f5b3f3c33de19
 LICENSE  508a77d2e7b51d98
-README.md  ec7295dd5f38de41
+README.md  8549f6c55b0de098
 apps/api/README.md  18ae3e78ce493e5e
 apps/api/openapi.json  e1f4f3ab3504f32c
 apps/api/package.json  bd98589e0dba2ec6
@@ -61,7 +61,7 @@ packages/backend/src/middleware/error-handler.ts  e067b583aa792d3c
 packages/backend/src/middleware/index.ts  0de27dc7c47e8d8f
 packages/backend/src/middleware/logger.ts  4db96e8b8fed2beb
 packages/backend/tsconfig.json  8b32452841b0fe8e
-packages/db/README.md  a7c7281654f2ade4
+packages/db/README.md  9e400ff9542188ff
 packages/db/drizzle.config.ts  6f07aa5d8ce8d2fc
 packages/db/migrations/.gitkeep  e3b0c44298fc1c14
 packages/db/package.json  cf9df444f5fa8257
@@ -220,7 +220,7 @@ services/auth/src/index.ts  d67465b9372c4f2f
 services/auth/src/openapi.ts  87fc9fcbd5b0b8ed
 services/auth/tsconfig.json  f5cee125f468d286
 services/auth/tsup.config.ts  ebd50f3bd9d70df7
-services/users/README.md  2f5eadcc2e37cce7
+services/users/README.md  3dbce1c9edac2e87
 services/users/env.d.ts  67dca936cb4e9ca8
 services/users/openapi.json  65a82d0e86c4604b
 services/users/package.json  34bd0aa7450e5b41

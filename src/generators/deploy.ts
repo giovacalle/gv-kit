@@ -44,7 +44,7 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) },
 		{
 			path: 'scripts/cloudflare-preview-name.mjs',
-			content: cloudflarePreviewNameScript()
+			content: cloudflarePreviewNameScript(project)
 		},
 		{
 			path: 'scripts/verify-cloudflare-preview-ingress.mjs',
@@ -95,11 +95,18 @@ fi
 `
 }
 
-function cloudflarePreviewNameScript(): string {
+function cloudflarePreviewNameScript(project: string): string {
 	return `import { createHash } from 'node:crypto'
 
-const MAX_WORKERS_DEV_NAME_LENGTH = 63
-const MAX_PREVIEW_ALIAS_LENGTH = 48
+const MAX_PREVIEW_ALIAS_LENGTH = 32
+const PROJECT_NAMESPACE_DIGEST_LENGTH = 16
+const RESOURCE_DIGEST_LENGTH = 10
+
+export const cloudflarePreviewProject = ${JSON.stringify(project)}
+const projectNamespace = 'pv-' + createHash('sha256')
+	.update(cloudflarePreviewProject)
+	.digest('hex')
+	.slice(0, PROJECT_NAMESPACE_DIGEST_LENGTH)
 
 export function validateCloudflarePreviewAlias(alias) {
 	if (typeof alias !== 'string' || !/^pr-[1-9][0-9]*$/.test(alias)) throw new Error('Preview alias must use the canonical pr-<positive integer> format')
@@ -113,23 +120,33 @@ export function cloudflarePreviewAlias(previewId) {
 	return validateCloudflarePreviewAlias('pr-' + id)
 }
 
-export function cloudflarePreviewName(productionName, alias) {
-	validateCloudflarePreviewAlias(alias)
-	const directName = productionName + '-' + alias
-	if (directName.length <= MAX_WORKERS_DEV_NAME_LENGTH) return directName
-
-	const digest = createHash('sha256').update(productionName).digest('hex').slice(0, 10)
-	const suffix = '-' + digest + '-' + alias
-	const prefix = productionName
-		.slice(0, MAX_WORKERS_DEV_NAME_LENGTH - suffix.length)
-		.replace(/-+$/, '')
-	if (!prefix) throw new Error('Could not derive a preview Worker name for ' + productionName)
-	return prefix + suffix
+function validateProductionName(productionName) {
+	if (typeof productionName !== 'string' || (productionName !== cloudflarePreviewProject && !productionName.startsWith(cloudflarePreviewProject + '-'))) throw new Error('Worker name is outside the preview project namespace')
+	if (/-pr-[1-9][0-9]*$/.test(productionName)) throw new Error('Production Worker name must not contain a preview alias')
+	return productionName
 }
 
-const [command, value] = process.argv.slice(2)
+export function cloudflarePreviewName(productionName, alias) {
+	validateProductionName(productionName)
+	validateCloudflarePreviewAlias(alias)
+	const resourceDigest = createHash('sha256')
+		.update(productionName)
+		.digest('hex')
+		.slice(0, RESOURCE_DIGEST_LENGTH)
+	return projectNamespace + '-' + resourceDigest + '-' + alias
+}
+
+export function validateCloudflarePreviewName(previewName, alias) {
+	validateCloudflarePreviewAlias(alias)
+	const pattern = new RegExp('^' + projectNamespace + '-[0-9a-f]{' + RESOURCE_DIGEST_LENGTH + '}-' + alias + '$')
+	if (typeof previewName !== 'string' || !pattern.test(previewName)) throw new Error('Worker name is outside the validated project and preview alias namespace')
+	return previewName
+}
+
+const [command, value, alias] = process.argv.slice(2)
 if (command === '--from-id' && value) console.log(cloudflarePreviewAlias(value))
 else if (command === '--validate' && value) console.log(validateCloudflarePreviewAlias(value))
+else if (command === '--validate-name' && value && alias) console.log(validateCloudflarePreviewName(value, alias))
 else if (command && value) console.log(cloudflarePreviewName(command, value))
 `
 }
@@ -190,47 +207,50 @@ function cleanupCloudflarePreviewWorkersScript(): string {
 	return `#!/bin/sh
 set -eu
 
-alias="\${1:?preview alias is required}"
+alias=$(node scripts/cloudflare-preview-name.mjs --validate "\${1:?preview alias is required}")
+# The account inventory survives Worker additions, removals, and renames in source.
 # Deleting each preview Worker also removes its attached PR-scoped routes.
 # Shared wildcard DNS records are prerequisites and are never deleted here.
-set --
-[ ! -d apps ] || set -- "$@" apps
-[ ! -d services ] || set -- "$@" services
-if [ "$#" -eq 0 ]; then
-	echo "Could not inventory preview Workers: apps and services directories are missing." >&2
+inventory_file=$(mktemp)
+trap 'rm -f "$inventory_file"' EXIT HUP INT TERM
+if ! response=$(curl -fsS "https://api.cloudflare.com/client/v4/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts" \\
+	-H "Authorization: Bearer $CLOUDFLARE_API_TOKEN"); then
+	echo "Could not inventory preview Workers from Cloudflare." >&2
 	exit 1
 fi
-
-configs=$(find "$@" -name wrangler.jsonc -print)
-if [ -z "$configs" ]; then
-	echo "Could not inventory preview Workers: no Wrangler configurations found." >&2
+if ! printf '%s' "$response" | jq -e '.success == true and (.errors | type == "array") and (.messages | type == "array") and (.result | type == "array") and all(.result[]; (.id | type) == "string")' >/dev/null; then
+	echo "Cloudflare returned a malformed preview Worker inventory." >&2
 	exit 1
 fi
-
-printf '%s\\n' "$configs" | while read -r config; do
-	base_name=$(sed -n 's/.*"name"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$config" | head -n 1)
-	if [ -z "$base_name" ]; then
-		echo "Could not inventory preview Worker from $config: no top-level name found." >&2
-		exit 1
-	fi
-	worker_name=$(node scripts/cloudflare-preview-name.mjs "$base_name" "$alias")
-	deployments=$(npx wrangler@${WRANGLER_VERSION} deployments list --name "$worker_name" --json)
-	deployment_count=$(printf '%s' "$deployments" | jq 'length')
-	if [ "$deployment_count" -eq 0 ]; then
-		echo "Preview Worker $worker_name is missing or already deleted."
-		continue
-	fi
+printf '%s' "$response" | jq -r '.result[].id' > "$inventory_file"
+sort -u "$inventory_file" -o "$inventory_file"
+failures=0
+while IFS= read -r worker_name; do
+	if ! node scripts/cloudflare-preview-name.mjs --validate-name "$worker_name" "$alias" >/dev/null 2>&1; then continue; fi
 	echo "Deleting $worker_name"
-	npx wrangler@${WRANGLER_VERSION} delete --name "$worker_name" --force
-	echo "Deleted $worker_name and its attached preview routes."
-done
+	if npx wrangler@${WRANGLER_VERSION} delete --name "$worker_name" --force; then
+		echo "Deleted $worker_name and its attached preview routes."
+	else
+		echo "Failed to delete preview Worker $worker_name." >&2
+		failures=$((failures + 1))
+	fi
+done < "$inventory_file"
+
+if [ "$failures" -ne 0 ]; then
+	echo "$failures preview Worker deletion(s) failed." >&2
+	exit 1
+fi
 `
 }
 
 function prepareCloudflarePreviewScript(): string {
 	return `import { appendFileSync, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import { cloudflarePreviewName } from './cloudflare-preview-name.mjs'
+import {
+	cloudflarePreviewName,
+	cloudflarePreviewProject,
+	validateCloudflarePreviewAlias
+} from './cloudflare-preview-name.mjs'
 
 function required(name) {
 	const value = process.env[name]
@@ -294,6 +314,7 @@ function findWranglerConfigs(directory) {
 	if (!existsSync(directory)) return []
 	const found = []
 	for (const name of readdirSync(directory)) {
+		if (name === 'node_modules' || name === '.wrangler') continue
 		const candidate = path.join(directory, name)
 		if (statSync(candidate).isDirectory()) found.push(...findWranglerConfigs(candidate))
 		else if (name === 'wrangler.jsonc') found.push(candidate)
@@ -301,8 +322,25 @@ function findWranglerConfigs(directory) {
 	return found
 }
 
-const alias = required('STAGING_ALIAS')
-if (!/^[a-z][a-z0-9-]{0,47}$/.test(alias)) throw new Error('STAGING_ALIAS must start with a lowercase letter and contain only lowercase letters, numbers, and dashes')
+function previewDatabaseResource() {
+	if (process.env.PREVIEW_DB_KIND === 'd1') {
+		return {
+			kind: 'd1',
+			name: required('STAGING_D1_DATABASE_NAME'),
+			id: required('STAGING_D1_DATABASE_ID')
+		}
+	}
+	if (process.env.PREVIEW_DB_KIND === 'neon') {
+		return {
+			kind: 'neon',
+			name: required('STAGING_NEON_BRANCH_NAME'),
+			id: required('STAGING_NEON_BRANCH_ID')
+		}
+	}
+	throw new Error('PREVIEW_DB_KIND must be d1 or neon')
+}
+
+const alias = validateCloudflarePreviewAlias(required('STAGING_ALIAS'))
 const hasHonoGateway = existsSync('apps/api/wrangler.jsonc') && existsSync('services')
 const hostnamePattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 function domain(name) {
@@ -413,6 +451,7 @@ for (const { config, configPath, normalizedPath, productionName } of sources) {
 	writeFileSync(outputPath, JSON.stringify(config, null, 2) + '\\n')
 	inventory.push({
 		config: normalizedPath,
+		productionName,
 		name: config.name,
 		public: config.workers_dev,
 		services: config.services ?? [],
@@ -421,6 +460,15 @@ for (const { config, configPath, normalizedPath, productionName } of sources) {
 }
 
 if (inventory.length === 0) throw new Error('No Wrangler configurations found')
+const database = previewDatabaseResource()
+const deploymentManifest = {
+	schemaVersion: 1,
+	project: cloudflarePreviewProject,
+	alias,
+	workers: inventory.map(({ config, productionName, name }) => ({ config, productionName, name })),
+	database
+}
+writeFileSync('cloudflare-preview-manifest.json', JSON.stringify(deploymentManifest, null, 2) + '\\n')
 if (process.env.GITHUB_OUTPUT && webOrigin) {
 	appendFileSync(
 		process.env.GITHUB_OUTPUT,
@@ -708,7 +756,7 @@ function previewPrivateSecretsStep(cfg: GvKitConfig, db: GvKitConfig['choices'][
         name: Write private Worker preview secret files
         run: |
           set -euo pipefail
-          secret_dir="$RUNNER_TEMP/gv-kit-preview-secrets"
+          secret_dir="$RUNNER_TEMP/gateway-preview-secrets"
           umask 077
           node scripts/write-cloudflare-preview-secrets.mjs "$secret_dir"${authOutput}${usersOutput}
         env:
@@ -790,7 +838,7 @@ ${deployEnv}`
 	const removePrivateSecretsStep = isHono && hasPrivateSecrets
 		? `      - name: Remove private Worker preview secret files
         if: always()
-        run: rm -rf "$RUNNER_TEMP/gv-kit-preview-secrets"`
+        run: rm -rf "$RUNNER_TEMP/gateway-preview-secrets"`
 		: ''
 	return `# Per-PR staging deploy for ${project}.
 # Staging uses PR-scoped preview database resources and temporary Wrangler configs.
@@ -862,6 +910,14 @@ ${gatewayDeployment}
 
 ${publicDeployments}
 
+      - name: Record exact preview deployment inventory
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-preview-inventory-\${{ needs.preview-db.outputs.alias }}-\${{ github.run_id }}
+          path: cloudflare-preview-manifest.json
+          if-no-files-found: error
+          retention-days: 90
+
       - uses: marocchino/sticky-pull-request-comment@v2
         if: github.event_name == 'pull_request'
         with:
@@ -886,7 +942,9 @@ function writeStagingWranglerConfigStep({ db }: { db: GvKitConfig['choices']['db
           STAGING_D1_DATABASE_NAME: \${{ needs.preview-db.outputs.d1_database_name }}
           STAGING_D1_DATABASE_ID: \${{ needs.preview-db.outputs.d1_database_id }}`
 			: `          PREVIEW_DB_KIND: neon
-          STAGING_DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
+          STAGING_DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}
+          STAGING_NEON_BRANCH_NAME: \${{ needs.preview-db.outputs.neon_branch_name }}
+          STAGING_NEON_BRANCH_ID: \${{ needs.preview-db.outputs.neon_branch_id }}`
 	return `      - id: preview_config
         name: Write temporary staging Wrangler configs
         run: node scripts/prepare-cloudflare-preview.mjs
@@ -1059,7 +1117,8 @@ jobs:
         env:
           RAW_PREVIEW_ALIAS: \${{ inputs.alias || format('pr-{0}', github.event.pull_request.number) }}
 
-      - name: Delete staging Workers
+      - id: worker_cleanup
+        name: Delete staging Workers
         run: sh scripts/cleanup-cloudflare-preview-workers.sh "\${{ steps.alias.outputs.alias }}"
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -1067,8 +1126,30 @@ jobs:
 
 ${previewDbCleanupStep}
 
+      - id: cleanup_result
+        name: Report preview cleanup result
+        if: always()
+        run: |
+          failures=0
+          if [ "$WORKER_CLEANUP_OUTCOME" != "success" ]; then
+            echo "Worker cleanup outcome: $WORKER_CLEANUP_OUTCOME" >&2
+            failures=$((failures + 1))
+          fi
+          if [ "$DATABASE_CLEANUP_OUTCOME" != "success" ]; then
+            echo "Database cleanup outcome: $DATABASE_CLEANUP_OUTCOME" >&2
+            failures=$((failures + 1))
+          fi
+          if [ "$failures" -ne 0 ]; then
+            echo "Preview cleanup completed with $failures failed resource group(s)." >&2
+            exit 1
+          fi
+          echo "Preview cleanup removed every discovered resource."
+        env:
+          WORKER_CLEANUP_OUTCOME: \${{ steps.worker_cleanup.outcome }}
+          DATABASE_CLEANUP_OUTCOME: \${{ steps.database_cleanup.outcome }}
+
       - uses: marocchino/sticky-pull-request-comment@v2
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && steps.cleanup_result.outcome == 'success'
         with:
           header: staging-deploy
           message: |
@@ -1079,14 +1160,26 @@ ${previewDbCleanupStep}
 }
 
 function d1PreviewDbCleanupStep(project: string): string {
-	return `      - name: Delete preview D1 database
+	return `      - id: database_cleanup
+        name: Delete preview D1 database
+        if: always() && steps.alias.outcome == 'success'
         run: |
           set -euo pipefail
           db_name="${project}-db-\${{ steps.alias.outputs.alias }}"
-          db_id=$(npx wrangler@${WRANGLER_VERSION} d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
-          if [ -z "$db_id" ]; then
+          databases_json=$(npx wrangler@${WRANGLER_VERSION} d1 list --json)
+          if ! printf '%s' "$databases_json" | jq -e 'type == "array" and all(.[]; (.name | type) == "string" and (((.uuid // .id) // "") | type) == "string")' >/dev/null; then
+            echo "Cloudflare returned a malformed preview D1 inventory." >&2
+            exit 1
+          fi
+          db_ids=$(printf '%s' "$databases_json" | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")')
+          db_count=$(printf '%s\\n' "$db_ids" | awk 'NF { count++ } END { print count + 0 }')
+          if [ "$db_count" -eq 0 ]; then
             echo "Preview D1 database $db_name is missing or already deleted."
             exit 0
+          fi
+          if [ "$db_count" -ne 1 ] || ! printf '%s' "$db_ids" | grep -Eq '^[0-9a-fA-F-]{32,36}$'; then
+            echo "Cloudflare returned an unsafe preview D1 inventory for $db_name." >&2
+            exit 1
           fi
           npx wrangler@${WRANGLER_VERSION} d1 delete "$db_name" --skip-confirmation
           echo "Deleted preview D1 database $db_name."
@@ -1096,20 +1189,51 @@ function d1PreviewDbCleanupStep(project: string): string {
 }
 
 function neonPreviewDbCleanupStep(project: string): string {
-	return `      - name: Delete preview Neon branch
+	return `      - id: database_cleanup
+        name: Delete preview Neon branch
+        if: always() && steps.alias.outcome == 'success'
         run: |
           set -euo pipefail
           branch_name="${project}-db-\${{ steps.alias.outputs.alias }}"
-          if ! branches_json=$(curl -fsS -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches"); then
-            echo "Could not list Neon branches." >&2
-            exit 1
-          fi
-          branch_id=$(printf '%s' "$branches_json" | jq -r --arg name "$branch_name" '.branches[]? | select(.name == $name) | .id' | head -n 1)
-          if [ -z "$branch_id" ]; then
+          branch_inventory=$(mktemp)
+          trap 'rm -f "$branch_inventory"' EXIT HUP INT TERM
+          cursor=''
+          page=1
+          while :; do
+            if [ -n "$cursor" ]; then
+              if ! branches_json=$(curl -fsS -G -H "Authorization: Bearer $NEON_API_KEY" --data-urlencode "limit=1000" --data-urlencode "cursor=$cursor" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches"); then
+                echo "Could not list Neon branches." >&2
+                exit 1
+              fi
+            elif ! branches_json=$(curl -fsS -G -H "Authorization: Bearer $NEON_API_KEY" --data-urlencode "limit=1000" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches"); then
+              echo "Could not list Neon branches." >&2
+              exit 1
+            fi
+            if ! printf '%s' "$branches_json" | jq -e '(.branches | type == "array") and all(.branches[]; (.name | type) == "string" and (.id | type) == "string") and (.pagination | type == "object") and ((.pagination.next == null) or ((.pagination.next | type) == "string" and (.pagination.next | length) > 0 and (.pagination.next | length) <= 2048))' >/dev/null; then
+              echo "Neon returned a malformed preview branch inventory." >&2
+              exit 1
+            fi
+            printf '%s' "$branches_json" | jq -c '.branches[]' >> "$branch_inventory"
+            next_cursor=$(printf '%s' "$branches_json" | jq -r '.pagination.next // empty')
+            if [ -z "$next_cursor" ]; then break; fi
+            if [ "$page" -ge 100 ]; then
+              echo "Neon preview branch inventory exceeds the cleanup bound." >&2
+              exit 1
+            fi
+            cursor="$next_cursor"
+            page=$((page + 1))
+          done
+          branch_ids=$(jq -r --arg name "$branch_name" 'select(.name == $name) | .id' "$branch_inventory")
+          branch_count=$(printf '%s\\n' "$branch_ids" | awk 'NF { count++ } END { print count + 0 }')
+          if [ "$branch_count" -eq 0 ]; then
             echo "Preview Neon branch $branch_name is missing or already deleted."
             exit 0
           fi
-          curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$branch_id" >/dev/null
+          if [ "$branch_count" -ne 1 ] || ! printf '%s' "$branch_ids" | grep -Eq '^br-[A-Za-z0-9_-]+$'; then
+            echo "Neon returned an unsafe preview branch inventory for $branch_name." >&2
+            exit 1
+          fi
+          curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$branch_ids" >/dev/null
           echo "Deleted preview Neon branch $branch_name."
         env:
           NEON_PROJECT_ID: \${{ vars.NEON_PROJECT_ID }}

@@ -73,7 +73,7 @@ export function generateUsersService(cfg: GvKitConfig): FileEntry[] {
 		},
 		{
 			path: honoServicePath(USERS_SERVICE, 'README.md'),
-			content: readme(project, runtime)
+			content: readme({ project, runtime, hasAuth })
 		}
 	]
 
@@ -447,7 +447,15 @@ console.log(\`${USERS_SERVICE.identity} listening on http://\${hostname}:\${port
 `
 }
 
-function readme(project: string, runtime: Runtime): string {
+function readme({
+	project,
+	runtime,
+	hasAuth
+}: {
+	project: string
+	runtime: Runtime
+	hasAuth: boolean
+}): string {
 	const bindingDoc =
 		runtime === 'cf-workers'
 			? `Session validation is delegated to the auth Worker via:
@@ -489,20 +497,24 @@ pnpm dev
 
 The server listens on \`http://127.0.0.1:\${PORT ?? ${USERS_SERVICE.development.port}}\` and reaches the
 auth service via \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` (defaults to \`${nodeDevelopmentOrigin(AUTH_SERVICE)}\`).`
+	const ownershipBoundary = hasAuth
+		? `Better Auth configuration and secrets stay private to \`${AUTH_SERVICE.workspacePath}/\`. \`packages/backend/\` owns reusable data access and use cases, including the generated users data access that reads \`authSchema.user\` for domain use cases. \`${USERS_SERVICE.workspacePath}/\` invokes that shared users use case as a transport/runtime adapter through \`@repo/backend/core/use-cases/users\`.`
+		: `Authentication is disabled, so no auth schema or shared users use case is generated. Keep future reusable data access in \`packages/backend/\` instead of this transport/runtime adapter.`
 
 	return `# ${honoServiceName(project, USERS_SERVICE)}
 
-This is a private service for user-facing resources. **Does not own auth state.**
-It is reachable externally only through the gateway. Do not add a direct route, public hostname,
-or browser-facing service URL.
+This private service for user-facing resources is a transport/runtime adapter. It is reachable externally only through the gateway. Do not add a direct route, public hostname, or browser-facing service URL.
+
+${ownershipBoundary}
 
 ## Boundary
 
-This service MUST NOT:
+This service adapter MUST NOT:
 
 - Configure Better Auth
 - Read \`BETTER_AUTH_SECRET\` or any OAuth secret
-- Query auth tables (\`account\`, \`session\`, \`verification\`, etc.) directly
+- Embed ad hoc database queries; add reusable domain data access to \`packages/backend/\`
+- Resolve session, account, or verification state from the database instead of the private auth transport
 
 ${bindingDoc}
 

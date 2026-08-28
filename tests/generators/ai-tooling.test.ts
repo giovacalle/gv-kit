@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { generateAiTooling } from '../../src/generators/ai-tooling.js'
 import { runGenerators } from '../../src/generators/index.js'
 import type { GvKitConfig } from '../../src/schema/config.js'
@@ -49,6 +51,13 @@ const AI_TOOLING_SELECTIONS = [
 
 const CLIENT_ONLY_GUIDANCE =
 	/packages\/openapi-client|@repo\/openapi-client|usersGetMe(?:Options)?|Hey API|TanStack Query|domain-prefixed operations|flat gateway client|web-query\.md/
+
+const EXCLUSIVE_AUTH_TABLE_GUIDANCE =
+	/only .*queries the auth tables|auth tables here are queried only by|never read auth secrets or query auth tables|query auth tables \(`account`|REFUSE to query `user`, `session`, `account`, `verification` from a non-auth service|Owned exclusively by the auth service\. NO other service may query these tables|Any service other than `services\/auth\/` querying `user`, `session`, `account`, or `verification` tables directly/i
+
+function generatedContent(entries: ReturnType<typeof runGenerators>): string {
+	return entries.map(({ content }) => content).join('\n')
+}
 
 function markdownGuidance(entries: ReturnType<typeof runGenerators>): string {
 	return entries
@@ -221,6 +230,79 @@ describe('generateAiTooling — Astro marketing guidance', () => {
 		expect(content(astroEntries, '.claude/stack.json')).toContain('apps/marketing')
 		expect(content(integratedEntries, '.claude/stack.json')).not.toContain('apps/marketing')
 	})
+})
+
+describe('database ownership terminology contract', () => {
+	test('repository guidance separates Better Auth ownership from shared application data access', () => {
+		const repositoryRoot = join(import.meta.dir, '..', '..')
+		const guidance = ['README.md', 'CONTRIBUTING.md']
+			.map((path) => readFileSync(join(repositoryRoot, path), 'utf8'))
+			.join('\n')
+
+		expect(guidance).toContain('Better Auth configuration and secrets stay private to `services/auth/`')
+		expect(guidance).toContain(
+			'`packages/backend/` owns reusable data access and use cases, including the generated users data access that reads `authSchema.user`'
+		)
+		expect(guidance).not.toMatch(EXCLUSIVE_AUTH_TABLE_GUIDANCE)
+	})
+
+	for (const deploy of ['skip', 'docker', 'cf-workers'] as const) {
+		test(`${deploy} output describes the shared database boundary`, () => {
+			for (const db of ['sqlite', 'postgres'] as const) {
+				for (const { auth, email } of [
+					{ auth: ['emailOTP'] as const, email: 'resend' as const },
+					{ auth: [] as const, email: 'skip' as const }
+				]) {
+					const entries = runGenerators(
+						makeCfg(['claude', 'codex', 'opencode'], {
+							auth: [...auth],
+							db,
+							deploy,
+							email
+						})
+					)
+					const allOutput = generatedContent(entries)
+					const coreRule = content(entries, '.ai/rules/core-stack.md')
+					const guidance = markdownGuidance(entries)
+
+					expect(allOutput).not.toMatch(EXCLUSIVE_AUTH_TABLE_GUIDANCE)
+					if (auth.length === 0) {
+						expect(coreRule).toContain(
+							'No auth schema or users use case is generated until a provider is selected.'
+						)
+						expect(coreRule).not.toContain('`authSchema.user`')
+						expect(entries.some(({ path }) => path === 'packages/db/src/schema/auth.ts')).toBe(
+							false
+						)
+						continue
+					}
+
+					const authSchema = content(entries, 'packages/db/src/schema/auth.ts')
+					expect(authSchema).toContain(
+						'// packages/backend may read user records for domain use cases.'
+					)
+					expect(authSchema).toContain(
+						'// Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.'
+					)
+					expect(coreRule).toContain(
+						'shared application modules may read `authSchema.user` for domain use cases'
+					)
+					expect(coreRule).toContain(
+						'Resolve session, account, and verification state through the private auth boundary.'
+					)
+					expect(guidance).toContain(
+						'Better Auth configuration and secrets stay private to `services/auth/`'
+					)
+					expect(guidance).toContain(
+						'`packages/backend/` owns reusable data access and use cases, including the generated users data access that reads `authSchema.user`'
+					)
+					expect(guidance).toContain(
+						'`services/users/` invokes that shared users use case as a transport/runtime adapter'
+					)
+				}
+			}
+		})
+	}
 })
 
 describe('generated Hono gateway guidance', () => {

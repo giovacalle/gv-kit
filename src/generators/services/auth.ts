@@ -1020,15 +1020,15 @@ The server listens on \`http://127.0.0.1:\${PORT ?? ${AUTH_SERVICE.development.p
 
 	return `# ${honoServiceName(project, AUTH_SERVICE)}
 
-The auth service is a private service and the sole owner of authentication state and secrets.
-It is reachable externally only through the gateway. Do not add a direct route, public hostname,
-or browser-facing service URL.
+The auth service is a private service and the Better Auth transport/runtime adapter. Better Auth configuration and secrets stay private to this service. It is reachable externally only through the gateway. Do not add a direct route, public hostname, or browser-facing service URL.
+
+\`packages/backend/\` owns reusable data access and use cases, including the generated users data access that reads \`authSchema.user\` for domain use cases. That shared application read does not expose Better Auth configuration or secrets and does not bypass the private session boundary.
 
 ## What this service does
 
 - Configures Better Auth directly in \`${AUTH_SERVICE.workspacePath}/src/auth.ts\` and owns its gateway-forwarded routes at \`${PUBLIC_AUTH_PREFIX}/*\`
 - Exposes \`/internal/session\` RPC for sibling services
-- Owns the auth tables (sessions, accounts, verification) in \`packages/db\`
+- Supplies Better Auth with the deploy-aware database client for its session, account, and verification behavior
 
 ## What this service does not do
 

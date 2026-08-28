@@ -69,11 +69,13 @@ building images or starting containers.
 
 `packages/backend/` is the shared backend application/core layer for reusable data access, use cases, types, helpers, and middleware. Independently deployable packages under `services/` are transport/runtime adapters and may import the application modules they need from `@repo/backend`.
 
+Better Auth configuration and secrets stay private to `services/auth/`. `packages/backend/` owns reusable data access and use cases, including the generated users data access that reads `authSchema.user` for domain use cases. `services/users/` invokes that shared users use case as a transport/runtime adapter. Keep reusable queries in `packages/backend/`; do not embed ad hoc data access in a service adapter.
+
 `apps/api/` is the public gateway. Keep it limited to ingress, routing, operational middleware, OpenAPI delivery, and transparent forwarding. It must not import application use cases or orchestrate business workflows. `services/users/` (and any future non-auth service) MUST NOT:
 
 - configure Better Auth
 - read `BETTER_AUTH_SECRET` or OAuth secrets
-- query the auth tables directly
+- embed reusable or ad hoc database queries in the transport adapter
 
 Services own deterministic OpenAPI fragments; the gateway composes them into `apps/api/openapi.json`, the sole input for the flat `packages/openapi-client` export. Browser calls use same-origin `/api/*`, and Cloudflare web SSR binds only to `GATEWAY`.
 

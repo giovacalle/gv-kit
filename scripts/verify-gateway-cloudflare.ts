@@ -72,7 +72,7 @@ function parseArgs(argv: string[]): { fixture: string; output: string; stagingAl
 		else if (arg === '--staging-alias') stagingAlias = argv[++index] ?? stagingAlias
 		else throw new Error(`Unknown argument: ${arg}`)
 	}
-	if (!/^pr-[1-9][0-9]*$/.test(stagingAlias) || stagingAlias.length > 48) throw new Error('--staging-alias must be a canonical bounded Cloudflare preview alias')
+	if (!/^pr-[1-9][0-9]*$/.test(stagingAlias) || stagingAlias.length > 32) throw new Error('--staging-alias must be a canonical bounded Cloudflare preview alias')
 	return { fixture, output, stagingAlias }
 }
 
@@ -97,6 +97,32 @@ async function assertRejectedPreviewAlias({
 	if (code === 0) throw new Error(`unsafe preview alias was accepted: ${alias}`)
 	if (!/Preview alias/.test(output)) throw new Error(`preview alias rejection was not explicit: ${alias}`)
 	return { alias, rejected: true }
+}
+
+async function assertRejectedPreviewWorkerName({
+	project,
+	name,
+	alias
+}: {
+	project: string
+	name: string
+	alias: string
+}): Promise<{ name: string; rejected: true }> {
+	const child = spawn(
+		'node',
+		['scripts/cloudflare-preview-name.mjs', '--validate-name', name, alias],
+		{ cwd: project, stdio: ['ignore', 'pipe', 'pipe'] }
+	)
+	let output = ''
+	child.stdout.on('data', (chunk) => (output += chunk.toString()))
+	child.stderr.on('data', (chunk) => (output += chunk.toString()))
+	const code = await new Promise<number>((done, reject) => {
+		child.on('error', reject)
+		child.on('close', (status) => done(status ?? 1))
+	})
+	if (code === 0) throw new Error(`unsafe preview Worker name was accepted: ${name}`)
+	if (!/validated project and preview alias namespace/.test(output)) throw new Error(`preview Worker name rejection was not explicit: ${name}`)
+	return { name, rejected: true }
 }
 
 async function recordCommandEvidence({
@@ -555,12 +581,15 @@ async function main(): Promise<void> {
 		'utf8'
 	)
 	for (const marker of [
-		'find "$@" -name wrangler.jsonc',
-		'node scripts/cloudflare-preview-name.mjs "$base_name" "$alias"',
+		'/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts',
+		'node scripts/cloudflare-preview-name.mjs --validate-name "$worker_name" "$alias"',
 		'npx wrangler@4.125.0 delete --name "$worker_name" --force',
+		'Cloudflare returned a malformed preview Worker inventory.',
 		'Shared wildcard DNS records'
 	]) if (!cleanupScript.includes(marker)) throw new Error(`preview cleanup inventory omits ${marker}`)
-	if (/dns_records|api\.cloudflare\.com|wrangler[^\n]*dns/i.test(cleanupScript)) throw new Error('preview cleanup can delete shared wildcard DNS')
+	if (cleanupScript.includes('find "$@" -name wrangler.jsonc')) throw new Error('preview cleanup still depends on current source topology')
+	if (cleanupScript.includes('result_info') || cleanupScript.includes('data-urlencode')) throw new Error('preview cleanup invents pagination for the unpaginated Worker inventory endpoint')
+	if (/dns_records|wrangler[^\n]*dns/i.test(cleanupScript)) throw new Error('preview cleanup can delete shared wildcard DNS')
 
 	const manualAliasResult = await recordCommandEvidence({
 		name: 'derive-manual-preview-alias',
@@ -616,6 +645,7 @@ cat "$output"`
 	const previewApiDomain = `api.${previewZoneName}`
 	const previewDatabaseName = `${configs.auth.name.replace(/-auth$/, '-db')}-${args.stagingAlias}`
 	const previewDatabaseId = '11111111-1111-4111-8111-111111111111'
+	const previewNeonBranchId = 'br-preview-verification'
 	const previewDatabaseUrl =
 		'postgres://preview:preview@preview-verification.example.test:5432/preview'
 	const previewPreparation = await recordCommandEvidence({
@@ -632,7 +662,11 @@ cat "$output"`
 						STAGING_D1_DATABASE_NAME: previewDatabaseName,
 						STAGING_D1_DATABASE_ID: previewDatabaseId
 					}
-				: { STAGING_DATABASE_URL: previewDatabaseUrl }),
+				: {
+						STAGING_DATABASE_URL: previewDatabaseUrl,
+						STAGING_NEON_BRANCH_NAME: previewDatabaseName,
+						STAGING_NEON_BRANCH_ID: previewNeonBranchId
+					}),
 			CLOUDFLARE_PREVIEW_WEB_DOMAIN: previewWebDomain,
 			CLOUDFLARE_PREVIEW_API_DOMAIN: previewApiDomain,
 			CLOUDFLARE_PREVIEW_ZONE_NAME: previewZoneName
@@ -666,6 +700,108 @@ cat "$output"`
 		zoneName: previewZoneName,
 		hasAuth: config.choices.auth.length > 0
 	})
+	const deploymentManifest = JSON.parse(
+		await readFile(join(project, 'cloudflare-preview-manifest.json'), 'utf8')
+	) as {
+		schemaVersion: number
+		project: string
+		alias: string
+		workers: Array<{ config: string; productionName: string; name: string }>
+		database: { kind: string; name: string; id: string }
+	}
+	const expectedManifestWorkers = workers
+		.map((worker) => ({
+			config: `${worker.directory}/wrangler.jsonc`,
+			productionName: configs[worker.name].name,
+			name: previewConfigs[worker.name].name
+		}))
+		.sort((left, right) => left.config.localeCompare(right.config))
+	const deploymentManifestMatches =
+		deploymentManifest.schemaVersion === 1 &&
+		deploymentManifest.project === config.choices.name &&
+		deploymentManifest.alias === args.stagingAlias &&
+		JSON.stringify(deploymentManifest.workers) === JSON.stringify(expectedManifestWorkers) &&
+		deploymentManifest.database.kind === (config.choices.db === 'sqlite' ? 'd1' : 'neon') &&
+		deploymentManifest.database.name === previewDatabaseName &&
+		deploymentManifest.database.id ===
+			(config.choices.db === 'sqlite' ? previewDatabaseId : previewNeonBranchId)
+	if (!deploymentManifestMatches) throw new Error('durable preview deployment manifest does not match the prepared resources')
+	const topologyDriftWorkers: Record<string, string> = Object.fromEntries(
+		await Promise.all(
+			Object.entries({
+				added: `${config.choices.name}-billing`,
+				renamed: `${config.choices.name}-members`,
+				removed: `${config.choices.name}-users`
+			}).map(async ([kind, productionName]) => {
+				const result = await recordCommandEvidence({
+					name: `derive-${kind}-preview-worker`,
+					executable: 'node',
+					args: ['scripts/cloudflare-preview-name.mjs', productionName, args.stagingAlias],
+					cwd: project,
+					logPath: join(project, `derive-${kind}-preview-worker.log`)
+				})
+				return [kind, result.output.trim()]
+			})
+		)
+	)
+	const rejectedWorkerNames = await Promise.all(
+		[configs.gateway.name, 'pv-unrelated-project-worker-pr-123'].map((name) =>
+			assertRejectedPreviewWorkerName({ project, name, alias: args.stagingAlias })
+		)
+	)
+	const cleanupDeletionLog = join(project, '.wrangler/verify-cleanup-deletions.log')
+	const cleanupInventoryWorkers = [
+		...new Set(Object.values(topologyDriftWorkers)),
+		configs.gateway.name,
+		'pv-unrelated-project-worker-pr-123'
+	]
+	await writeFile(
+		join(project, '.verify-bin/curl'),
+		`#!/bin/sh
+set -eu
+case " $* " in
+	*page=*|*per_page=*) exit 91 ;;
+esac
+printf '%s\\n' "$CLEANUP_INVENTORY"
+`,
+		{ mode: 0o755 }
+	)
+	await writeFile(
+		join(project, '.verify-bin/npx'),
+		`#!/bin/sh
+set -eu
+test "$1" = 'wrangler@4.125.0'
+test "$2" = 'delete'
+test "$3" = '--name'
+printf '%s\\n' "$4" >> "$CLEANUP_DELETION_LOG"
+`,
+		{ mode: 0o755 }
+	)
+	const cleanupInventoryProbe = await recordCommandEvidence({
+		name: 'trusted-cleanup-topology-drift-inventory',
+		executable: 'sh',
+		args: ['scripts/cleanup-cloudflare-preview-workers.sh', args.stagingAlias],
+		cwd: project,
+		logPath: join(project, 'trusted-cleanup-topology-drift.log'),
+		extraEnv: {
+			CLOUDFLARE_API_TOKEN: 'verification-token',
+			CLOUDFLARE_ACCOUNT_ID: 'verification-account',
+			CLEANUP_DELETION_LOG: cleanupDeletionLog,
+			CLEANUP_INVENTORY: JSON.stringify({
+				success: true,
+				errors: [],
+				messages: [],
+				result: cleanupInventoryWorkers.map((id) => ({ id }))
+			})
+		}
+	})
+	const observedCleanupDeletions = (await readFile(cleanupDeletionLog, 'utf8'))
+		.trim()
+		.split('\n')
+		.filter(Boolean)
+		.sort()
+	const expectedCleanupDeletions = [...new Set(Object.values(topologyDriftWorkers))].sort()
+	if (JSON.stringify(observedCleanupDeletions) !== JSON.stringify(expectedCleanupDeletions)) throw new Error('trusted cleanup did not delete the complete topology-drift inventory')
 
 	const previewSecretDirectory = join(project, '.wrangler/verify-preview-secrets')
 	const requiredPreviewSecrets = {
@@ -828,7 +964,7 @@ cat "$output"`
 			aliases: {
 				pr: args.stagingAlias,
 				manual: manualAlias,
-				maximumLength: 48,
+				maximumLength: 32,
 				rejected: rejectedAliases
 			},
 			lifecycle: {
@@ -881,8 +1017,14 @@ cat "$output"`
 					}
 				])
 			),
+			deploymentManifest,
 			cleanupTargets: {
+				inventorySource: 'Cloudflare account Worker scripts',
+				inventoryProbeCommand: cleanupInventoryProbe.command,
 				workers: previewWorkerNames,
+				topologyDriftWorkers,
+				observedTopologyDriftDeletions: observedCleanupDeletions,
+				rejectedWorkerNames,
 				routes: previewRoutes,
 				sharedWildcardDnsPreserved: true,
 				database:

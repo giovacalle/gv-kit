@@ -369,7 +369,7 @@ ${authTransport}
 ${isCfWorkers ? '- **REFUSE `wrangler.toml`, public private-service triggers, and hand-written Cloudflare `Env` declarations.** Keep `workers_dev: false`, `preview_urls: false`, no routes, and use `wrangler.jsonc` plus `pnpm cf-typegen` as the source of truth.' : ''}
 ${hasAuth ? `- **REFUSE to configure Better Auth outside \`${AUTH_SERVICE.workspacePath}/src/auth.ts\`.** The auth service owns Better Auth configuration and secrets.` : '- **REFUSE to mount public auth methods while no authentication provider is selected.** The private auth transport must continue to report no active session.'}
 - **REFUSE to put reusable application logic in a transport adapter.** Put shared data access, use cases, types, helpers, and middleware in \`packages/backend/\`, then import the required modules from the service.
-- **REFUSE to query \`user\`, \`session\`, \`account\`, \`verification\` from a non-auth service.** Read session via the auth boundary.
+${hasAuth ? '- **REFUSE ad hoc auth-schema queries in a transport adapter.** Put reusable domain data access in `packages/backend/`; shared application modules may read `authSchema.user` for domain use cases. Resolve session, account, and verification state through the auth boundary.' : '- **REFUSE to invent auth-schema access while authentication is disabled.** No auth schema or users use case is generated until a provider is selected.'}
 - **REFUSE to extract a shared service-client SDK** (\`packages/<svc>-client/\`). Use existing deploy-aware middleware for the auth boundary; add a service-local private transport only for a different boundary that needs one.
 - **REFUSE to share binding or environment declarations between services.** Each \`services/<svc>/\` owns its runtime configuration.
 

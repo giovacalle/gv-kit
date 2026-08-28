@@ -119,6 +119,17 @@ describe('auth-worker generator (post-rewrite)', () => {
 			expect(authTs!.content).not.toContain('secondaryStorage:')
 		})
 
+		test(`${file} auth guidance separates Better Auth ownership from shared user reads`, () => {
+			const entries = runGenerators(cfg)
+			const readme = entries.find((e) => e.path === 'services/auth/README.md')!.content
+
+			expect(readme).toContain('Better Auth configuration and secrets stay private to this service')
+			expect(readme).toContain('`packages/backend/` owns reusable data access and use cases')
+			expect(readme).toContain('`authSchema.user`')
+			expect(readme).not.toContain('sole owner of authentication state and secrets')
+			expect(readme).not.toMatch(/Owns the auth tables|queried only by the auth service/i)
+		})
+
 		if (cfg.choices.auth.includes('emailOTP')) {
 			test(`${file} (emailOTP) wires emailOTP plugin and @repo/mailer`, () => {
 				const entries = runGenerators(cfg)

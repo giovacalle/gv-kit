@@ -11,7 +11,8 @@ import {
 	COVERAGE_RATIONALE,
 	GATEWAY_SCAFFOLD_MATRIX,
 	uncoveredMaterialInteractions,
-	uncoveredMaterialValues
+	uncoveredMaterialValues,
+	unresolvedGeneratorMarkers
 } from '../../scripts/verify-gateway-scaffold-matrix.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../../src/pipeline/plan.js'
@@ -186,6 +187,47 @@ describe('gateway generated-workspace verification matrix', () => {
 			{ id: GATEWAY_SCAFFOLD_MATRIX[0]!.id }
 		])
 		expect(duplicate.matrixComplete).toBe(false)
+	})
+
+	test('unresolved-marker scanning permits only selected Umami output', () => {
+		const internalMarkers = [
+			'__PROJECT__',
+			'__COMPAT_DATE__',
+			'__GATEWAY_TARGET__',
+			'__GATEWAY_SERVICE__',
+			'__GATEWAY_URL__',
+			'__AUTH_URL__'
+		]
+		internalMarkers.forEach((marker) => {
+			expect(
+				unresolvedGeneratorMarkers({
+					path: 'apps/web/src/app.html',
+					content: marker,
+					umamiSelected: true
+				})
+			).toEqual([marker])
+		})
+		expect(
+			unresolvedGeneratorMarkers({
+				path: 'apps/web/src/app.html',
+				content: '__UMAMI_WEBSITE_ID__',
+				umamiSelected: true
+			})
+		).toEqual([])
+		expect(
+			unresolvedGeneratorMarkers({
+				path: 'apps/web/src/app.html',
+				content: '__UMAMI_WEBSITE_ID__',
+				umamiSelected: false
+			})
+		).toEqual(['__UMAMI_WEBSITE_ID__'])
+		expect(
+			unresolvedGeneratorMarkers({
+				path: 'apps/web/src/routes/+page.svelte',
+				content: '__UMAMI_WEBSITE_ID__',
+				umamiSelected: true
+			})
+		).toEqual(['__UMAMI_WEBSITE_ID__'])
 	})
 
 	test('retained artifact redaction removes machine paths and credential values', () => {

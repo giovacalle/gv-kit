@@ -162,6 +162,37 @@ describe('generateFrontendSveltekit — fence stripping', () => {
 		expect(layout).not.toContain('locals')
 	})
 
+	test.each<Choices['deploy']>(['cf-workers', 'docker'])(
+		'no-auth inside-frontend %s landing page removes auth-only UI imports',
+		(deploy) => {
+			const entries = generateFrontendSveltekit(
+				makeCfg({
+					backend: 'inside-frontend',
+					deploy,
+					auth: [],
+					email: 'skip',
+					apiClient: 'skip'
+				})
+			)
+			const landing = findEntry(entries, 'apps/web/src/routes/+page.svelte')!.content
+			expect(landing).not.toContain("import * as Button from '@repo/ui/primitives/button'")
+			expect(landing).not.toContain("import { Badge } from '@repo/ui/primitives/badge'")
+		}
+	)
+
+	test('authenticated inside-frontend landing output matches the Hono baseline', () => {
+		const auth = ['emailOTP'] as Auth
+		const insideFrontend = findEntry(
+			generateFrontendSveltekit(makeCfg({ backend: 'inside-frontend', auth, email: 'resend' })),
+			'apps/web/src/routes/+page.svelte'
+		)!.content
+		const hono = findEntry(
+			generateFrontendSveltekit(makeCfg({ backend: 'hono', auth, email: 'resend' })),
+			'apps/web/src/routes/+page.svelte'
+		)!.content
+		expect(insideFrontend).toBe(hono)
+	})
+
 	test('hooks.server.ts attaches user only when auth is on', () => {
 		const off = generateFrontendSveltekit(makeCfg({ auth: [], email: 'skip' }))
 		const on = generateFrontendSveltekit(makeCfg({ auth: ['emailOTP'], email: 'resend' }))

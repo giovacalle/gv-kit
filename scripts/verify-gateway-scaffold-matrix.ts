@@ -716,11 +716,32 @@ async function collectFiles(root: string): Promise<string[]> {
 	return files
 }
 
+const INTERNAL_GENERATOR_MARKER_PATTERN =
+	/__(?:PROJECT|COMPAT_DATE|GATEWAY_TARGET|GATEWAY_SERVICE|GATEWAY_URL|AUTH_URL)__/g
+const UMAMI_WEBSITE_ID_MARKER = '__UMAMI_WEBSITE_ID__'
+const UMAMI_OUTPUT_PATH = 'apps/web/src/app.html'
+
+export function unresolvedGeneratorMarkers({
+	path,
+	content,
+	umamiSelected
+}: {
+	path: string
+	content: string
+	umamiSelected: boolean
+}): string[] {
+	const markers: string[] = content.match(INTERNAL_GENERATOR_MARKER_PATTERN) ?? []
+	if ( content.includes(UMAMI_WEBSITE_ID_MARKER) && (!umamiSelected || path !== UMAMI_OUTPUT_PATH) ) markers.push(UMAMI_WEBSITE_ID_MARKER)
+	return [...new Set(markers)]
+}
+
 async function residueAssertion(
 	entry: GatewayMatrixEntry,
 	project: string
 ): Promise<AssertionEvidence> {
 	return assertion('negative generated-workspace scan', async () => {
+		const { parsed } = await loadConfig(entry)
+		const umamiSelected = parsed.choices.monitoring.includes('umami')
 		const patterns = [
 			{ name: 'old service path', pattern: /apps\/api\/(?:auth|users)(?:\/|\b)/ },
 			...(entry.topology === 'hono'
@@ -728,11 +749,6 @@ async function residueAssertion(
 				: []),
 			{ name: 'service-specific client export', pattern: /@repo\/openapi-client\/users/ },
 			{ name: 'old public auth host', pattern: /auth\.api\.<domain>/ },
-			{
-				name: 'unresolved generator marker',
-				pattern:
-					/__(?:PROJECT|COMPAT_DATE|GATEWAY_TARGET|GATEWAY_SERVICE|GATEWAY_URL|AUTH_URL|UMAMI_WEBSITE_ID)__/
-			},
 			{ name: 'private-service public URL', pattern: /https?:\/\/(?:auth|users)\.[a-z0-9.-]+/i },
 			{
 				name: 'credential-shaped value',
@@ -744,9 +760,11 @@ async function residueAssertion(
 		const files = await collectFiles(project)
 		for (const file of files) {
 			const content = await readFile(file, 'utf8').catch(() => '')
-			const haystack = `${relative(project, file)}\n${content}`
-			for (const candidate of patterns) if (candidate.pattern.test(haystack)) failures.push(`${candidate.name}: ${relative(project, file)}`)
-			for (const finding of unsafeArtifactFindings(haystack)) failures.push(`${finding}: ${relative(project, file)}`)
+			const path = relative(project, file)
+			const haystack = `${path}\n${content}`
+			for (const candidate of patterns) if (candidate.pattern.test(haystack)) failures.push(`${candidate.name}: ${path}`)
+			for (const marker of unresolvedGeneratorMarkers({ path, content, umamiSelected })) failures.push(`unresolved generator marker ${marker}: ${path}`)
+			for (const finding of unsafeArtifactFindings(haystack)) failures.push(`${finding}: ${path}`)
 		}
 		if (failures.length > 0) throw new Error([...new Set(failures)].join(', '))
 		return { scannedFiles: files.length, failures: [] }
@@ -956,7 +974,15 @@ export async function validateCloudflareWorkflowStructure(
 		(step) => step.name === 'Validate public deployment variables'
 	)
 	if (publicKeys.length > 0 && !validation) throw new Error('production public variables have no validation step')
-	for (const name of publicKeys) if ( !validation?.run?.includes(`test -n "$${name}"`) || validation.env?.[name] !== `\${{ vars.${name} }}` ) throw new Error(`production validation does not map ${name} from GitHub variables`)
+	for (const name of publicKeys) {
+		const mappedValue = `\${{ vars.${name} }}`
+		const validatedBeforeDeploy =
+			validation?.run?.includes(`test -n "$${name}"`) && validation.env?.[name] === mappedValue
+		const validatedByDeploy = productionDeploySteps.some(
+			(step) => step.run?.includes(`test -n "$${name}"`) && step.env?.[name] === mappedValue
+		)
+		if (!validatedBeforeDeploy && !validatedByDeploy) throw new Error(`production deployment does not validate ${name} from GitHub variables`)
+	}
 	const previewConfig = stagingSteps.find((step) => step.id === 'preview_config')
 	if (previewConfig?.env?.STAGING_ALIAS !== '${{ needs.preview-db.outputs.alias }}') throw new Error('preview config does not use the preview-db alias')
 	if (entry.db === 'sqlite') {

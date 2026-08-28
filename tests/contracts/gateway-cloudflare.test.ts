@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
+import { assertSharedWildcardDnsPreservation } from '../../scripts/verify-gateway-cloudflare.js'
 import { runGenerators } from '../../src/generators/index.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
 import { GvKitConfig } from '../../src/schema/config.js'
@@ -119,6 +120,28 @@ function wrangler(entries: ReturnType<typeof planFixture>, path: string): Wrangl
 }
 
 describe('Cloudflare gateway production topology', () => {
+	test('cleanup verification preserves shared wildcard DNS by semantics and command absence', () => {
+		const narrations = ['shared wildcard DNS remains', 'SHARED WILDCARD DNS REMAINS']
+		narrations.forEach((narration) => {
+			expect(() =>
+				assertSharedWildcardDnsPreservation(`# ${narration}\nnpx wrangler delete --name preview`)
+			).not.toThrow()
+		})
+		expect(() => assertSharedWildcardDnsPreservation('npx wrangler delete --name preview')).toThrow(
+			'preview cleanup omits shared wildcard DNS preservation guidance'
+		)
+		expect(() =>
+			assertSharedWildcardDnsPreservation(
+				'# shared wildcard DNS remains\ncurl /dns_records/record-id -X DELETE'
+			)
+		).toThrow('preview cleanup can delete shared wildcard DNS')
+		expect(() =>
+			assertSharedWildcardDnsPreservation(
+				'# shared wildcard DNS remains\nwrangler dns delete record-id'
+			)
+		).toThrow('preview cleanup can delete shared wildcard DNS')
+	})
+
 	test('the workerd gateway keeps platform response state while applying gateway headers', async () => {
 		const { createGateway, WorkerdResponse } = await loadWorkerdGatewayContract()
 		const webSocket = {} as WebSocket

@@ -224,6 +224,11 @@ function inventory(config: WranglerConfig) {
 	}
 }
 
+export function assertSharedWildcardDnsPreservation(cleanupScript: string): void {
+	if (!/shared wildcard DNS remains/i.test(cleanupScript)) throw new Error('preview cleanup omits shared wildcard DNS preservation guidance')
+	if (/dns_records|wrangler[^\n]*dns/i.test(cleanupScript)) throw new Error('preview cleanup can delete shared wildcard DNS')
+}
+
 function assertTopology(configs: WranglerConfigs): void {
 	const canonical = configs.gateway.routes?.filter(
 		(route) => route.custom_domain && route.pattern === 'api.<domain>'
@@ -584,12 +589,11 @@ async function main(): Promise<void> {
 		'/accounts/$CLOUDFLARE_ACCOUNT_ID/workers/scripts',
 		'node scripts/cloudflare-preview-name.mjs --validate-name "$worker_name" "$alias"',
 		'npx wrangler@4.125.0 delete --name "$worker_name" --force',
-		'Cloudflare returned a malformed preview Worker inventory.',
-		'Shared wildcard DNS records'
+		'Cloudflare returned a malformed preview Worker inventory.'
 	]) if (!cleanupScript.includes(marker)) throw new Error(`preview cleanup inventory omits ${marker}`)
 	if (cleanupScript.includes('find "$@" -name wrangler.jsonc')) throw new Error('preview cleanup still depends on current source topology')
 	if (cleanupScript.includes('result_info') || cleanupScript.includes('data-urlencode')) throw new Error('preview cleanup invents pagination for the unpaginated Worker inventory endpoint')
-	if (/dns_records|wrangler[^\n]*dns/i.test(cleanupScript)) throw new Error('preview cleanup can delete shared wildcard DNS')
+	assertSharedWildcardDnsPreservation(cleanupScript)
 
 	const manualAliasResult = await recordCommandEvidence({
 		name: 'derive-manual-preview-alias',

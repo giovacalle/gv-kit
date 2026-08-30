@@ -1,4 +1,4 @@
-.ai/rules/api-backend.md  7a5c1ca81d3a363f
+.ai/rules/api-backend.md  e38ff56f17392233
 .ai/rules/core-dates.md  839fa8a9f54b70a0
 .ai/rules/core-errors.md  393aae62a8b805bf
 .ai/rules/core-stack.md  9e7e27dfe2e6137e
@@ -11,12 +11,12 @@
 .ai/rules/web-seo.md  4d46fd12199ce1b5
 .ai/rules/web-svelte.md  dcb8ce5de2e2fbf3
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
-.ai/rules/web-ui.md  f87ef5a718ba2b06
+.ai/rules/web-ui.md  2d28c4ed82326988
 .claude/agents/implement.md  4911ccc444011d04
 .claude/agents/plan.md  25ad8acc63198980
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
-.claude/settings.json  ee9405d14496425f
+.claude/settings.json  0ea2d85e9144fef6
 .claude/stack.json  f35ee5ee253b80e4
 .commitlintrc.json  1a921be1aa693bb1
 .dockerignore  d16cdb1adac10a8a
@@ -25,13 +25,13 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
-CLAUDE.md  f8fe8cbfc3c9b3a1
+CLAUDE.md  2865ee4e2ae28a29
 Dockerfile  ce1a020779ea90f2
 LICENSE  508a77d2e7b51d98
-README.md  e79557a4032e33e1
+README.md  4d1a3ccd5417ffb8
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  942494328e1bb0fb
+apps/web/CLAUDE.md  dfff9112e44d58b6
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  2b03b65453b1c70d
 apps/web/prettier.config.js  76a534fdcb4541a5

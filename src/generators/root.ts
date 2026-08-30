@@ -372,6 +372,19 @@ function renderReadme(cfg: GvKitConfig): string {
 		stackLines.push(`- Deploy: ${deployLabel}`)
 	}
 
+	const environmentGuidance =
+		cfg.choices.backend === 'hono'
+			? cfg.choices.deploy === 'cf-workers'
+				? 'Copy `.env.example` to `.env`, fill the required values, then run `pnpm local:prepare` once. Root `pnpm dev` loads this file and starts the complete local topology with Turbo strict environment filtering. Production Worker secrets go through `wrangler secret put <NAME>` rather than `.env`.'
+				: 'Copy `.env.example` to `.env`, fill the required values, then run `pnpm local:prepare` once. Root `pnpm dev` loads this file and starts the complete local topology with Turbo strict environment filtering.'
+			: cfg.choices.deploy === 'cf-workers'
+				? 'Copy `.env.example` to `.env` and fill in any secrets your services need.\nFor Workers, secrets go through `wrangler secret put <NAME>` rather than `.env`.'
+				: 'Copy `.env.example` to `.env` and fill in any secrets your services need.'
+	const ambientTypeExample =
+		cfg.choices.deploy === 'cf-workers'
+			? '`@types/node` or `@cloudflare/workers-types`'
+			: '`@types/node`'
+
 	const quickstart =
 		cfg.choices.backend === 'hono'
 			? `### First run
@@ -415,11 +428,7 @@ ${quickstart}
 
 ## Environment
 
-${
-	cfg.choices.backend === 'hono'
-		? 'Copy `.env.example` to `.env`, fill the required values, then run `pnpm local:prepare` once. Root `pnpm dev` loads this file and starts the complete local topology with Turbo strict environment filtering. Production Worker secrets go through `wrangler secret put <NAME>` rather than `.env`.'
-		: 'Copy `.env.example` to `.env` and fill in any secrets your services need.\nFor workers, secrets go through `wrangler secret put <NAME>` rather than `.env`.'
-}
+${environmentGuidance}
 ${renderPublicOrigins(cfg)}
 ${renderCloudflareDatabaseSetup(cfg)}
 
@@ -441,7 +450,7 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages 
 
 \`pnpm-workspace.yaml\` lists the packages. \`pnpm install\` uses strict mode by default, so each package only sees the dependencies declared in its own \`package.json\` — there is no hoisted root \`node_modules\` to lean on.
 
-Every runtime and type-only import must be declared explicitly in the importing package's \`package.json\` (including ambient types from \`@repo/tooling-typescript\` such as \`@types/node\` or \`@cloudflare/workers-types\`). ESLint's \`import/no-extraneous-dependencies\` rule catches anything that slips through (\`pnpm lint\`).
+Every runtime and type-only import must be declared explicitly in the importing package's \`package.json\` (including ambient types from \`@repo/tooling-typescript\` such as ${ambientTypeExample}). ESLint's \`import/no-extraneous-dependencies\` rule catches anything that slips through (\`pnpm lint\`).
 `
 }
 
@@ -470,6 +479,10 @@ function renderApiTopology(cfg: GvKitConfig): string {
 			: cfg.choices.deploy === 'docker'
 				? `- Docker: ingress publishes the web alias and canonical API. Private services have no host ports; the gateway and SSR use Compose-network URLs.`
 				: `- Local Node: the normal application path uses the gateway. Loopback service ports exist only for debugging, and SSR uses the private \`GATEWAY_URL\`.`
+	const ssrTransport =
+		cfg.choices.deploy === 'cf-workers'
+			? 'the `GATEWAY` Service Binding'
+			: 'the private `GATEWAY_URL`'
 	const previewCleanup =
 		cfg.choices.deploy === 'cf-workers'
 			? `
@@ -511,7 +524,7 @@ Gateway liveness and the composed contract are available at \`/api/healthz\` and
 \`/api/openapi.json\`.
 
 Browser calls stay same-origin. Server loads and actions use a request-scoped SSR transport:
-the \`GATEWAY\` Service Binding on Cloudflare or private \`GATEWAY_URL\` on Node and Docker.
+${ssrTransport}.
 Private services call one another directly instead of routing internal traffic back through the
 gateway.
 

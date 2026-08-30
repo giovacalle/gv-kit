@@ -60,7 +60,8 @@ export function generateFrontendSveltekit(cfg: GvKitConfig): FileEntry[] {
 			honoAuthEmailOtp:
 				cfg.choices.backend === 'hono' && hasAuth && cfg.choices.auth.includes('emailOTP'),
 			honoAuthTransport: cfg.choices.backend === 'hono' && hasAuth,
-			apiClientHeyApi: cfg.choices.apiClient === 'hey-api'
+			apiClientHeyApi: cfg.choices.apiClient === 'hey-api',
+			aiRules: cfg.choices.aiTooling.length > 0
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,

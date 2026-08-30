@@ -253,7 +253,11 @@ Browser API calls use same-origin `/api/*` paths through the flat gateway client
 <!--@gvkit:else-->
 Browser API calls use same-origin `/api/*` paths directly. Server loads and actions call those paths with SvelteKit's request-scoped `fetch`.
 <!--@gvkit:endif-->
+<!--@gvkit:if cfWorkers-->
 On Cloudflare, `handleFetch` routes SSR calls through the web Worker's `GATEWAY` Service Binding. Never add a per-service public URL or a direct web-to-private-service binding.
+<!--@gvkit:else-->
+`handleFetch` routes SSR calls through the private `GATEWAY_URL`. Never add a per-service public URL or call a private service directly from web code.
+<!--@gvkit:endif-->
 
 <!--@gvkit:if auth-->
 Auth uses the official Better Auth client. Use `authClient` from `$lib/auth/client`, never a raw auth fetch wrapper or the owned gateway API access path.
@@ -364,9 +368,17 @@ Children of `me/` inherit `data.user` automatically. No `(authenticated)/` group
 | Need                                                          | File              | Why                                                |
 | ------------------------------------------------------------- | ----------------- | -------------------------------------------------- |
 <!--@gvkit:if auth-->
+<!--@gvkit:if cfWorkers-->
 | Reading bindings (D1, KV, R2), env vars, session              | `+page.server.ts` | Server-only context                                |
 <!--@gvkit:else-->
+| Reading environment variables or session                      | `+page.server.ts` | Server-only context                                |
+<!--@gvkit:endif-->
+<!--@gvkit:else-->
+<!--@gvkit:if cfWorkers-->
 | Reading bindings (D1, KV, R2) or environment variables        | `+page.server.ts` | Server-only context                                |
+<!--@gvkit:else-->
+| Reading environment variables                                 | `+page.server.ts` | Server-only context                                |
+<!--@gvkit:endif-->
 <!--@gvkit:endif-->
 | Form actions (mutations)                                      | `+page.server.ts` | Actions only run on the server                     |
 <!--@gvkit:if auth-->

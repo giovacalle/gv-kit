@@ -8,9 +8,9 @@ import { GvKitConfig } from '../../src/schema/config.js'
 
 const fixtureBaselines = {
 	'inside-frontend-docker-postgres.jsonc':
-		'ecc0c223d08bf6346d986674fa2c3635aa58fdd36a238ccc460e643f6d245398',
+		'741b31b10a3d19549d0741bc561e01939caeec2e7bc26d463bbb419d5afbb5c9',
 	'inside-frontend-docker-sqlite.jsonc':
-		'e331909df5ac9865191d0b1aca0a4741f2b1259bc7d6ef0d8241d232f813addd'
+		'350bb4b1d020df2fc3c6841f09914cd40f004c67c8a309f0cdae26f4e980258e'
 } as const
 
 function loadPlan(fixtureName: string): FileEntry[] {

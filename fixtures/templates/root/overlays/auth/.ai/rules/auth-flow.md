@@ -144,18 +144,18 @@ await authClient.emailOtp.sendVerificationOtp({
 })
 ```
 
-The auth Worker's `captcha` plugin (better-auth) verifies server-side — `apps/web` never holds the Turnstile secret.
+The server-side Better Auth `captcha` plugin verifies the token — `apps/web` never holds the Turnstile secret.
 
 Schema enforces `turnstileToken: z.string().min(1)` so a scripted submit without a token is rejected before any business logic runs.
 
 ### Server-side validation
 
-The auth Worker enables better-auth's `captcha` plugin with `provider: 'cloudflare-turnstile'`. It intercepts the `/email-otp/send-verification-otp` endpoint, reads the `x-captcha-response` header, and validates against Cloudflare's siteverify. No manual siteverify code lives in the Worker.
+The server-side Better Auth configuration enables the `captcha` plugin with `provider: 'cloudflare-turnstile'`. It intercepts the `/email-otp/send-verification-otp` endpoint, reads the `x-captcha-response` header, and validates against Cloudflare's siteverify. No manual siteverify code is needed.
 
-Required environment variable in the auth Worker:
-- `TURNSTILE_SECRET_KEY` (server-side only — never in `apps/web`)
+Required server-side environment variable:
+- `TURNSTILE_SECRET_KEY` (never exposed in `apps/web`)
 
-The web Worker only holds `PUBLIC_TURNSTILE_SITE_KEY` (public, used to render the widget).
+The web app only exposes `PUBLIC_TURNSTILE_SITE_KEY` (public, used to render the widget).
 
 ### Resetting the widget
 
@@ -178,7 +178,7 @@ await authClient.signIn.social({ provider: 'google', callbackURL: '/me' })
 <!--@gvkit:if hono-->
 The auth service handles the round-trip. Configure Google with each allowed web, API, and preview callback host at `/api/auth/callback/google`. The web app only needs to know the success destination.
 <!--@gvkit:else-->
-The auth Worker handles the round-trip via Google Cloud Console's redirect URI (`${AUTH_URL}/api/auth/callback/google`). The web app only needs to know the success destination.
+The server-side auth handler manages the round-trip through Google Cloud Console's redirect URI (`${AUTH_URL}/api/auth/callback/google`). The web app only needs to know the success destination.
 <!--@gvkit:endif-->
 
 ## Account mutations (update / delete)
@@ -190,7 +190,13 @@ The auth Worker handles the round-trip via Google Cloud Console's redirect URI (
 <!--@gvkit:if hono-->
 `src/lib/server/load-session.ts` calls same-origin `/api/auth/get-session` with `event.fetch` and populates `event.locals.user`. The request-scoped fetch hook sends that call through the private gateway transport. The gateway forwards it to auth. SSR never calls auth directly or uses a public URL.
 <!--@gvkit:else-->
-`src/lib/server/load-session.ts` calls the same-origin `/api/auth/get-session` façade with `event.fetch` and populates `event.locals.user`. On Cloudflare, the façade forwards the original request through the `AUTH` Service Binding and returns the auth Worker's response unchanged, including `Set-Cookie`. The browser therefore stores a host-only cookie for the web origin and sends it on SSR requests.
+`src/lib/server/load-session.ts` calls the same-origin `/api/auth/get-session` façade with `event.fetch` and populates `event.locals.user`.
+<!--@gvkit:if cfWorkers-->
+The façade forwards the original request through the `AUTH` Service Binding and returns the auth service response unchanged, including `Set-Cookie`.
+<!--@gvkit:else-->
+The façade invokes Better Auth server-side and returns its response unchanged, including `Set-Cookie`.
+<!--@gvkit:endif-->
+The browser therefore stores a host-only cookie for the web origin and sends it on SSR requests.
 <!--@gvkit:endif-->
 
 This is the **only** server-side auth call. All mutations go through `authClient` from the browser.
@@ -206,9 +212,9 @@ This is the **only** server-side auth call. All mutations go through `authClient
 <!--@gvkit:else-->
 | Hardcode `PUBLIC_AUTH_URL` or the Turnstile site key | Read both from `$env/static/public` |
 <!--@gvkit:endif-->
-| Verify Turnstile in `apps/web` | Forward via `x-captcha-response`; the auth Worker verifies |
+| Verify Turnstile in `apps/web` | Forward via `x-captcha-response`; Better Auth verifies server-side |
 | Two separate `<form>`s for send + verify | Single `<form>`, single `superForm`, discriminated union schema |
 | Skip the SSR session gate | `me/+layout.server.ts` redirects to `/login` when no session |
 | `export const authClient = createAuthClient(...)` at module scope of a `.svelte.ts` | Singleton in plain `client.ts`, reactive mirror in the `.svelte.ts` context |
-| Server actions for OTP send/verify, update-user, delete-user | Call `authClient.*` directly from the browser; the auth Worker is the source of truth |
+| Server actions for OTP send/verify, update-user, delete-user | Call `authClient.*` directly from the browser; Better Auth is the source of truth |
 | `event.fetch('${AUTH_URL}/api/auth/...')` from a route | Use `authClient` (browser) or `$lib/server/load-session.ts` (server session load only) |

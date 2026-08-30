@@ -103,7 +103,8 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 			lines.push('')
 			lines.push('Specialists:')
 			lines.push('')
-			lines.push('- `service-architect` — scaffolds a new private `services/<svc>/` Hono Worker.')
+			const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'Hono Worker' : 'Hono service'
+			lines.push(`- \`service-architect\` — scaffolds a new private \`services/<svc>/\` ${privateRuntime}.`)
 		}
 		lines.push('')
 	}
@@ -116,8 +117,9 @@ function renderStackBullets(cfg: GvKitConfig): string {
 	lines.push('- Frontend: SvelteKit (Svelte 5, runes only)')
 	if (cfg.choices.marketing === 'astro') lines.push('- Marketing: Astro static site (`apps/marketing`)')
 	if (cfg.choices.backend === 'hono') {
+		const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'private Workers' : 'private services'
 		lines.push(
-			'- Backend: public Hono gateway at `apps/api` with private workers under `services/`'
+			`- Backend: public Hono gateway at \`apps/api\` with ${privateRuntime} under \`services/\``
 		)
 	}
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
@@ -145,7 +147,8 @@ function renderLayoutBullets(cfg: GvKitConfig): string {
 	lines.push('- `apps/web/` — SvelteKit app')
 	if (cfg.choices.backend === 'hono') {
 		lines.push('- `apps/api/` — public Hono API gateway')
-		lines.push('- `services/<service>/` — independently deployable private Hono Workers')
+		const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'Hono Workers' : 'Hono services'
+		lines.push(`- \`services/<service>/\` — independently deployable private ${privateRuntime}`)
 	}
 	lines.push('- `packages/db/` — Drizzle schema + client factory')
 	lines.push(

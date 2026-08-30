@@ -61,7 +61,10 @@ function renderStackSummary(cfg: GvKitConfig): string {
 	const lines: string[] = []
 	lines.push('- Frontend: SvelteKit (Svelte 5, runes)')
 	if (cfg.choices.marketing === 'astro') lines.push('- Marketing: Astro static site (`apps/marketing`)')
-	if (cfg.choices.backend === 'hono') lines.push('- Backend: Hono gateway (`apps/api`) with private workers under `services/`')
+	if (cfg.choices.backend === 'hono') {
+		const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'private workers' : 'private services'
+		lines.push(`- Backend: Hono gateway (\`apps/api\`) with ${privateRuntime} under \`services/\``)
+	}
 	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
 	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
 	if (cfg.choices.auth.length > 0) lines.push(`- Auth: better-auth (${cfg.choices.auth.join(', ')})`)
@@ -82,7 +85,8 @@ function renderLayoutTree(cfg: GvKitConfig): string {
 	lines.push('- `apps/web/` — SvelteKit app')
 	if (cfg.choices.backend === 'hono') {
 		lines.push('- `apps/api/` — public Hono API gateway')
-		lines.push('- `services/<service>/` — independently deployable private Hono workers')
+		const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'Hono Workers' : 'Hono services'
+		lines.push(`- \`services/<service>/\` — independently deployable private ${privateRuntime}`)
 	}
 	lines.push('- `packages/db/` — Drizzle schema + client factory')
 	lines.push(
@@ -104,8 +108,9 @@ function renderLayoutTree(cfg: GvKitConfig): string {
 function renderClaudeMd(cfg: GvKitConfig): string {
 	const specialists: string[] = []
 	if (cfg.choices.backend === 'hono') {
+		const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'Hono Worker' : 'Hono service'
 		specialists.push(
-			'- `service-architect` — scaffolds a new private `services/<svc>/` Hono Worker'
+			`- \`service-architect\` — scaffolds a new private \`services/<svc>/\` ${privateRuntime}`
 		)
 	}
 	if (cfg.choices.marketing === 'astro') specialists.push('- `astro-marketer` — edits the static public site within its app boundary')
@@ -187,8 +192,7 @@ User choices are recorded at \`.claude/stack.json\`. Agents read it to know whic
 
 - All output (code, comments, commits, docs) in English
 - TypeScript pinned via \`tsconfig.base.json\`
-- Wrangler config is always \`wrangler.jsonc\` — never \`wrangler.toml\`
-- Tailwind 4: theme via CSS \`@theme\` directive only (no \`tailwind.config.js\`)
+${cfg.choices.deploy === 'cf-workers' ? '- Wrangler config is always `wrangler.jsonc` — never `wrangler.toml`\n' : ''}- Tailwind 4: theme via CSS \`@theme\` directive only (no \`tailwind.config.js\`)
 `
 }
 
@@ -227,7 +231,7 @@ function renderClaudeSettings(cfg: GvKitConfig): string {
 			allow: [
 				'Bash(pnpm*)',
 				'Bash(turbo*)',
-				'Bash(wrangler*)',
+				...(cfg.choices.deploy === 'cf-workers' ? ['Bash(wrangler*)'] : []),
 				'Bash(git status)',
 				'Bash(git diff*)',
 				'Bash(git log*)',
@@ -274,6 +278,7 @@ marketing; route those changes to \`apps/web\` or the owning service instead.
 
 function renderServiceArchitectAgent(cfg: GvKitConfig): string {
 	const isCfWorkers = cfg.choices.deploy === 'cf-workers'
+	const privateRuntime = isCfWorkers ? 'Worker' : 'service'
 	const isDocker = cfg.choices.deploy === 'docker'
 	const hasAuth = cfg.choices.auth.length > 0
 	const project = cfg.choices.name
@@ -368,13 +373,13 @@ serve({ fetch: app.fetch, port })
 
 	return `---
 name: service-architect
-description: Scaffolds a new private \`services/<svc>/\` Hono Worker. Use when adding a NEW domain service. Strict on the service-boundary policy and refuses cross-service shortcuts.
+description: Scaffolds a new private \`services/<svc>/\` Hono ${privateRuntime}. Use when adding a NEW domain service. Strict on the service-boundary policy and refuses cross-service shortcuts.
 tools: Read, Glob, Grep, Bash, Edit, Write
 ---
 
 # service-architect
 
-You scaffold a NEW private service under \`services/<svc>/\`. Each service is an independently deployable transport/runtime adapter that may import the application modules it needs from the shared backend application/core layer at \`packages/backend/\`. The public gateway stays at \`apps/api/\` and owns every external API route.
+You scaffold a NEW private service under \`services/<svc>/\`. Each service is an independently deployable ${isCfWorkers ? 'Worker ' : ''}transport/runtime adapter that may import the application modules it needs from the shared backend application/core layer at \`packages/backend/\`. The public gateway stays at \`apps/api/\` and owns every external API route.
 
 ## Mandate
 
@@ -384,7 +389,7 @@ When asked to add service \`<svc>\` (e.g. \`billing\`, \`notifications\`, \`asse
    - \`package.json\` — \`@repo/<svc>\` (private workspace package).${isCfWorkers ? ' Copy the existing `cf-typegen` bootstrap-replacement script and run it after config changes or before deploy.' : ''}
 ${runtimeFiles}
    - \`tsconfig.json\` — extends the workspace base.
-   - \`src/index.ts\` — runtime entry. ${isCfWorkers ? 'Use `export default { fetch: app.fetch }`.' : hasAuth ? `Use the request-aware \`serve\` adapter shown below so \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` reaches Hono's runtime bindings.` : 'Use `serve({ fetch: app.fetch, port })`.'}
+   - \`src/index.ts\` — runtime entry. ${isCfWorkers ? 'Use `export default { fetch: app.fetch }`.' : hasAuth ? `Use the request-aware \`serve\` adapter shown below so \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` reaches Hono's runtime environment.` : 'Use `serve({ fetch: app.fetch, port })`.'}
    - \`src/app.ts\` — Hono transport wiring (routes, middleware).
    - \`src/routes/\` — one file per resource. Keep handlers thin and invoke reusable application modules from \`@repo/backend\`.
 

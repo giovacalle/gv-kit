@@ -55,6 +55,9 @@ const CLIENT_ONLY_GUIDANCE =
 const EXCLUSIVE_AUTH_TABLE_GUIDANCE =
 	/only .*queries the auth tables|auth tables here are queried only by|never read auth secrets or query auth tables|query auth tables \(`account`|REFUSE to query `user`, `session`, `account`, `verification` from a non-auth service|Owned exclusively by the auth service\. NO other service may query these tables|Any service other than `services\/auth\/` querying `user`, `session`, `account`, or `verification` tables directly/i
 
+const NODE_TARGET_RUNTIME_GUIDANCE =
+	/Cloudflare Workers runtime|Cloudflare Worker code paths|@sveltejs\/adapter-cloudflare|\b(?:web|auth|Hono|private|SvelteKit) Worker(?:'s|s)?\b|Worker(?:-only| bundle| runtime)|Service Binding|workers_dev|wrangler(?:\.jsonc|\.toml|\s)/i
+
 function generatedContent(entries: ReturnType<typeof runGenerators>): string {
 	return entries.map(({ content }) => content).join('\n')
 }
@@ -318,6 +321,122 @@ describe('database ownership terminology contract', () => {
 })
 
 describe('generated Hono gateway guidance', () => {
+	test('web runtime and ingress guidance follows the deployment target', () => {
+		const expected = {
+			'cf-workers': {
+				adapter: '@sveltejs/adapter-cloudflare',
+				ingress: 'more-specific Cloudflare routes',
+				port: 'http://localhost:5173',
+				runtime: 'SvelteKit web app deployed to Cloudflare Workers.'
+			},
+			docker: {
+				adapter: '@sveltejs/adapter-node',
+				ingress: 'Nginx routes `/api` and `/api/*`',
+				port: 'http://localhost:3000',
+				runtime: 'SvelteKit web app running on Node.js behind Nginx.'
+			},
+			skip: {
+				adapter: '@sveltejs/adapter-node',
+				ingress: 'Vite proxies `/api` and `/api/*`',
+				port: 'http://localhost:5173',
+				runtime: 'SvelteKit web app running locally on Node.js.'
+			}
+		} as const
+
+		for (const deploy of ['cf-workers', 'docker', 'skip'] as const) {
+			const entries = runGenerators(
+				makeCfg(['claude', 'codex', 'opencode'], { deploy })
+			)
+			const webInstructions = content(entries, 'apps/web/CLAUDE.md')
+			const webApiRule = content(entries, '.ai/rules/web-api.md')
+			const runtimeGuidance = markdownGuidance(entries)
+			const webPackage = JSON.parse(content(entries, 'apps/web/package.json')) as {
+				scripts: Record<string, string>
+				devDependencies: Record<string, string>
+			}
+			const svelteConfig = content(entries, 'apps/web/svelte.config.js')
+			const documentedPackageCommands = [...webInstructions.matchAll(/^pnpm ([\w:-]+)/gm)]
+				.map((match) => match[1]!)
+				.filter((command) => command !== 'install' && command !== 'exec')
+
+			expect(webInstructions).toContain(expected[deploy].runtime)
+			expect(webInstructions).toContain(expected[deploy].adapter)
+			expect(webInstructions).toContain(expected[deploy].port)
+			expect(webInstructions).toContain(expected[deploy].ingress)
+			expect(svelteConfig).toContain(expected[deploy].adapter)
+			for (const command of documentedPackageCommands) expect(webPackage.scripts[command], `${deploy}: pnpm ${command}`).toBeDefined()
+			expect(webInstructions).toContain('`.ai/rules/`')
+			expect(webInstructions).not.toContain('`.claude/rules/`')
+
+			if (deploy === 'cf-workers') {
+				expect(webInstructions).toContain('Service Binding is `GATEWAY`')
+				expect(webInstructions).toContain('pnpm deploy:production')
+				expect(webInstructions).toContain('pnpm cf-typegen')
+				expect(webInstructions).toContain('pnpm exec wrangler tail')
+				expect(webApiRule).toContain('Cloudflare routes')
+				expect(webPackage.devDependencies.wrangler).toBeDefined()
+			} else {
+				expect(webInstructions).toContain('private `GATEWAY_URL`')
+				expect(webInstructions).not.toMatch(/Cloudflare Workers|Service Binding|wrangler/i)
+				expect(webApiRule).not.toMatch(/Cloudflare route|Service Binding|wrangler/i)
+				expect(runtimeGuidance).not.toMatch(
+					/Cloudflare Workers runtime|@sveltejs\/adapter-cloudflare|Service Binding|workers_dev|wrangler(?:\.jsonc|\.toml|\s)/i
+				)
+				expect(content(entries, '.claude/settings.json')).not.toContain('Bash(wrangler*)')
+				expect(webPackage.devDependencies.wrangler).toBeUndefined()
+			}
+		}
+	})
+
+	test('Node targets contain no Cloudflare runtime residue across the complete guidance inventory', () => {
+		for (const deploy of ['docker', 'skip'] as const) {
+			for (const backend of ['hono', 'inside-frontend'] as const) {
+				for (const auth of [true, false]) {
+					const entries = runGenerators(
+						makeCfg(['claude', 'codex', 'opencode'], {
+							apiClient: backend === 'hono' ? 'hey-api' : 'skip',
+							auth: auth ? ['emailOTP'] : [],
+							backend,
+							deploy,
+							email: auth ? 'resend' : 'skip'
+						})
+					)
+					const guidance = markdownGuidance(entries)
+					const label = `${backend}/${deploy}/${auth ? 'auth' : 'no-auth'}`
+
+					expect(guidance, label).not.toMatch(NODE_TARGET_RUNTIME_GUIDANCE)
+					if (backend === 'hono') {
+						expect(content(entries, 'apps/web/CLAUDE.md'), label).toContain(
+							'Node.js via `@sveltejs/adapter-node`'
+						)
+					}
+					expect(content(entries, '.claude/settings.json'), label).not.toContain(
+						'Bash(wrangler*)'
+					)
+				}
+			}
+		}
+	})
+
+	test('web guidance does not reference AI rules when no AI tooling is generated', () => {
+		for (const marketing of ['astro', 'inside-web'] as const) {
+			const entries = runGenerators(
+				makeCfg([], {
+					auth: [],
+					deploy: 'docker',
+					email: 'skip',
+					marketing
+				})
+			)
+
+			expect(entries.some(({ path }) => path.startsWith('.ai/rules/')), marketing).toBe(false)
+			expect(markdownGuidance(entries), marketing).not.toContain('.ai/rules/')
+			expect(content(entries, 'apps/web/CLAUDE.md'), marketing).toContain(
+				'Follow the workspace root guidance and the conventions in this file.'
+			)
+		}
+	})
+
 	for (const selected of ['claude', 'codex', 'opencode'] as const) {
 		test(`${selected} guidance and permissions preserve the gateway topology`, () => {
 			const entries = runGenerators(makeCfg([selected]))

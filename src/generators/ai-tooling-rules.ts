@@ -31,6 +31,7 @@ export function generateAiToolingRules(cfg: GvKitConfig): FileEntry[] {
 			insideFrontendCfBaseline:
 				cfg.choices.backend === 'inside-frontend' && cfg.choices.deploy === 'cf-workers',
 			cfWorkers: cfg.choices.deploy === 'cf-workers',
+			deployDocker: cfg.choices.deploy === 'docker',
 			hono: cfg.choices.backend === 'hono',
 			i18nParaglide: cfg.choices.i18n === 'paraglide',
 			apiClientHeyApi: cfg.choices.apiClient === 'hey-api'
@@ -98,6 +99,34 @@ auth, database, or backend secrets reached the bundle.
 /*  .ai/rules/core-stack.md                                            */
 /* ------------------------------------------------------------------ */
 
+function renderWebGatewayTransport(cfg: GvKitConfig): string {
+	const cloudflare = `On Cloudflare, \`handleFetch\` sends these requests through the web Worker's \`GATEWAY\` Service Binding.
+   Browser ingress uses the web origin's more-specific Cloudflare routes.`
+	const docker = `In Docker, \`handleFetch\` uses the private \`GATEWAY_URL\`.
+   Nginx owns browser \`/api\` ingress and routes it directly to the gateway.`
+	const local = `In local development, \`handleFetch\` uses the private \`GATEWAY_URL\`.
+   Vite owns browser \`/api\` ingress and proxies it directly to the gateway.`
+	if (cfg.choices.deploy === 'cf-workers') return cloudflare
+	if (cfg.choices.deploy === 'docker') return docker
+	return local
+}
+
+function renderPrivateServiceIngressPolicy(cfg: GvKitConfig): string {
+	if (cfg.choices.deploy === 'cf-workers') return 'They must not gain a public route, workers.dev hostname, or preview URL.'
+	if (cfg.choices.deploy === 'docker') return 'They have no host ports and receive calls only over the private Compose network.'
+	return 'Loopback ports are debugging endpoints, not normal browser or application ingress.'
+}
+
+function renderPrivateTransportPolicy(cfg: GvKitConfig): string {
+	const cloudflare = `The web Worker binds only to the
+  gateway. The gateway binds to its private services. Each private service declares
+  the data and service bindings required by its runtime adapter. No shared \`env\` blob.`
+	const node = `Web SSR and service adapters declare only the private target URLs required by
+  their runtime. No browser-facing service URLs and no shared \`env\` blob.`
+	if (cfg.choices.deploy === 'cf-workers') return cloudflare
+	return node
+}
+
 export function renderCoreStackRule(cfg: GvKitConfig): string {
 	if (cfg.choices.backend !== 'hono') {
 		return `# Stack
@@ -134,7 +163,7 @@ of unrelated route folders so future changes stay local.
 
 \`apps/api/\` is the public Hono API gateway. The web origin's \`/api/*\` alias
 and canonical API origin reach the same gateway. Independently deployable private
-Hono workers under \`services/\` are transport/runtime adapters. They invoke the
+Hono services under \`services/\` are transport/runtime adapters. They invoke the
 shared backend application/core layer in \`packages/backend/\`. Browser and SSR
 code depend on the gateway contract, never on a private service's deployment address.
 
@@ -157,8 +186,7 @@ ${
    methods are mounted; domain operations use versioned \`/api/v1/*\` paths.`
 }
 2. SvelteKit SSR passes its request-scoped \`fetch\` ${cfg.choices.apiClient === 'hey-api' ? 'to the flat gateway client' : 'to same-origin gateway requests'}.
-   On Cloudflare, \`handleFetch\` sends these requests through the web Worker's
-   \`GATEWAY\` Service Binding. Node and Docker use the private gateway URL.
+   ${renderWebGatewayTransport(cfg)}
 3. The gateway maps explicit public prefixes to private services. Private
    services call one another directly and never hairpin through the gateway.
    Web code never bypasses the gateway.
@@ -166,18 +194,18 @@ ${
 ## Service boundary policy (CRITICAL)
 
 - **The gateway owns public API ingress.** It must not import or mount a private service application.
-  Private workers under \`services/\` have no browser-facing route.
+  Private services under \`services/\` have no browser-facing route.
 - **The gateway stays thin.** It handles ingress, routing, operational middleware,
   OpenAPI delivery, and transparent forwarding. It does not import application use
   cases or orchestrate business workflows.
-- **Private services stay private.** They must not gain a public route, workers.dev hostname, or preview URL.
+- **Private services stay private.** ${renderPrivateServiceIngressPolicy(cfg)}
 - **Auth is a service.** Served EXCLUSIVELY by \`${AUTH_SERVICE.workspacePath}/\`. No other
   service exposes auth endpoints.${cfg.choices.auth.length === 0 ? ' With no selected provider, do not add authentication behavior.' : ''}
 ${
 	cfg.choices.auth.length > 0
 		? `- **Private session resolution uses shared middleware.** Session-aware services MUST use the existing
-  \`@repo/backend/middleware/auth\` transport. This shared middleware owns the deployment-aware
-  \`${AUTH_SERVICE.internalTarget}\` binding or \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` URL transport to the private auth service.
+  \`@repo/backend/middleware/auth\` transport. This shared middleware owns ${cfg.choices.deploy === 'cf-workers' ? `the deployment-aware
+  \`${AUTH_SERVICE.internalTarget}\` binding` : `the private \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` URL transport`} to the private auth service.
   Transport adapters and agents must not call the binding, URL, or \`/internal/session\`
   directly, generate a duplicate auth client, or extract a service SDK.`
 		: ''
@@ -188,9 +216,7 @@ ${
 - **OpenAPI ownership stays with services.** Each domain service owns a deterministic fragment.
   The gateway composes \`apps/api/openapi.json\` and serves it at \`/api/openapi.json\`. Better Auth
   stays outside that document.${cfg.choices.apiClient === 'hey-api' ? ' Hey API generates one flat client from it.' : ' No API client package is generated.'}
-- **Bindings are explicit per deployable.** The web Worker binds only to the
-  gateway. The gateway binds to its private services. Each private service declares
-  the data and service bindings required by its runtime adapter. No shared \`env\` blob.
+- **Private transports are explicit per deployable.** ${renderPrivateTransportPolicy(cfg)}
 
 ## Forbidden patterns
 
@@ -241,10 +267,9 @@ inside \`apps/web/\`. A single deployable unit.`
 	if (isHono) {
 		sections.push(`## Gateway boundary
 
-- \`apps/api/\` owns every public API route. Private workers live under
+- \`apps/api/\` owns every public API route. ${isCfWorkers ? 'Private Workers' : 'Private services'} live under
   \`services/<service>/\` and are not browser or web dependencies.
-${gatewayConsumer} On Cloudflare, the web Worker's \`GATEWAY\` Service Binding carries SSR requests.
-  Node and Docker use the private gateway URL.
+${gatewayConsumer} ${renderWebGatewayTransport(cfg)}
 - Only the gateway calls private services for public API work. A private service
   calls another private service directly for an internal domain flow.
 - Keep the gateway limited to ingress, routing, operational middleware, OpenAPI
@@ -275,7 +300,7 @@ Handlers catch \`HttpError\` once at the boundary and serialize. **Never throw
 plain \`Error\` from a handler** — always go through the factory so the response
 shape stays consistent.`)
 
-	if (isCfWorkers || isHono) {
+	if (isCfWorkers) {
 		const envGuidance = isHono
 			? `- **\`Env\` is generated from Wrangler config**, never hand-written. Clean scaffolds use
   \`worker-configuration.bootstrap.d.ts\`; run \`pnpm cf-typegen\` to replace it with
@@ -319,12 +344,19 @@ The shared backend application/core layer is split into **data-access** and **us
 - Inline single-statement bodies. No verbose JSDoc.`)
 	}
 
+	const runtimeConstraints = isCfWorkers
+		? `- No \`as any\` in worker code
+- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths
+- No hand-written \`Env\` interface — let wrangler generate it
+- No \`wrangler.toml\` — \`wrangler.jsonc\` only`
+		: isHono
+			? `- No \`as any\` in runtime code
+- No browser-facing private-service URL
+- No direct web-to-private-service call`
+			: '- No `as any` in runtime code'
 	sections.push(`## What NOT to do
 
-- No \`as any\` in worker code
-- No Node \`fs\`/\`path\`/\`process\`/\`Buffer\` in worker code paths${isHono && cfg.choices.auth.length > 0 ? '\n- No Better Auth configuration outside of `' + AUTH_SERVICE.workspacePath + '/src/auth.ts`' : ''}${isHono && cfg.choices.auth.length === 0 ? '\n- No public auth methods while no authentication provider is selected' : ''}
-- No hand-written \`Env\` interface — let wrangler generate it
-- No \`wrangler.toml\` — \`wrangler.jsonc\` only`)
+${runtimeConstraints}${isHono && cfg.choices.auth.length > 0 ? '\n- No Better Auth configuration outside of `' + AUTH_SERVICE.workspacePath + '/src/auth.ts`' : ''}${isHono && cfg.choices.auth.length === 0 ? '\n- No public auth methods while no authentication provider is selected' : ''}`)
 
 	return sections.join('\n\n') + '\n'
 }

@@ -45,7 +45,17 @@ export const load = async ({ fetch, url }) => {
 Call the public gateway path with `event.fetch`. Do not add a service-specific client wrapper.
 <!--@gvkit:endif-->
 
-For same-origin `/api` and `/api/*` SSR requests, `handleFetch` in `hooks.server.ts` changes only the transport. It does not handle inbound browser requests. Cloudflare SSR calls the gateway through the `GATEWAY` Service Binding. Node and Docker SSR use the private `GATEWAY_URL`. Neither path calls auth or a domain service directly.
+For same-origin `/api` and `/api/*` SSR requests, `handleFetch` in `hooks.server.ts` changes only the transport. It does not handle inbound browser requests.
+<!--@gvkit:if cfWorkers-->
+Cloudflare SSR calls the gateway through the `GATEWAY` Service Binding. Browser ingress reaches the gateway through the web origin's more-specific Cloudflare routes.
+<!--@gvkit:else-->
+<!--@gvkit:if deployDocker-->
+Docker SSR uses the private `GATEWAY_URL`. Nginx routes public `/api` and `/api/*` requests directly to the gateway.
+<!--@gvkit:else-->
+Local SSR uses the private `GATEWAY_URL`. The Vite development server proxies browser `/api` and `/api/*` requests directly to the gateway.
+<!--@gvkit:endif-->
+<!--@gvkit:endif-->
+The web app never calls auth or a domain service directly.
 
 Preserve method, path, query, request headers, cookies, body streams, redirects, status, and response headers when changing this transport.
 
@@ -69,8 +79,20 @@ Do not send owned API operations through Better Auth. Do not create an auth fetc
 | Configure a browser URL per private service | Call the same-origin gateway path |
 | Add `src/lib/api/<service>.ts` wrappers | Use request-scoped `fetch` at the consuming boundary |
 <!--@gvkit:endif-->
+<!--@gvkit:if cfWorkers-->
 | Bind the web Worker to a private domain service | Bind web only to `GATEWAY` for SSR |
+<!--@gvkit:else-->
+| Point web SSR at a public API origin | Use the private `GATEWAY_URL` |
+<!--@gvkit:endif-->
 <!--@gvkit:if auth-->
 | Write a `lib/api/auth.ts` wrapper | Use the official Better Auth client from `$lib/auth/client` |
 <!--@gvkit:endif-->
+<!--@gvkit:if cfWorkers-->
 | Add a SvelteKit `/api` or `/api/*` proxy | Keep browser ingress on the more-specific Cloudflare gateway routes |
+<!--@gvkit:else-->
+<!--@gvkit:if deployDocker-->
+| Add a SvelteKit `/api` or `/api/*` proxy | Keep browser ingress in Nginx |
+<!--@gvkit:else-->
+| Add a SvelteKit `/api` endpoint | Keep local browser ingress in the Vite proxy |
+<!--@gvkit:endif-->
+<!--@gvkit:endif-->

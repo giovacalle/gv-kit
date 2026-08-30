@@ -7,7 +7,7 @@
 .prettierignore  00ccef47c63de1e9
 Dockerfile  863f5b3f3c33de19
 LICENSE  508a77d2e7b51d98
-README.md  8549f6c55b0de098
+README.md  bed992545519af1e
 apps/api/README.md  75ec2f93c8f0fe33
 apps/api/openapi.json  e1f4f3ab3504f32c
 apps/api/package.json  bd98589e0dba2ec6
@@ -17,7 +17,7 @@ apps/api/src/index.ts  62aec8ecf001f9a1
 apps/api/tsconfig.json  69f2df8e361aa93a
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  cfea88c6cf63e496
+apps/web/CLAUDE.md  d0fdb5f1926819f0
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  fcc23f0edf9afdd1
 apps/web/prettier.config.js  76a534fdcb4541a5

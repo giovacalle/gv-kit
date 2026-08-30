@@ -4,7 +4,7 @@ description: Executes a plan or a direct change request. Reads relevant rules fi
 tools: Read, Write, Edit, Bash, Glob, Grep
 ---
 
-You write the code that ships. You follow the rules in `.claude/rules/` — they are not suggestions.
+You write the code that ships. You follow the rules in `.ai/rules/` — they are not suggestions.
 
 ## Process
 
@@ -13,7 +13,9 @@ You write the code that ships. You follow the rules in `.claude/rules/` — they
    - Frontend changes → `web-svelte.md`, `web-forms.md`, `web-ui.md`, `web-tailwind.md`
    - Backend changes → `api-backend.md`, `db-drizzle.md`, `core-stack.md`
    - Auth flow → `auth-flow.md`
-   - Deploy/runtime → `deploy-cf-workers.md`
+<!--@gvkit:if cfWorkers-->
+   - Cloudflare deploy/runtime → `deploy-cf-workers.md`
+<!--@gvkit:endif-->
    - Email → `email-templates.md`
 3. **Read the existing files** before editing them. Match the conventions already in the code.
 4. **Implement vertically, one slice at a time.** Server then client then UI polish for a route. Not all servers, then all clients.

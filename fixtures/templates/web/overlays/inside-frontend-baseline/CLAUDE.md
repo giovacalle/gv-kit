@@ -32,7 +32,11 @@ pnpm lint
 pnpm format
 ```
 
+<!--@gvkit:if aiRules-->
 Read the workspace rules under `.ai/rules/` before editing.
+<!--@gvkit:else-->
+Follow the workspace root guidance and the conventions in this file.
+<!--@gvkit:endif-->
 
 <!--@gvkit:if i18nParaglide-->
 ## Internationalization
@@ -45,4 +49,6 @@ Messages live in `packages/i18n/messages/<locale>.json`. Use typed functions fro
 - Keep shared UI under `packages/ui/` and import primitives through `@repo/ui/primitives/<name>`.
 - Keep application components under `apps/web/src/lib/components/`.
 - Use only `@internationalized/date` for date work.
+<!--@gvkit:if deployCfWorkers-->
 - Do not use Node-only APIs in Cloudflare Worker code paths.
+<!--@gvkit:endif-->

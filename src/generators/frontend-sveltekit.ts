@@ -1,3 +1,4 @@
+import { cloudflareProductionWorkerName } from '../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
 import { HONO_WORKERS_COMPAT_DATE, WORKERS_COMPAT_DATE } from '../lib/workers.js'
@@ -9,7 +10,6 @@ import {
 import {
 	AUTH_SERVICE,
 	HONO_GATEWAY,
-	honoServiceName,
 	nodeDevelopmentOrigin
 } from './hono-topology.js'
 
@@ -64,10 +64,17 @@ export function generateFrontendSveltekit(cfg: GvKitConfig): FileEntry[] {
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,
+			__CLOUDFLARE_WEB_WORKER__: cloudflareProductionWorkerName({
+				project: cfg.choices.name,
+				service: 'web'
+			}),
 			__COMPAT_DATE__:
 				cfg.choices.backend === 'hono' ? HONO_WORKERS_COMPAT_DATE : WORKERS_COMPAT_DATE,
 			__GATEWAY_TARGET__: HONO_GATEWAY.identity.toUpperCase(),
-			__GATEWAY_SERVICE__: honoServiceName(cfg.choices.name, HONO_GATEWAY),
+			__GATEWAY_SERVICE__: cloudflareProductionWorkerName({
+				project: cfg.choices.name,
+				service: HONO_GATEWAY.transport.cfWorkers.serviceNameSuffix
+			}),
 			__GATEWAY_URL__: nodeDevelopmentOrigin(HONO_GATEWAY),
 			__AUTH_URL__:
 				cfg.choices.backend === 'hono' && hasAuth

@@ -1,3 +1,4 @@
+import { cloudflareProductionWorkerName } from '../../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../../lib/files.js'
 import { HONO_WORKERS_COMPAT_DATE } from '../../lib/workers.js'
 import type { GvKitConfig } from '../../schema/config.js'
@@ -279,7 +280,10 @@ function wranglerJsonc({
 
 	return `{
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "${honoServiceName(project, AUTH_SERVICE)}",
+	"name": "${cloudflareProductionWorkerName({
+		project,
+		service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix
+	})}",
 	"main": "src/index.ts",
 	"tsconfig": "tsconfig.json",
 	"compatibility_date": "${HONO_WORKERS_COMPAT_DATE}",

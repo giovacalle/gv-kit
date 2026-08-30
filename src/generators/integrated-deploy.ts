@@ -1,3 +1,4 @@
+import { cloudflareProductionWorkerName } from '../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
 
@@ -28,7 +29,7 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 			path: '.github/workflows/deploy-staging.yml',
 			content: deployStagingWorkflow({ project, db, cfg })
 		},
-		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) }
+		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(cfg, db) }
 	]
 }
 
@@ -449,9 +450,24 @@ function neonPreviewDbJob(project: string): string {
           expires_at: \${{ steps.expiration.outputs.expires_at }}`
 }
 
-function cleanupStagingWorkflow(project: string, db: GvKitConfig['choices']['db']): string {
+function cleanupStagingWorkflow(cfg: GvKitConfig, db: GvKitConfig['choices']['db']): string {
+	const project = cfg.choices.name
 	const previewDbCleanupStep =
 		db === 'sqlite' ? d1PreviewDbCleanupStep(project) : neonPreviewDbCleanupStep(project)
+	const productionNameAliases = ['web', ...(cfg.choices.marketing === 'astro' ? ['marketing'] : [])]
+		.map((service) => {
+			const legacyName = `${project}-${service}`
+			const boundedName = cloudflareProductionWorkerName({ project, service })
+			return [boundedName, legacyName] as const
+		})
+		.filter(([boundedName, legacyName]) => boundedName !== legacyName)
+	const previewBaseNameAliases =
+		productionNameAliases.length === 0
+			? ''
+			: `            case "$base_name" in
+${productionNameAliases.map(([boundedName, legacyName]) => `              ${boundedName}) base_name=${legacyName} ;;`).join('\n')}
+            esac
+`
 	return `# Tear down a staging deploy when its PR closes (merged or rejected). Also
 # deletes the remote branch — staging is ephemeral. Worker names are discovered
 # from checked-in wrangler.jsonc files and suffixed with the branch alias.
@@ -500,7 +516,7 @@ jobs:
               echo "Skipping $config: no top-level name found"
               continue
             fi
-            worker_name="$base_name-\${{ steps.branch.outputs.alias }}"
+${previewBaseNameAliases}            worker_name="$base_name-\${{ steps.branch.outputs.alias }}"
             echo "Deleting $worker_name"
             npx wrangler delete --name "$worker_name" --force || true
           done

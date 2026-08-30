@@ -1,9 +1,11 @@
+import { cloudflareProductionWorkerName } from '../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
 import {
 	AUTH_SERVICE,
 	dockerServiceOrigin,
 	HONO_GATEWAY,
+	HONO_SERVICES,
 	honoPackageIdentity,
 	honoServiceName,
 	USERS_SERVICE
@@ -44,7 +46,7 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) },
 		{
 			path: 'scripts/cloudflare-preview-name.mjs',
-			content: cloudflarePreviewNameScript(project)
+			content: cloudflarePreviewNameScript(cfg)
 		},
 		{
 			path: 'scripts/verify-cloudflare-preview-ingress.mjs',
@@ -95,7 +97,44 @@ fi
 `
 }
 
-function cloudflarePreviewNameScript(project: string): string {
+function cloudflarePreviewNameScript(cfg: GvKitConfig): string {
+	const project = cfg.choices.name
+	const productionNameAliases = [
+		HONO_GATEWAY.transport.cfWorkers.serviceNameSuffix,
+		...HONO_SERVICES.map((service) => service.transport.cfWorkers.serviceNameSuffix),
+		'web',
+		...(cfg.choices.marketing === 'astro' ? ['marketing'] : [])
+	]
+		.map((service) => {
+			const legacyName = `${project}-${service}`
+			const boundedName = cloudflareProductionWorkerName({ project, service })
+			return [boundedName, legacyName] as const
+		})
+		.filter(([boundedName, legacyName]) => boundedName !== legacyName)
+	const aliasesDeclaration =
+		productionNameAliases.length === 0
+			? ''
+			: `const productionNameAliases = new Map(${JSON.stringify(productionNameAliases)})\n`
+	const validateProductionNameBody =
+		productionNameAliases.length === 0
+			? `\tif (typeof productionName !== 'string' || (productionName !== cloudflarePreviewProject && !productionName.startsWith(cloudflarePreviewProject + '-'))) throw new Error('Worker name is outside the preview project namespace')
+\tif (/-pr-[1-9][0-9]*$/.test(productionName)) throw new Error('Production Worker name must not contain a preview alias')
+\treturn productionName`
+			: `\tconst legacyName = productionNameAliases.get(productionName) ?? productionName
+\tif (typeof legacyName !== 'string' || (legacyName !== cloudflarePreviewProject && !legacyName.startsWith(cloudflarePreviewProject + '-'))) throw new Error('Worker name is outside the preview project namespace')
+\tif (/-pr-[1-9][0-9]*$/.test(legacyName)) throw new Error('Production Worker name must not contain a preview alias')
+\treturn legacyName`
+	const cloudflarePreviewNameBody =
+		productionNameAliases.length === 0
+			? `\tvalidateProductionName(productionName)
+\tvalidateCloudflarePreviewAlias(alias)
+\tconst resourceDigest = createHash('sha256')
+\t\t.update(productionName)`
+			: `\tconst legacyName = validateProductionName(productionName)
+\tvalidateCloudflarePreviewAlias(alias)
+\tconst resourceDigest = createHash('sha256')
+\t\t.update(legacyName)`
+
 	return `import { createHash } from 'node:crypto'
 
 const MAX_PREVIEW_ALIAS_LENGTH = 32
@@ -107,7 +146,7 @@ const projectNamespace = 'pv-' + createHash('sha256')
 	.update(cloudflarePreviewProject)
 	.digest('hex')
 	.slice(0, PROJECT_NAMESPACE_DIGEST_LENGTH)
-
+${aliasesDeclaration}
 export function validateCloudflarePreviewAlias(alias) {
 	if (typeof alias !== 'string' || !/^pr-[1-9][0-9]*$/.test(alias)) throw new Error('Preview alias must use the canonical pr-<positive integer> format')
 	if (alias.length > MAX_PREVIEW_ALIAS_LENGTH) throw new Error('Preview alias exceeds ' + MAX_PREVIEW_ALIAS_LENGTH + ' characters')
@@ -121,16 +160,11 @@ export function cloudflarePreviewAlias(previewId) {
 }
 
 function validateProductionName(productionName) {
-	if (typeof productionName !== 'string' || (productionName !== cloudflarePreviewProject && !productionName.startsWith(cloudflarePreviewProject + '-'))) throw new Error('Worker name is outside the preview project namespace')
-	if (/-pr-[1-9][0-9]*$/.test(productionName)) throw new Error('Production Worker name must not contain a preview alias')
-	return productionName
+${validateProductionNameBody}
 }
 
 export function cloudflarePreviewName(productionName, alias) {
-	validateProductionName(productionName)
-	validateCloudflarePreviewAlias(alias)
-	const resourceDigest = createHash('sha256')
-		.update(productionName)
+${cloudflarePreviewNameBody}
 		.digest('hex')
 		.slice(0, RESOURCE_DIGEST_LENGTH)
 	return projectNamespace + '-' + resourceDigest + '-' + alias

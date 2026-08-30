@@ -6,7 +6,7 @@
 	/*@gvkit:else*/
 	"$schema": "https://unpkg.com/wrangler@latest/config-schema.json",
 	/*@gvkit:endif*/
-	"name": "__PROJECT__-web",
+	"name": "__CLOUDFLARE_WEB_WORKER__",
 	"main": ".svelte-kit/cloudflare/_worker.js",
 	/*@gvkit:if honoGateway*/
 	"tsconfig": "tsconfig.json",

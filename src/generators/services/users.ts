@@ -1,3 +1,4 @@
+import { cloudflareProductionWorkerName } from '../../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../../lib/files.js'
 import { HONO_WORKERS_COMPAT_DATE } from '../../lib/workers.js'
 import type { GvKitConfig } from '../../schema/config.js'
@@ -218,7 +219,10 @@ function wranglerJsonc({ project, usesSqlite }: { project: string; usesSqlite: b
 
 	return `{
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "${honoServiceName(project, USERS_SERVICE)}",
+	"name": "${cloudflareProductionWorkerName({
+		project,
+		service: USERS_SERVICE.transport.cfWorkers.serviceNameSuffix
+	})}",
 	"main": "src/index.ts",
 	"tsconfig": "tsconfig.json",
 	"compatibility_date": "${HONO_WORKERS_COMPAT_DATE}",
@@ -232,7 +236,10 @@ function wranglerJsonc({ project, usesSqlite }: { project: string; usesSqlite: b
 		"inspector_port": ${USERS_SERVICE.development.inspectorPort}
 	},
 	"services": [
-		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }
+		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${cloudflareProductionWorkerName({
+			project,
+			service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix
+		})}" }
 	],
 	"observability": { "enabled": true }${dbBlock}
 }
@@ -462,7 +469,10 @@ function readme({
 			? `Session validation is delegated to the auth Worker via:
 
 \`\`\`
-services: [{ binding: "${AUTH_SERVICE.internalTarget}", service: "${honoServiceName(project, AUTH_SERVICE)}" }]
+services: [{ binding: "${AUTH_SERVICE.internalTarget}", service: "${cloudflareProductionWorkerName({
+					project,
+					service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix
+				})}" }]
 \`\`\`
 
 The middleware in \`@repo/backend/middleware/auth\` calls \`/internal/session\`

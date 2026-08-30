@@ -1,3 +1,4 @@
+import { cloudflareProductionWorkerName } from '../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
 import { HONO_WORKERS_COMPAT_DATE, WORKERS_COMPAT_DATE } from '../lib/workers.js'
@@ -36,6 +37,10 @@ export function generateAiToolingRules(cfg: GvKitConfig): FileEntry[] {
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,
+			__CLOUDFLARE_WEB_WORKER__: cloudflareProductionWorkerName({
+				project: cfg.choices.name,
+				service: 'web'
+			}),
 			__COMPAT_DATE__:
 				cfg.choices.backend === 'hono' ? HONO_WORKERS_COMPAT_DATE : WORKERS_COMPAT_DATE
 		}

@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { generateAiTooling } from '../../src/generators/ai-tooling.js'
 import { generateFrontendSveltekit } from '../../src/generators/frontend-sveltekit.js'
 import { generateRoot } from '../../src/generators/root.js'
+import {
+	CLOUDFLARE_WORKER_NAME_LIMIT,
+	cloudflareProductionWorkerName
+} from '../../src/lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../../src/lib/files.js'
+import { parseJsonc } from '../../src/lib/jsonc.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
 type Auth = Choices['auth']
@@ -330,6 +335,80 @@ describe('generateFrontendSveltekit — boundary regression', () => {
 })
 
 describe('generateFrontendSveltekit — wrangler placement per deploy flag', () => {
+	test('bounds route-backed web Workers and the gateway binding without renaming packages or previews', () => {
+		const project = `a${'b'.repeat(254)}`
+		const honoEntries = generateFrontendSveltekit(makeCfg({ name: project }))
+		const wrangler = parseJsonc<{
+			name: string
+			services: Array<{ binding: string; service: string }>
+		}>(findEntry(honoEntries, 'apps/web/wrangler.jsonc')!.content)
+		const packageJson = JSON.parse(findEntry(honoEntries, 'apps/web/package.json')!.content) as {
+			name: string
+		}
+		expect(wrangler.name).toBe(cloudflareProductionWorkerName({ project, service: 'web' }))
+		expect(wrangler.services).toEqual([
+			{
+				binding: 'GATEWAY',
+				service: cloudflareProductionWorkerName({ project, service: 'api' })
+			}
+		])
+		expect(packageJson.name).toBe(`${project}-web`)
+
+		const integratedEntries = generateFrontendSveltekit(
+			makeCfg({ name: project, backend: 'inside-frontend', apiClient: 'skip' })
+		)
+		const integratedWrangler = parseJsonc<{
+			name: string
+			workers_dev?: boolean
+			routes: Array<{ pattern: string; custom_domain: boolean }>
+		}>(findEntry(integratedEntries, 'apps/web/wrangler.jsonc')!.content)
+		const integratedPackage = JSON.parse(
+			findEntry(integratedEntries, 'apps/web/package.json')!.content
+		) as { scripts: Record<string, string> }
+		expect(integratedWrangler.workers_dev).toBeUndefined()
+		expect(integratedWrangler.routes).toEqual([{ pattern: '<domain>', custom_domain: true }])
+		expect(integratedWrangler.name).toBe(
+			cloudflareProductionWorkerName({ project, service: 'web' })
+		)
+		expect(integratedWrangler.name.length).toBeLessThanOrEqual(CLOUDFLARE_WORKER_NAME_LIMIT)
+		expect(integratedPackage.scripts['deploy:staging']).toContain(
+			`--name ${project}-web-$STAGING_ALIAS`
+		)
+
+		const legacyProject = 'a'.repeat(100)
+		const legacyWrangler = parseJsonc<{ name: string }>(
+			findEntry(
+				generateFrontendSveltekit(
+					makeCfg({ name: legacyProject, backend: 'inside-frontend', apiClient: 'skip' })
+				),
+				'apps/web/wrangler.jsonc'
+			)!.content
+		)
+		expect(legacyWrangler.name).toBe(`${legacyProject}-web`)
+
+		const exactProject = 'a'.repeat(CLOUDFLARE_WORKER_NAME_LIMIT - '-web'.length)
+		const oneOverProject = `${exactProject}a`
+		const exactWrangler = parseJsonc<{ name: string }>(
+			findEntry(
+				generateFrontendSveltekit(
+					makeCfg({ name: exactProject, backend: 'inside-frontend', apiClient: 'skip' })
+				),
+				'apps/web/wrangler.jsonc'
+			)!.content
+		)
+		const oneOverWrangler = parseJsonc<{ name: string }>(
+			findEntry(
+				generateFrontendSveltekit(
+					makeCfg({ name: oneOverProject, backend: 'inside-frontend', apiClient: 'skip' })
+				),
+				'apps/web/wrangler.jsonc'
+			)!.content
+		)
+		expect(exactWrangler.name).toBe(`${exactProject}-web`)
+		expect(oneOverWrangler.name).toHaveLength(CLOUDFLARE_WORKER_NAME_LIMIT)
+		expect(oneOverWrangler.name).not.toBe(`${oneOverProject}-web`)
+	})
+
 	test('wrangler.jsonc emitted iff deploy is cf-workers', () => {
 		const cf = generateFrontendSveltekit(makeCfg({ deploy: 'cf-workers' }))
 		const docker = generateFrontendSveltekit(makeCfg({ deploy: 'docker' }))

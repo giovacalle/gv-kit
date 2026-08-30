@@ -1,10 +1,10 @@
+import { cloudflareProductionWorkerName } from '../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
 import type { GvKitConfig } from '../schema/config.js'
 import {
 	AUTH_SERVICE,
 	dockerServiceOrigin,
-	honoServiceName,
 	nodeDevelopmentOrigin,
 	USERS_SERVICE
 } from './hono-topology.js'
@@ -291,7 +291,12 @@ function renderServiceArchitectAgent(cfg: GvKitConfig): string {
 		: isCfWorkers
 			? `4. If the service needs the current session, consume the shared auth boundary:
    - Use \`@repo/backend/middleware/auth\` for private session resolution.
-   - Add a service binding in \`wrangler.jsonc\`: \`{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }\`.
+   - Add a service binding in \`wrangler.jsonc\`: \`{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${cloudflareProductionWorkerName(
+			{
+				project,
+				service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix
+			}
+		)}" }\`.
    - Run \`pnpm --filter @repo/<svc> cf-typegen\` so the generated \`Env\` includes the binding.
    - Mount \`requireAuth\` from the shared middleware on protected routes. The middleware owns the deployment-aware private transport. Do not call the \`${AUTH_SERVICE.internalTarget}\` binding, \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\`, or \`/internal/session\` directly and do not create another session transport.`
 			: `4. If the service needs the current session, consume the shared auth boundary:
@@ -315,7 +320,7 @@ Keep private services triggerless. Do not add \`route\` or \`routes\`. Declare e
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
 	"preview_urls": false,
-	"services": ${hasAuth ? `[\n\t\t{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" }\n\t]` : '[]'},
+	"services": ${hasAuth ? `[\n\t\t{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${cloudflareProductionWorkerName({ project, service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix })}" }\n\t]` : '[]'},
 	"vars": { "NON_SECRET_SETTING": "<value>" },
 	"secrets": { "required": ["<SECRET_NAME>"] },
 	"dev": { "ip": "127.0.0.1", "port": 8789, "host": "localhost", "inspector_port": 9231 },

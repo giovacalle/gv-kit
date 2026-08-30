@@ -2,6 +2,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { generateIntegratedDeploy } from '../../src/generators/integrated-deploy.js'
+import { cloudflareProductionWorkerName } from '../../src/lib/cloudflare-worker-name.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
 const baseChoices: Choices = {
@@ -30,6 +31,28 @@ function compose(cfg: GvKitConfig): string {
 	return generateIntegratedDeploy(cfg).find((entry) => entry.path === 'docker-compose.yml')!
 		.content
 }
+
+describe('generateIntegratedDeploy — Cloudflare Worker names', () => {
+	test('keeps legacy preview cleanup targets after bounding production config names', () => {
+		const project = `a${'b'.repeat(254)}`
+		const cleanup = generateIntegratedDeploy(
+			makeCfg({
+				name: project,
+				marketing: 'astro',
+				deploy: 'cf-workers',
+				auth: [],
+				email: 'skip'
+			})
+		).find((entry) => entry.path === '.github/workflows/cleanup-staging.yml')!.content
+
+		expect(cleanup).toContain(
+			`${cloudflareProductionWorkerName({ project, service: 'web' })}) base_name=${project}-web ;;`
+		)
+		expect(cleanup).toContain(
+			`${cloudflareProductionWorkerName({ project, service: 'marketing' })}) base_name=${project}-marketing ;;`
+		)
+	})
+})
 
 describe('generateIntegratedDeploy — email provider choice', () => {
 	test('resend emits only Resend credentials', () => {

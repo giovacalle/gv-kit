@@ -3,6 +3,10 @@ import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { assertSharedWildcardDnsPreservation } from '../../scripts/verify-gateway-cloudflare.js'
 import { runGenerators } from '../../src/generators/index.js'
+import {
+	CLOUDFLARE_WORKER_NAME_LIMIT,
+	cloudflareProductionWorkerName
+} from '../../src/lib/cloudflare-worker-name.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
 import { GvKitConfig } from '../../src/schema/config.js'
 
@@ -120,6 +124,59 @@ function wrangler(entries: ReturnType<typeof planFixture>, path: string): Wrangl
 }
 
 describe('Cloudflare gateway production topology', () => {
+	test('bounds every production Worker and keeps bindings aligned for a 255-character project', async () => {
+		const base = GvKitConfig.parse(
+			parseJsonc(readFileSync(join(fixturesDir, 'astro-cf-workers-full.jsonc'), 'utf8'))
+		)
+		const project = `a${'b'.repeat(254)}`
+		const cfg = GvKitConfig.parse({
+			...base,
+			choices: { ...base.choices, name: project }
+		})
+		const entries = runGenerators(cfg)
+		const workers = {
+			gateway: wrangler(entries, 'apps/api/wrangler.jsonc'),
+			auth: wrangler(entries, 'services/auth/wrangler.jsonc'),
+			users: wrangler(entries, 'services/users/wrangler.jsonc'),
+			web: wrangler(entries, 'apps/web/wrangler.jsonc'),
+			marketing: wrangler(entries, 'apps/marketing/wrangler.jsonc')
+		}
+		const expected = {
+			gateway: cloudflareProductionWorkerName({ project, service: 'api' }),
+			auth: cloudflareProductionWorkerName({ project, service: 'auth' }),
+			users: cloudflareProductionWorkerName({ project, service: 'users' }),
+			web: cloudflareProductionWorkerName({ project, service: 'web' }),
+			marketing: cloudflareProductionWorkerName({ project, service: 'marketing' })
+		}
+
+		expect(
+			Object.fromEntries(Object.entries(workers).map(([key, config]) => [key, config.name]))
+		).toEqual(expected)
+		expect(new Set(Object.values(expected)).size).toBe(5)
+		for (const name of Object.values(expected)) expect(name.length).toBeLessThanOrEqual(CLOUDFLARE_WORKER_NAME_LIMIT)
+		expect(workers.marketing.workers_dev).toBeUndefined()
+		expect(workers.marketing.routes).toHaveLength(1)
+		expect(workers.gateway.services).toEqual([
+			{ binding: 'AUTH', service: expected.auth },
+			{ binding: 'USERS', service: expected.users }
+		])
+		expect(workers.users.services).toEqual([{ binding: 'AUTH', service: expected.auth }])
+		expect(workers.web.services).toEqual([{ binding: 'GATEWAY', service: expected.gateway }])
+
+		const previewSource = entry(entries, 'scripts/cloudflare-preview-name.mjs')
+		const moduleUrl = URL.createObjectURL(new Blob([previewSource], { type: 'text/javascript' }))
+		const previewNames = (await import(moduleUrl)) as {
+			cloudflarePreviewName(productionName: string, alias: string): string
+		}
+		URL.revokeObjectURL(moduleUrl)
+		for (const [identity, boundedName] of Object.entries(expected)) {
+			const legacySuffix = identity === 'gateway' ? 'api' : identity
+			expect(previewNames.cloudflarePreviewName(boundedName, 'pr-123')).toBe(
+				previewNames.cloudflarePreviewName(`${project}-${legacySuffix}`, 'pr-123')
+			)
+		}
+	})
+
 	test('cleanup verification preserves shared wildcard DNS by semantics and command absence', () => {
 		const narrations = ['shared wildcard DNS remains', 'SHARED WILDCARD DNS REMAINS']
 		narrations.forEach((narration) => {

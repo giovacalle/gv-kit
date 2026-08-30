@@ -1,3 +1,4 @@
+import { cloudflareProductionWorkerName } from '../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../lib/files.js'
 import { HONO_WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
@@ -10,7 +11,6 @@ import {
 	AUTH_SERVICE,
 	HONO_GATEWAY,
 	honoPackageIdentity,
-	honoServiceName,
 	USERS_SERVICE
 } from './hono-topology.js'
 import {
@@ -619,7 +619,10 @@ console.log(\`${HONO_GATEWAY.identity} listening on http://\${hostname}:\${port}
 function renderGatewayWranglerConfig(project: string, webHost: string): string {
 	return `{
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "${honoServiceName(project, HONO_GATEWAY)}",
+	"name": "${cloudflareProductionWorkerName({
+		project,
+		service: HONO_GATEWAY.transport.cfWorkers.serviceNameSuffix
+	})}",
 	"main": "src/index.ts",
 	"tsconfig": "tsconfig.json",
 	"compatibility_date": "${HONO_WORKERS_COMPAT_DATE}",
@@ -639,8 +642,14 @@ function renderGatewayWranglerConfig(project: string, webHost: string): string {
 	},
 	"secrets": { "required": [] },
 	"services": [
-		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${honoServiceName(project, AUTH_SERVICE)}" },
-		{ "binding": "${USERS_SERVICE.internalTarget}", "service": "${honoServiceName(project, USERS_SERVICE)}" }
+		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${cloudflareProductionWorkerName({
+			project,
+			service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix
+		})}" },
+		{ "binding": "${USERS_SERVICE.internalTarget}", "service": "${cloudflareProductionWorkerName({
+			project,
+			service: USERS_SERVICE.transport.cfWorkers.serviceNameSuffix
+		})}" }
 	],
 	"dev": {
 		"ip": "${HONO_GATEWAY.development.ip}",

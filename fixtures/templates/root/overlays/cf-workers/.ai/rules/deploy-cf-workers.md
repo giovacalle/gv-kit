@@ -9,7 +9,7 @@ The single source of Worker config is `wrangler.jsonc` (JSONC: JSON with `//` co
 ```jsonc
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "__PROJECT__-web",
+	"name": "__CLOUDFLARE_WEB_WORKER__",
 	"main": ".svelte-kit/cloudflare/_worker.js",
 	"compatibility_date": "__COMPAT_DATE__",
 	"compatibility_flags": ["nodejs_compat"],

@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { runGenerators } from '../../src/generators/index.js'
+import { cloudflareProductionWorkerName } from '../../src/lib/cloudflare-worker-name.js'
 import { GvKitConfig } from '../../src/schema/config.js'
 import { parseJsonc } from '../util/jsonc.js'
 
@@ -38,7 +39,7 @@ describe('topology routes (hono + cf-workers)', () => {
 			const parsedWeb = parseJsonc<Wrangler>(web!.content)
 			expect(parsedWeb.services).toContainEqual({
 				binding: 'GATEWAY',
-				service: `${cfg.choices.name}-api`
+				service: cloudflareProductionWorkerName({ project: cfg.choices.name, service: 'api' })
 			})
 		})
 
@@ -47,8 +48,14 @@ describe('topology routes (hono + cf-workers)', () => {
 			const gateway = entries.find((e) => e.path === 'apps/api/wrangler.jsonc')
 			expect(gateway).toBeDefined()
 			const services = parseJsonc<Wrangler>(gateway!.content).services
-			expect(services).toContainEqual({ binding: 'AUTH', service: `${cfg.choices.name}-auth` })
-			expect(services).toContainEqual({ binding: 'USERS', service: `${cfg.choices.name}-users` })
+			expect(services).toContainEqual({
+				binding: 'AUTH',
+				service: cloudflareProductionWorkerName({ project: cfg.choices.name, service: 'auth' })
+			})
+			expect(services).toContainEqual({
+				binding: 'USERS',
+				service: cloudflareProductionWorkerName({ project: cfg.choices.name, service: 'users' })
+			})
 		})
 
 		test(`${file} web route matches the selected project shape`, () => {

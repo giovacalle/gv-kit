@@ -1,5 +1,9 @@
 import { describe, expect, test } from 'bun:test'
 import {
+	CLOUDFLARE_WORKER_NAME_LIMIT,
+	cloudflareProductionWorkerName
+} from '../../src/lib/cloudflare-worker-name.js'
+import {
 	AUTH_SERVICE,
 	defineHonoTopology,
 	HONO_SERVICES,
@@ -10,6 +14,44 @@ import {
 function usersWith(overrides: Partial<HonoServiceTopology>): HonoServiceTopology {
 	return { ...USERS_SERVICE, ...overrides }
 }
+
+describe('Cloudflare production Worker names', () => {
+	test('preserves names through the provider limit and bounds the next character', () => {
+		const suffix = 'api'
+		const exactProject = 'a'.repeat(CLOUDFLARE_WORKER_NAME_LIMIT - suffix.length - 1)
+		const exactName = `${exactProject}-${suffix}`
+		const oneOverProject = `${exactProject}a`
+
+		expect(cloudflareProductionWorkerName({ project: exactProject, service: suffix })).toBe(
+			exactName
+		)
+		expect(
+			cloudflareProductionWorkerName({ project: oneOverProject, service: suffix })
+		).toHaveLength(CLOUDFLARE_WORKER_NAME_LIMIT)
+		expect(cloudflareProductionWorkerName({ project: oneOverProject, service: suffix })).toEndWith(
+			'-api'
+		)
+		expect(cloudflareProductionWorkerName({ project: oneOverProject, service: suffix })).not.toBe(
+			`${oneOverProject}-${suffix}`
+		)
+	})
+
+	test('is deterministic and disambiguates long projects and service identities', () => {
+		const leftProject = `a${'x'.repeat(999)}`
+		const rightProject = `b${'x'.repeat(999)}`
+		const leftApi = cloudflareProductionWorkerName({ project: leftProject, service: 'api' })
+		const names = new Set([
+			leftApi,
+			cloudflareProductionWorkerName({ project: rightProject, service: 'api' }),
+			cloudflareProductionWorkerName({ project: leftProject, service: 'auth' }),
+			cloudflareProductionWorkerName({ project: leftProject, service: 'users' })
+		])
+
+		expect(cloudflareProductionWorkerName({ project: leftProject, service: 'api' })).toBe(leftApi)
+		expect(names.size).toBe(4)
+		for (const name of names) expect(name.length).toBeLessThanOrEqual(CLOUDFLARE_WORKER_NAME_LIMIT)
+	})
+})
 
 describe('Hono topology contracts', () => {
 	test('describes the generated auth and users topology', () => {

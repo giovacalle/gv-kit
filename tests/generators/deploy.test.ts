@@ -429,13 +429,10 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const productionDeployments = productionWorkflow.jobs.deploy.steps.filter((step) =>
 			step.name?.startsWith('Deploy ')
 		)
-		const stagingDeployments = stagingWorkflow.jobs.deploy!.steps.filter((step) =>
-			step.name?.startsWith('Deploy ')
-		)
-		const productionMarketing = productionDeployments.find(
-			(step) => step.name === 'Deploy marketing Worker'
+		const stagingBuild = stagingWorkflow.jobs['build-preview']!.steps.find(
+			(step) => step.name === 'Build untrusted preview source and package passive Worker bundles'
 		)!
-		const stagingMarketing = stagingDeployments.find(
+		const productionMarketing = productionDeployments.find(
 			(step) => step.name === 'Deploy marketing Worker'
 		)!
 		const previewIngress = stagingWorkflow.jobs['preview-ingress']!.steps
@@ -451,9 +448,8 @@ describe('generateDeploy — cf-workers workflows', () => {
 			expect(staging.split('\n').filter((line) => line.includes(key))).toHaveLength(2)
 			expect(productionMarketing.run).toContain(`test -n "$${key}"`)
 			expect(productionMarketing.env?.[key]).toBe(`\${{ vars.${key} }}`)
-			expect(stagingMarketing.env?.[key]).toBe(`\${{ vars.${key} }}`)
+			expect(stagingBuild.env?.[key]).toBe(`\${{ vars.${key} }}`)
 			for (const step of productionDeployments.filter((step) => step !== productionMarketing)) expect(step.env?.[key]).toBeUndefined()
-			for (const step of stagingDeployments.filter((step) => step !== stagingMarketing)) expect(step.env?.[key]).toBeUndefined()
 			for (const step of previewIngress) expect(step.env?.[key]).toBeUndefined()
 		}
 	})
@@ -490,10 +486,10 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(previewValidation?.env).toEqual({
 			PUBLIC_TURNSTILE_SITE_KEY: '${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}'
 		})
-		const webDeployment = stagingWorkflow.jobs.deploy!.steps.find(
-			(step) => step.name === 'Deploy web Worker'
+		const previewBuild = stagingWorkflow.jobs['build-preview']!.steps.find(
+			(step) => step.name === 'Build untrusted preview source and package passive Worker bundles'
 		)
-		expect(webDeployment?.env?.PUBLIC_TURNSTILE_SITE_KEY).toBe(
+		expect(previewBuild?.env?.PUBLIC_TURNSTILE_SITE_KEY).toBe(
 			'${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}'
 		)
 	})
@@ -546,11 +542,11 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(preparation).toContain("api_origin=' + apiOrigin.origin")
 	})
 
-	test('deploy-staging.yml triggers on pull_request open/sync/reopen with paths-ignore', () => {
+	test('deploy-staging.yml uses trusted pull_request_target open/sync/reopen triggers', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers' }))
 		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		expect(yml).toMatch(
-			/on:\s*\n\s+pull_request:\s*\n\s+types:\s*\[opened, synchronize, reopened\]/
+			/on:\s*\n\s+pull_request_target:\s*\n\s+types:\s*\[opened, synchronize, reopened\]/
 		)
 		expect(yml).toMatch(/paths-ignore:[\s\S]*?'\*\*\.md'/)
 		expect(yml).toMatch(/paths-ignore:[\s\S]*?'\.github\/\*\*'/)
@@ -575,9 +571,9 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		const aliasScript = findEntry(entries, 'scripts/cloudflare-preview-name.mjs')!.content
 		expect(yml).toContain('github.event.pull_request.number || github.run_id')
-		expect(yml).toContain('node scripts/cloudflare-preview-name.mjs --from-id')
+		expect(yml).toContain('alias="pr-$preview_id"')
 		expect(yml).toContain('STAGING_ALIAS')
-		expect(yml).toContain('pnpm turbo run deploy:staging --affected')
+		expect(yml).toContain('Publish prebuilt preview Workers from trusted code')
 		expect(aliasScript).toContain('MAX_PREVIEW_ALIAS_LENGTH = 32')
 		expect(aliasScript).toContain('validateCloudflarePreviewName(previewName, alias)')
 		expect(aliasScript).toContain('/^pr-[1-9][0-9]*$/')
@@ -590,6 +586,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).toContain('preview-db:')
 		expect(yml).toContain('needs: preview-db')
 		expect(yml).toContain('neondatabase/create-branch-action@v6')
+		expect(yml).toContain('neon_branch_name=preview-${{ github.repository_id }}-neon-$alias')
 		expect(yml).toContain('branch_name: ${{ steps.meta.outputs.neon_branch_name }}')
 		expect(yml).toContain('expires_at: ${{ steps.expiration.outputs.expires_at }}')
 		expect(yml).toContain('NEON_API_KEY')
@@ -597,7 +594,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).toContain('database_url: ${{ steps.create_neon_branch.outputs.db_url_pooled }}')
 		expect(yml).toContain('DATABASE_URL: ${{ needs.preview-db.outputs.database_url }}')
 		expect(yml).toContain('STAGING_DATABASE_URL: ${{ needs.preview-db.outputs.database_url }}')
-		expect(yml).toContain('pnpm --filter @repo/db db:migrate:production')
+		expect(yml).toContain('npx drizzle-kit@0.31.8 migrate')
 		expect(yml).toContain('wrangler.staging.jsonc')
 		expect(yml.match(/pnpm install --frozen-lockfile/g)).toHaveLength(1)
 		expect(yml).not.toContain('wrangler d1 create')
@@ -609,12 +606,13 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).toContain('preview-db:')
 		expect(yml).toContain('needs: preview-db')
 		expect(yml).toContain('Create or reuse D1 preview database')
+		expect(yml).toContain('db_name="preview-${{ github.repository_id }}-d1-${{ steps.meta.outputs.alias }}"')
 		expect(yml).toContain('npx wrangler@4.125.0 d1 list --json')
 		expect(yml).toContain('npx wrangler@4.125.0 d1 create "$db_name"')
 		expect(yml).toContain('d1_database_name: ${{ steps.d1.outputs.database_name }}')
 		expect(yml).toContain('d1_database_id: ${{ steps.d1.outputs.database_id }}')
 		expect(yml).toContain(
-			'pnpm --filter @repo/db exec wrangler d1 migrations apply "${{ needs.preview-db.outputs.d1_database_name }}" --remote'
+			'npx wrangler@4.125.0 d1 migrations apply "${{ needs.preview-db.outputs.d1_database_name }}" --remote'
 		)
 		expect(yml).toContain(
 			'STAGING_D1_DATABASE_NAME: ${{ needs.preview-db.outputs.d1_database_name }}'
@@ -630,7 +628,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const staging = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
 		const script = findEntry(entries, 'scripts/cleanup-cloudflare-preview-workers.sh')!.content
-		expect(yml).toMatch(/on:\s*\n\s+pull_request:\s*\n\s+types:\s*\[closed\]/)
+		expect(yml).toMatch(/on:\s*\n\s+pull_request_target:\s*\n\s+types:\s*\[closed\]/)
 		expect(yml).toMatch(/workflow_dispatch:\s*\n\s+inputs:\s*\n\s+alias:/)
 		expect(yml).toContain('required: true')
 		expect(yml).toContain('ref: ${{ github.event.repository.default_branch }}')
@@ -655,18 +653,20 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).not.toContain(`${baseChoices.name}-auth-\${{ steps.alias.outputs.alias }}`)
 		expect(yml).not.toContain(`${baseChoices.name}-users-\${{ steps.alias.outputs.alias }}`)
 		expect(staging).toContain('Record exact preview deployment inventory')
-		expect(staging).toContain('path: cloudflare-preview-manifest.json')
+		expect(staging).toContain(
+			'path: ${{ runner.temp }}/trusted-preview-inventory/cloudflare-preview-manifest.json'
+		)
 		expect(staging.indexOf('Record exact preview deployment inventory')).toBeGreaterThan(
-			staging.indexOf('Deploy web Worker')
+			staging.indexOf('Publish prebuilt preview Workers from trusted code')
 		)
 	})
 
 	test('cleanup-staging.yml deletes Neon preview branch for postgres projects', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'postgres' }))
 		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
-		expect(yml).toContain('branch_name="demo-db-${{ steps.alias.outputs.alias }}"')
+		expect(yml).toContain('prefix="preview-$repository_id-"')
 		expect(yml).toContain('https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches')
-		expect(yml).toContain('Preview Neon branch $branch_name is missing or already deleted.')
+		expect(yml).toContain('Preview Neon branches for $alias are missing or already deleted.')
 		expect(yml).toContain('Could not list Neon branches.')
 		expect(yml).toContain('Neon returned a malformed preview branch inventory.')
 		expect(yml).toContain('--data-urlencode "cursor=$cursor"')
@@ -681,12 +681,12 @@ describe('generateDeploy — cf-workers workflows', () => {
 	test('cleanup-staging.yml deletes D1 preview database for sqlite projects', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', db: 'sqlite' }))
 		const yml = findEntry(entries, '.github/workflows/cleanup-staging.yml')!.content
-		expect(yml).toContain('Delete preview D1 database')
-		expect(yml).toContain('db_name="demo-db-${{ steps.alias.outputs.alias }}"')
+		expect(yml).toContain('Delete preview D1 databases')
+		expect(yml).toContain('prefix="preview-$repository_id-"')
 		expect(yml).toContain('npx wrangler@4.125.0 d1 list --json')
-		expect(yml).toContain('Preview D1 database $db_name is missing or already deleted.')
+		expect(yml).toContain('Preview D1 databases for $alias are missing or already deleted.')
 		expect(yml).toContain('Cloudflare returned a malformed preview D1 inventory.')
-		expect(yml).toContain('npx wrangler@4.125.0 d1 delete "$db_name" --skip-confirmation')
+		expect(yml).toContain('npx wrangler@4.125.0 d1 delete "$db_id" --skip-confirmation')
 		expect(yml).toContain("if: always() && steps.alias.outcome == 'success'")
 		expect(yml).not.toContain('continuing cleanup')
 		expect(yml).not.toContain('neondatabase/delete-branch-by-name-action')
@@ -719,23 +719,28 @@ describe('generateDeploy — cf-workers workflows', () => {
 		}
 	})
 
-	test('hono backend sequences private package tasks before gateway and web tasks', () => {
+	test('hono backend sequences private Workers before gateway and web', () => {
 		const entries = generateDeploy(makeCfg({ deploy: 'cf-workers', backend: 'hono' }))
-		for (const path of [
-			'.github/workflows/deploy-production.yml',
-			'.github/workflows/deploy-staging.yml'
-		]) {
-			const workflow = findEntry(entries, path)!.content
-			expect(workflow.indexOf('Deploy auth Worker')).toBeLessThan(
-				workflow.indexOf('Deploy users Worker')
-			)
-			expect(workflow.indexOf('Deploy users Worker')).toBeLessThan(
-				workflow.indexOf('Deploy gateway Worker')
-			)
-			expect(workflow.indexOf('Deploy gateway Worker')).toBeLessThan(
-				workflow.indexOf('Deploy web Worker')
-			)
-		}
+		const production = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
+		expect(production.indexOf('Deploy auth Worker')).toBeLessThan(
+			production.indexOf('Deploy users Worker')
+		)
+		expect(production.indexOf('Deploy users Worker')).toBeLessThan(
+			production.indexOf('Deploy gateway Worker')
+		)
+		expect(production.indexOf('Deploy gateway Worker')).toBeLessThan(
+			production.indexOf('Deploy web Worker')
+		)
+		const publisher = findEntry(entries, 'scripts/publish-cloudflare-preview.sh')!.content
+		expect(publisher.indexOf('publish "services/auth"')).toBeLessThan(
+			publisher.indexOf('publish "services/users"')
+		)
+		expect(publisher.indexOf('publish "services/users"')).toBeLessThan(
+			publisher.indexOf('publish "apps/api"')
+		)
+		expect(publisher.indexOf('publish "apps/api"')).toBeLessThan(
+			publisher.indexOf('publish "apps/web"')
+		)
 	})
 
 	test('inside-frontend mode emits no api deploy steps', () => {

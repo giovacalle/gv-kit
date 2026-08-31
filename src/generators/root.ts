@@ -488,8 +488,12 @@ function renderApiTopology(cfg: GvKitConfig): string {
 			? `
 \`scripts/cleanup-cloudflare-preview-workers.sh\` inventories account Workers so source additions,
 removals, and renames do not hide stale previews. It validates each name against the project namespace
-and preview alias before deletion. Deleting a preview Worker also removes its PR-scoped routes.
-Shared wildcard DNS records are prerequisites and remain in place.
+and preview alias before deletion. Database cleanup combines bounded provider inventory with exact
+90-day deployment records, including records from the earlier \`<project>-db-<alias>\` convention. It validates
+recorded names and provider IDs against the repository and preview alias before deletion. Preview
+builds run without provider credentials; trusted jobs apply migrations and upload passive bundles.
+Deleting a preview Worker also removes its PR-scoped routes. Shared wildcard DNS records are
+prerequisites and remain in place.
 `
 			: ''
 

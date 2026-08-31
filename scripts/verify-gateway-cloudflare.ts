@@ -334,7 +334,6 @@ function assertPreviewDatabaseIsolation({
 	config,
 	production,
 	preview,
-	alias,
 	previewDatabaseName,
 	previewDatabaseId,
 	previewDatabaseUrl,
@@ -343,7 +342,6 @@ function assertPreviewDatabaseIsolation({
 	config: Config
 	production: WranglerConfigs
 	preview: WranglerConfigs
-	alias: string
 	previewDatabaseName: string
 	previewDatabaseId: string
 	previewDatabaseUrl: string
@@ -377,7 +375,7 @@ function assertPreviewDatabaseIsolation({
 	}
 	return {
 		kind: 'neon',
-		previewBranchName: `${config.choices.name}-db-${alias}`,
+		previewBranchName: previewDatabaseName,
 		previewDatabaseUrlRedacted: true,
 		privateWorkers: [...privateWorkers]
 	}
@@ -573,6 +571,22 @@ async function main(): Promise<void> {
 	if ( cleanupWorkflow.includes('github.event.pull_request.head.sha') || cleanupWorkflow.includes('github.event.pull_request.base.sha') ) throw new Error('preview cleanup checks out PR-controlled code')
 	if (!stagingWorkflow.includes('gh workflow run cleanup-staging.yml -f alias=$alias')) throw new Error('manual previews do not report their deterministic cleanup invocation')
 	if ( stagingWorkflow.indexOf('gh workflow run cleanup-staging.yml') > stagingWorkflow.indexOf('Create or reuse') ) throw new Error('preview cleanup invocation is reported after resource provisioning starts')
+	const parsedStaging = Bun.YAML.parse(stagingWorkflow) as {
+		jobs: Record<string, { steps: Array<{ uses?: string; run?: string; with?: Record<string, string> }> }>
+	}
+	if (!stagingWorkflow.includes('pull_request_target:')) throw new Error('preview deployment does not use a trusted workflow definition')
+	if ( !stagingWorkflow.includes("if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)") ) throw new Error('manual preview deployment can run an untrusted workflow ref')
+	if ( stagingWorkflow.includes('preview-artifact/packages/db/') || !stagingWorkflow.includes('trusted-source/packages/db/') ) throw new Error('provider credentials can apply PR-controlled migration input')
+	const untrustedBuild = JSON.stringify(parsedStaging.jobs['build-preview'])
+	if (/secrets\.(?:CLOUDFLARE|NEON)|database_url/.test(untrustedBuild)) throw new Error('PR-controlled preview build receives provider credentials')
+	for (const [jobName, job] of Object.entries(parsedStaging.jobs)) {
+		const serialized = JSON.stringify(job)
+		if (!/secrets\.(?:CLOUDFLARE|NEON)|needs\.preview-db\.outputs\.database_url/.test(serialized)) continue
+		for (const step of job.steps) {
+			if ( step.uses === 'actions/checkout@v4' && step.with?.ref !== '${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}' ) throw new Error(`${jobName} checks out PR-controlled source with provider credentials`)
+			if (/pnpm (?:install|turbo|--filter)|scripts\/prepare-cloudflare-preview|db:migrate:production/.test(step.run ?? '')) throw new Error(`${jobName} runs a PR-controlled process with provider credentials`)
+		}
+	}
 	if (config.choices.auth.includes('emailOTP')) {
 		for (const marker of [
 			'#   - PUBLIC_TURNSTILE_SITE_KEY',
@@ -647,7 +661,8 @@ cat "$output"`
 	const previewZoneName = 'preview-verification.example'
 	const previewWebDomain = `app.${previewZoneName}`
 	const previewApiDomain = `api.${previewZoneName}`
-	const previewDatabaseName = `${configs.auth.name.replace(/-auth$/, '-db')}-${args.stagingAlias}`
+	const repositoryId = '123456'
+	const previewDatabaseName = `preview-${repositoryId}-${config.choices.db === 'sqlite' ? 'd1' : 'neon'}-${args.stagingAlias}`
 	const previewDatabaseId = '11111111-1111-4111-8111-111111111111'
 	const previewNeonBranchId = 'br-preview-verification'
 	const previewDatabaseUrl =
@@ -807,6 +822,145 @@ printf '%s\\n' "$4" >> "$CLEANUP_DELETION_LOG"
 	const expectedCleanupDeletions = [...new Set(Object.values(topologyDriftWorkers))].sort()
 	if (JSON.stringify(observedCleanupDeletions) !== JSON.stringify(expectedCleanupDeletions)) throw new Error('trusted cleanup did not delete the complete topology-drift inventory')
 
+	const parsedCleanup = Bun.YAML.parse(cleanupWorkflow) as {
+		jobs: { cleanup: { steps: Array<{ id?: string; run?: string }> } }
+	}
+	const databaseCleanupSource = parsedCleanup.jobs.cleanup.steps
+		.find(({ id }) => id === 'database_cleanup')
+		?.run?.replaceAll('${{ github.repository_id }}', repositoryId)
+		.replaceAll('${{ steps.alias.outputs.alias }}', args.stagingAlias)
+	if (!databaseCleanupSource) throw new Error('preview database cleanup step is missing')
+	const databaseCleanupScript = join(project, '.wrangler/verify-database-cleanup.sh')
+	const databaseCleanupDeletionLog = join(project, '.wrangler/verify-database-deletions.log')
+	await writeFile(databaseCleanupScript, databaseCleanupSource, { mode: 0o755 })
+	await writeFile(databaseCleanupDeletionLog, '')
+	const driftedDatabaseName = `preview-${repositoryId}-${config.choices.db === 'sqlite' ? 'database-v2' : 'branch-v2'}-${args.stagingAlias}`
+	const legacyDatabaseName = `${config.choices.name}-db-${args.stagingAlias}`
+	const legacyDatabaseId =
+		config.choices.db === 'sqlite'
+			? '55555555-5555-4555-8555-555555555555'
+			: 'br-preview-verification-legacy'
+	const expectedDatabaseDeletions =
+		config.choices.db === 'sqlite'
+			? [previewDatabaseId, '22222222-2222-4222-8222-222222222222', legacyDatabaseId]
+			: [previewNeonBranchId, 'br-preview-verification-v2', legacyDatabaseId]
+	const databaseManifestDirectory = join(project, '.wrangler/verify-preview-inventories')
+	await mkdir(databaseManifestDirectory, { recursive: true })
+	await writeFile(
+		join(databaseManifestDirectory, 'legacy.pull_request.json'),
+		JSON.stringify({
+			schemaVersion: 1,
+			project: config.choices.name,
+			alias: args.stagingAlias,
+			workers: [],
+			database: {
+				kind: config.choices.db === 'sqlite' ? 'd1' : 'neon',
+				name: legacyDatabaseName,
+				id: legacyDatabaseId
+			}
+		})
+	)
+	if (config.choices.db === 'sqlite') {
+		await writeFile(
+			join(project, '.verify-bin/npx'),
+			`#!/bin/sh
+set -eu
+if [ "$2" = 'd1' ] && [ "$3" = 'list' ]; then
+	printf '%s\\n' "$DATABASE_CLEANUP_INVENTORY"
+	exit 0
+fi
+if [ "$2" = 'd1' ] && [ "$3" = 'delete' ]; then
+	printf '%s\\n' "$4" >> "$DATABASE_CLEANUP_DELETION_LOG"
+	exit 0
+fi
+exit 92
+`,
+			{ mode: 0o755 }
+		)
+	} else {
+		await writeFile(
+			join(project, '.verify-bin/curl'),
+			`#!/bin/sh
+set -eu
+case " $* " in
+	*' -X DELETE '*)
+		for argument in "$@"; do url="$argument"; done
+		printf '%s\\n' "\${url##*/}" >> "$DATABASE_CLEANUP_DELETION_LOG"
+		exit 0
+		;;
+esac
+printf '%s\\n' "$DATABASE_CLEANUP_INVENTORY"
+`,
+			{ mode: 0o755 }
+		)
+	}
+	const databaseCleanupInventory =
+		config.choices.db === 'sqlite'
+			? JSON.stringify([
+					{ name: previewDatabaseName, uuid: previewDatabaseId },
+					{ name: driftedDatabaseName, uuid: expectedDatabaseDeletions[1] },
+					{ name: legacyDatabaseName, uuid: legacyDatabaseId },
+					{ name: `${config.choices.name}-db`, uuid: '33333333-3333-4333-8333-333333333333' },
+					{ name: `preview-999999-d1-${args.stagingAlias}`, uuid: '44444444-4444-4444-8444-444444444444' }
+				])
+			: JSON.stringify({
+					branches: [
+						{
+							name: previewDatabaseName,
+							id: previewNeonBranchId,
+							default: false,
+							protected: false
+						},
+						{
+							name: driftedDatabaseName,
+							id: expectedDatabaseDeletions[1],
+							default: false,
+							protected: false
+						},
+						{
+							name: legacyDatabaseName,
+							id: legacyDatabaseId,
+							default: false,
+							protected: false
+						},
+						{
+							name: `${config.choices.name}-db`,
+							id: 'br-production',
+							default: true,
+							protected: true
+						},
+						{
+							name: `preview-999999-neon-${args.stagingAlias}`,
+							id: 'br-unrelated',
+							default: false,
+							protected: false
+						}
+					],
+					pagination: { next: null }
+				})
+	const databaseCleanupProbe = await recordCommandEvidence({
+		name: 'trusted-database-cleanup-naming-drift-inventory',
+		executable: 'bash',
+		args: [databaseCleanupScript],
+		cwd: project,
+		logPath: join(project, 'trusted-database-cleanup.log'),
+		extraEnv: {
+			CLOUDFLARE_API_TOKEN: 'verification-token',
+			CLOUDFLARE_ACCOUNT_ID: 'verification-account',
+			NEON_API_KEY: 'verification-token',
+			NEON_PROJECT_ID: 'verification-project',
+			DATABASE_CLEANUP_INVENTORY: databaseCleanupInventory,
+			DATABASE_CLEANUP_DELETION_LOG: databaseCleanupDeletionLog,
+			PREVIEW_MANIFEST_DIR: databaseManifestDirectory
+		}
+	})
+	const observedDatabaseDeletions = (await readFile(databaseCleanupDeletionLog, 'utf8'))
+		.trim()
+		.split('\n')
+		.filter(Boolean)
+		.sort()
+	if (JSON.stringify(observedDatabaseDeletions) !== JSON.stringify(expectedDatabaseDeletions.sort())) throw new Error('trusted cleanup did not delete the complete database naming-drift inventory')
+
 	const previewSecretDirectory = join(project, '.wrangler/verify-preview-secrets')
 	const requiredPreviewSecrets = {
 		auth: previewConfigs.auth.secrets?.required ?? [],
@@ -846,7 +1000,6 @@ printf '%s\\n' "$4" >> "$CLEANUP_DELETION_LOG"
 		config,
 		production: configs,
 		preview: previewConfigs,
-		alias: args.stagingAlias,
 		previewDatabaseName,
 		previewDatabaseId,
 		previewDatabaseUrl,
@@ -972,11 +1125,13 @@ printf '%s\\n' "$4" >> "$CLEANUP_DELETION_LOG"
 				rejected: rejectedAliases
 			},
 			lifecycle: {
-				prCleanupTrigger: 'pull_request.closed',
+				prDeployTrigger: 'pull_request_target',
+				prCleanupTrigger: 'pull_request_target.closed',
 				manualCleanupTrigger: 'workflow_dispatch.inputs.alias',
 				manualCleanupInvocation: 'gh workflow run cleanup-staging.yml -f alias=<canonical alias>',
 				trustedCleanupRef: '${{ github.event.repository.default_branch }}',
 				prControlledCleanupCode: false,
+				prControlledProviderCredentialProcesses: false,
 				sharedConcurrencyAlias: true
 			},
 			deployScripts: previewDeployScripts,
@@ -1033,8 +1188,18 @@ printf '%s\\n' "$4" >> "$CLEANUP_DELETION_LOG"
 				sharedWildcardDnsPreserved: true,
 				database:
 					databaseEvidence.kind === 'd1'
-						? { kind: 'd1', databaseName: databaseEvidence.previewDatabaseName }
-						: { kind: 'neon', branchName: databaseEvidence.previewBranchName },
+						? {
+								kind: 'd1',
+								databaseName: databaseEvidence.previewDatabaseName,
+								inventoryProbeCommand: databaseCleanupProbe.command,
+								observedNamingDriftDeletions: observedDatabaseDeletions
+							}
+						: {
+								kind: 'neon',
+								branchName: databaseEvidence.previewBranchName,
+								inventoryProbeCommand: databaseCleanupProbe.command,
+								observedNamingDriftDeletions: observedDatabaseDeletions
+							},
 				productionExcluded: true,
 				sourceBranchDeletion: false
 			}

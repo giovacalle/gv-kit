@@ -27,9 +27,9 @@
 .commitlintrc.json  1a921be1aa693bb1
 .env.cloudflare.example  ee0ff9edcaeaa649
 .env.example  c0df4c6f0124f589
-.github/workflows/cleanup-staging.yml  431607441bb293f0
+.github/workflows/cleanup-staging.yml  bc0201ffcd3cadc9
 .github/workflows/deploy-production.yml  13e5c7f038033812
-.github/workflows/deploy-staging.yml  4499a72291c69abd
+.github/workflows/deploy-staging.yml  0739bc7b546ff405
 .gitignore  6ebdabe6e1116615
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -37,7 +37,7 @@
 AGENTS.md  9d1aeb5533854fb7
 CLAUDE.md  62eec19a47496823
 LICENSE  508a77d2e7b51d98
-README.md  a0c86d756e5c217f
+README.md  aaed9678fc19455f
 apps/api/README.md  020a266e72d07ce2
 apps/api/openapi.json  2389e66815480b94
 apps/api/package.json  58cc721f6193b148
@@ -289,6 +289,7 @@ scripts/cleanup-cloudflare-preview-workers.sh  821472f1af1a2739
 scripts/cloudflare-preview-name.mjs  62928dbb81c69c1b
 scripts/local.mjs  42825d534dc30567
 scripts/prepare-cloudflare-preview.mjs  b73ae641d89bba5c
+scripts/publish-cloudflare-preview.sh  04e59b07fda29c0c
 scripts/resolve-cloudflare-deploy-range.sh  5a1efeaeeb11ebb8
 scripts/verify-cloudflare-preview-ingress.mjs  d679b9884fed1dc2
 scripts/write-cloudflare-preview-secrets.mjs  c538262dd3ffb716

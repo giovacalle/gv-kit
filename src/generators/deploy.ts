@@ -43,7 +43,7 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 			path: '.github/workflows/deploy-staging.yml',
 			content: deployStagingWorkflow({ project, db, cfg })
 		},
-		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(project, db) },
+		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(db) },
 		{
 			path: 'scripts/cloudflare-preview-name.mjs',
 			content: cloudflarePreviewNameScript(cfg)
@@ -59,6 +59,10 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		{
 			path: 'scripts/cleanup-cloudflare-preview-workers.sh',
 			content: cleanupCloudflarePreviewWorkersScript()
+		},
+		{
+			path: 'scripts/publish-cloudflare-preview.sh',
+			content: publishCloudflarePreviewScript(cfg)
 		},
 		...(cfg.choices.backend === 'hono'
 			? [
@@ -272,6 +276,251 @@ if [ "$failures" -ne 0 ]; then
 	echo "$failures preview Worker deletion(s) failed." >&2
 	exit 1
 fi
+`
+}
+
+function publishCloudflarePreviewScript(cfg: GvKitConfig): string {
+	const targets = [
+		{
+			directory: AUTH_SERVICE.workspacePath,
+			productionName: cloudflareProductionWorkerName({
+				project: cfg.choices.name,
+				service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix
+			}),
+			bundle: 'index.js',
+			secrets: cfg.choices.auth.length > 0 ? 'auth.json' : undefined,
+			databasePolicy:
+				cfg.choices.db === 'sqlite' && cfg.choices.auth.length > 0 ? 'exact-d1' : 'none',
+			routePolicy: 'none',
+			servicePolicy: 'none',
+			assetsPolicy: 'none'
+		},
+		{
+			directory: USERS_SERVICE.workspacePath,
+			productionName: cloudflareProductionWorkerName({
+				project: cfg.choices.name,
+				service: USERS_SERVICE.transport.cfWorkers.serviceNameSuffix
+			}),
+			bundle: 'index.js',
+			secrets: cfg.choices.db === 'postgres' ? 'users.json' : undefined,
+			databasePolicy: cfg.choices.db === 'sqlite' ? 'exact-d1' : 'none',
+			routePolicy: 'none',
+			servicePolicy: 'auth',
+			assetsPolicy: 'none'
+		},
+		{
+			directory: HONO_GATEWAY.workspacePath,
+			productionName: cloudflareProductionWorkerName({
+				project: cfg.choices.name,
+				service: HONO_GATEWAY.transport.cfWorkers.serviceNameSuffix
+			}),
+			bundle: 'index.js',
+			secrets: undefined,
+			databasePolicy: 'none',
+			routePolicy: 'api',
+			servicePolicy: 'gateway',
+			assetsPolicy: 'none'
+		},
+		...(cfg.choices.marketing === 'astro'
+			? [
+					{
+						directory: 'apps/marketing',
+						productionName: cloudflareProductionWorkerName({
+							project: cfg.choices.name,
+							service: 'marketing'
+						}),
+						bundle: 'no-op-worker.js',
+						secrets: undefined,
+						databasePolicy: 'none',
+						routePolicy: 'marketing',
+						servicePolicy: 'none',
+						assetsPolicy: 'marketing'
+					}
+				]
+			: []),
+		{
+			directory: 'apps/web',
+			productionName: cloudflareProductionWorkerName({
+				project: cfg.choices.name,
+				service: 'web'
+			}),
+			bundle: '_worker.js',
+			secrets: undefined,
+			databasePolicy: 'none',
+			routePolicy: 'web',
+			servicePolicy: 'gateway-binding',
+			assetsPolicy: 'web'
+		}
+	]
+	const preparations = targets
+		.map(
+			({ directory, bundle, databasePolicy, routePolicy, servicePolicy, assetsPolicy }) =>
+				`prepare ${JSON.stringify(directory)} ${JSON.stringify(bundle)} ${databasePolicy} ${routePolicy} ${servicePolicy} ${assetsPolicy}`
+		)
+		.join('\n')
+	const deployments = targets
+		.map(({ directory, bundle, secrets }) => {
+			const secretArgument = secrets ? ` --secrets-file "$PREVIEW_SECRETS_DIR/${secrets}"` : ''
+			return `publish ${JSON.stringify(directory)} ${JSON.stringify(bundle)}${secretArgument}`
+		})
+		.join('\n')
+	const d1Requirements =
+		cfg.choices.db === 'sqlite'
+			? `: "\${STAGING_D1_DATABASE_NAME:?preview D1 database name is required}"
+: "\${STAGING_D1_DATABASE_ID:?preview D1 database id is required}"
+`
+			: ''
+	return `#!/bin/sh
+set -eu
+
+: "\${PREVIEW_ARTIFACT:?preview artifact directory is required}"
+: "\${PREVIEW_SECRETS_DIR:?preview secrets directory is required}"
+: "\${TRUSTED_SOURCE:?trusted source directory is required}"
+: "\${STAGING_ALIAS:?preview alias is required}"
+${d1Requirements}
+: "\${CLOUDFLARE_PREVIEW_ZONE_NAME:?preview zone name is required}"
+: "\${CLOUDFLARE_PREVIEW_WEB_DOMAIN:?preview web domain is required}"
+: "\${CLOUDFLARE_PREVIEW_API_DOMAIN:?preview API domain is required}"
+
+trusted_worker_name() {
+	directory=$1
+	production_name=$2
+	config="$PREVIEW_ARTIFACT/$directory/wrangler.staging.jsonc"
+	if [ ! -f "$config" ]; then
+		echo "Preview Worker config is missing for $directory." >&2
+		exit 1
+	fi
+	name=$(jq -er '.name | select(type == "string")' "$config")
+	expected_name=$(node "$TRUSTED_SOURCE/scripts/cloudflare-preview-name.mjs" "$production_name" "$STAGING_ALIAS")
+	if [ "$name" != "$expected_name" ]; then
+		echo "Preview Worker name is unsafe for $directory." >&2
+		exit 1
+	fi
+	node "$TRUSTED_SOURCE/scripts/cloudflare-preview-name.mjs" --validate-name "$name" "$STAGING_ALIAS" >/dev/null
+	printf '%s' "$name"
+}
+
+auth_worker_name=$(trusted_worker_name ${JSON.stringify(AUTH_SERVICE.workspacePath)} ${JSON.stringify(cloudflareProductionWorkerName({ project: cfg.choices.name, service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix }))})
+users_worker_name=$(trusted_worker_name ${JSON.stringify(USERS_SERVICE.workspacePath)} ${JSON.stringify(cloudflareProductionWorkerName({ project: cfg.choices.name, service: USERS_SERVICE.transport.cfWorkers.serviceNameSuffix }))})
+gateway_worker_name=$(trusted_worker_name ${JSON.stringify(HONO_GATEWAY.workspacePath)} ${JSON.stringify(cloudflareProductionWorkerName({ project: cfg.choices.name, service: HONO_GATEWAY.transport.cfWorkers.serviceNameSuffix }))})
+web_worker_name=$(trusted_worker_name "apps/web" ${JSON.stringify(cloudflareProductionWorkerName({ project: cfg.choices.name, service: 'web' }))})
+${cfg.choices.marketing === 'astro' ? `marketing_worker_name=$(trusted_worker_name "apps/marketing" ${JSON.stringify(cloudflareProductionWorkerName({ project: cfg.choices.name, service: 'marketing' }))})\n` : ''}worker_name_count=$(printf '%s\n' "$auth_worker_name" "$users_worker_name" "$gateway_worker_name" "$web_worker_name"${cfg.choices.marketing === 'astro' ? ' "$marketing_worker_name"' : ''} | sort -u | wc -l | tr -d ' ')
+if [ "$worker_name_count" -ne ${cfg.choices.marketing === 'astro' ? '5' : '4'} ]; then
+	echo "Preview Worker names must be distinct." >&2
+	exit 1
+fi
+
+prepare() {
+	directory=$1
+	bundle=$2
+	database_policy=$3
+	route_policy=$4
+	service_policy=$5
+	assets_policy=$6
+	target_dir="$PREVIEW_ARTIFACT/$directory"
+	source_config="$target_dir/wrangler.staging.jsonc"
+	bundle_path=".preview-bundle/$bundle"
+	publish_config="$target_dir/wrangler.publish.json"
+	if [ ! -f "$source_config" ] || [ ! -f "$target_dir/$bundle_path" ]; then
+		echo "Preview artifact is incomplete for $directory." >&2
+		exit 1
+	fi
+	worker_name=$(jq -er '.name | select(type == "string")' "$source_config")
+	node "$TRUSTED_SOURCE/scripts/cloudflare-preview-name.mjs" --validate-name "$worker_name" "$STAGING_ALIAS" >/dev/null
+	if ! jq -e '.workers_dev == false and .preview_urls == false' "$source_config" >/dev/null; then
+		echo "Preview public development URLs are unsafe for $directory." >&2
+		exit 1
+	fi
+	case "$route_policy" in
+		none) expected_routes='[]' ;;
+		api) expected_routes=$(jq -cn --arg alias "$STAGING_ALIAS" --arg api "$CLOUDFLARE_PREVIEW_API_DOMAIN" --arg web "$CLOUDFLARE_PREVIEW_WEB_DOMAIN" --arg zone "$CLOUDFLARE_PREVIEW_ZONE_NAME" '[{pattern: ($alias + "." + $api + "/*"), zone_name: $zone}, {pattern: ($alias + "." + $web + "/api"), zone_name: $zone}, {pattern: ($alias + "." + $web + "/api/*"), zone_name: $zone}]') ;;
+		web) expected_routes=$(jq -cn --arg alias "$STAGING_ALIAS" --arg web "$CLOUDFLARE_PREVIEW_WEB_DOMAIN" --arg zone "$CLOUDFLARE_PREVIEW_ZONE_NAME" '[{pattern: ($alias + "." + $web + "/*"), zone_name: $zone}]') ;;
+		marketing) expected_routes=$(jq -cn --arg alias "$STAGING_ALIAS" --arg web "$CLOUDFLARE_PREVIEW_WEB_DOMAIN" --arg zone "$CLOUDFLARE_PREVIEW_ZONE_NAME" '[{pattern: ($alias + "-marketing." + $web + "/*"), zone_name: $zone}]') ;;
+		*) echo "Trusted preview route policy is invalid for $directory." >&2; exit 1 ;;
+	esac
+	if ! jq -e --argjson expected "$expected_routes" '(.routes // []) == $expected and (has("route") | not)' "$source_config" >/dev/null; then
+		echo "Preview routes are unsafe for $directory." >&2
+		exit 1
+	fi
+	case "$service_policy" in
+		none) expected_services='[]' ;;
+		auth) expected_services=$(jq -cn --arg auth "$auth_worker_name" '[{binding: "AUTH", service: $auth}]') ;;
+		gateway) expected_services=$(jq -cn --arg auth "$auth_worker_name" --arg users "$users_worker_name" '[{binding: "AUTH", service: $auth}, {binding: "USERS", service: $users}]') ;;
+		gateway-binding) expected_services=$(jq -cn --arg gateway "$gateway_worker_name" '[{binding: "GATEWAY", service: $gateway}]') ;;
+		*) echo "Trusted preview service policy is invalid for $directory." >&2; exit 1 ;;
+	esac
+	if ! jq -e --argjson expected "$expected_services" '(.services // []) == $expected' "$source_config" >/dev/null; then
+		echo "Preview Service Bindings are unsafe for $directory." >&2
+		exit 1
+	fi
+	case "$assets_policy" in
+		none) expected_assets='null' ;;
+		web) expected_assets='{"binding":"ASSETS","directory":".svelte-kit/cloudflare"}' ;;
+		marketing) expected_assets='{"directory":"./dist/","not_found_handling":"404-page","html_handling":"auto-trailing-slash"}' ;;
+		*) echo "Trusted preview assets policy is invalid for $directory." >&2; exit 1 ;;
+	esac
+	if ! jq -e --argjson expected "$expected_assets" '(.assets // null) == $expected' "$source_config" >/dev/null; then
+		echo "Preview asset bindings are unsafe for $directory." >&2
+		exit 1
+	fi
+	case "$database_policy" in
+		exact-d1)
+			if ! jq -e --arg name "$STAGING_D1_DATABASE_NAME" --arg id "$STAGING_D1_DATABASE_ID" '
+				.d1_databases == [{ binding: "DB", database_name: $name, database_id: $id }]
+			' "$source_config" >/dev/null; then
+				echo "Preview D1 bindings are unsafe for $directory." >&2
+				exit 1
+			fi
+			;;
+		none)
+			if ! jq -e '((has("d1_databases") | not) or .d1_databases == [])' "$source_config" >/dev/null; then
+				echo "Preview D1 bindings are forbidden for $directory." >&2
+				exit 1
+			fi
+			;;
+		*)
+			echo "Trusted preview database policy is invalid for $directory." >&2
+			exit 1
+			;;
+	esac
+	jq --arg main "$bundle_path" '
+		{
+			name,
+			main: $main,
+			compatibility_date,
+			compatibility_flags,
+			workers_dev,
+			preview_urls,
+			vars,
+			services,
+			d1_databases,
+			routes,
+			assets,
+			observability
+		}
+		| with_entries(select(.value != null))
+	' "$source_config" > "$publish_config"
+}
+
+publish() {
+	directory=$1
+	bundle=$2
+	shift 2
+	target_dir="$PREVIEW_ARTIFACT/$directory"
+	bundle_path=".preview-bundle/$bundle"
+	if [ ! -f "$target_dir/wrangler.publish.json" ]; then
+		echo "Trusted preview publish config is missing for $directory." >&2
+		exit 1
+	fi
+	(
+		cd "$target_dir"
+		npx wrangler@${WRANGLER_VERSION} deploy "$bundle_path" --no-bundle --config wrangler.publish.json "$@"
+	)
+}
+
+${preparations}
+
+${deployments}
 `
 }
 
@@ -765,35 +1014,6 @@ function previewAuthSecretKeys(cfg: GvKitConfig): string[] {
 	return keys
 }
 
-function previewPrivateSecretsStep(cfg: GvKitConfig, db: GvKitConfig['choices']['db']): string {
-	const authSecrets = previewAuthSecretKeys(cfg)
-	const env = authSecrets
-		.map((key) => `          ${key}: \${{ secrets.${key} }}`)
-		.concat(
-			db === 'postgres'
-				? [`          STAGING_DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`]
-				: []
-		)
-		.join('\n')
-	const authOutput =
-		cfg.choices.auth.length > 0
-			? `\n          echo "auth_file=$secret_dir/auth.json" >> "$GITHUB_OUTPUT"`
-			: ''
-	const usersOutput =
-		db === 'postgres'
-			? `\n          echo "users_file=$secret_dir/users.json" >> "$GITHUB_OUTPUT"`
-			: ''
-	return `      - id: preview_secrets
-        name: Write private Worker preview secret files
-        run: |
-          set -euo pipefail
-          secret_dir="$RUNNER_TEMP/gateway-preview-secrets"
-          umask 077
-          node scripts/write-cloudflare-preview-secrets.mjs "$secret_dir"${authOutput}${usersOutput}
-        env:
-${env}`
-}
-
 function deployStagingWorkflow({
 	project,
 	db,
@@ -804,18 +1024,15 @@ function deployStagingWorkflow({
 	cfg: GvKitConfig
 }): string {
 	const hasMarketing = cfg.choices.marketing === 'astro'
-	const isHono = cfg.choices.backend === 'hono'
 	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
 	const previewPublicKeys = cfg.choices.auth.includes('emailOTP')
 		? ['PUBLIC_TURNSTILE_SITE_KEY']
 		: []
-	const previewIngressGate = isHono
-		? honoPreviewIngressGateJob({ publicKeys: previewPublicKeys })
-		: ''
-	const basePreviewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
-	const previewDbJob = isHono
-		? basePreviewDbJob.replace('  preview-db:\n', '  preview-db:\n    needs: preview-ingress\n')
-		: basePreviewDbJob
+	const previewIngressGate = honoPreviewIngressGateJob({ publicKeys: previewPublicKeys })
+	const previewDbJob = (db === 'sqlite' ? d1PreviewDbJob() : neonPreviewDbJob()).replace(
+		'  preview-db:\n',
+		'  preview-db:\n    needs: preview-ingress\n'
+	)
 	const stagingConfigStep = writeStagingWranglerConfigStep({ db })
 	const requiredVariables = [
 		'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
@@ -825,54 +1042,85 @@ function deployStagingWorkflow({
 		...previewPublicKeys
 	]
 	const publicOriginRequirement = workflowVariableRequirements(requiredVariables)
-	const authSecretRequirements = isHono
-		? previewAuthSecretKeys(cfg)
-				.map((key) => `#   - ${key}`)
-				.join('\n') + '\n'
-		: ''
-	const monitoringEnv = workflowVariableEnv(monitoringKeys)
-	const previewPublicEnv = workflowVariableEnv(previewPublicKeys)
-	const publicOriginEnv = `${
+	const authSecretRequirements =
+		previewAuthSecretKeys(cfg)
+			.map((key) => `#   - ${key}`)
+			.join('\n') + '\n'
+	const buildTargets = [
+		{
+			packageName: honoPackageIdentity(project, AUTH_SERVICE),
+			directory: AUTH_SERVICE.workspacePath
+		},
+		{
+			packageName: honoPackageIdentity(project, USERS_SERVICE),
+			directory: USERS_SERVICE.workspacePath
+		},
+		{
+			packageName: honoPackageIdentity(project, HONO_GATEWAY),
+			directory: HONO_GATEWAY.workspacePath
+		},
+		...(hasMarketing ? [{ packageName: `${project}-marketing`, directory: 'apps/marketing' }] : []),
+		{ packageName: `${project}-web`, directory: 'apps/web' }
+	]
+	const buildFilters = buildTargets.map(({ packageName }) => ` --filter=${packageName}`).join('')
+	const bundleCommands = buildTargets
+		.map(
+			({ packageName, directory }) =>
+				`          pnpm --filter ${packageName} exec wrangler deploy --config wrangler.staging.jsonc --dry-run --outdir=.preview-bundle\n          test -d ${directory}/.preview-bundle`
+		)
+		.join('\n')
+	const artifactPaths = [
+		'cloudflare-preview-manifest.json',
+		...buildTargets.flatMap(({ directory }) => [
+			`${directory}/wrangler.staging.jsonc`,
+			`${directory}/.preview-bundle`
+		]),
+		'apps/web/.svelte-kit/cloudflare',
+		...(hasMarketing ? ['apps/marketing/dist'] : [])
+	]
+		.map((path) => `            ${path}`)
+		.join('\n')
+	const buildPublicEnv = `${
 		hasMarketing
 			? `
           PUBLIC_MARKETING_URL: \${{ steps.preview_config.outputs.marketing_origin }}
           PUBLIC_APP_URL: \${{ steps.preview_config.outputs.web_origin }}`
 			: ''
-	}${previewPublicEnv}`
-	const deployEnv = `          DEPLOY_ALL: \${{ github.event.action != 'synchronize' }}
-          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
-          STAGING_WRANGLER_CONFIG: wrangler.staging.jsonc
-          TURBO_SCM_BASE: \${{ github.event.pull_request.base.sha }}
-          TURBO_SCM_HEAD: \${{ github.event.pull_request.head.sha }}${publicOriginEnv}`
-	const privateDeployments = isHono
-		? honoDeploymentSteps({ cfg, stage: 'staging', env: deployEnv, phase: 'private' })
-		: ''
-	const gatewayDeployment = isHono
-		? honoDeploymentSteps({ cfg, stage: 'staging', env: deployEnv, phase: 'gateway' })
-		: ''
-	const publicDeployments = isHono
-		? honoDeploymentSteps({
-				cfg,
-				stage: 'staging',
-				env: deployEnv,
-				phase: 'public',
-				marketingEnv: monitoringEnv
-			})
-		: `      - name: Deploy affected Workers (staging)
-        run: pnpm turbo run deploy:staging --affected
-        env:
-${deployEnv}`
+	}${workflowVariableEnv([...monitoringKeys, ...previewPublicKeys])}`
+	const privateSecretEnv = previewAuthSecretKeys(cfg)
+		.map((key) => `          ${key}: \${{ secrets.${key} }}`)
+		.concat(
+			db === 'postgres'
+				? [`          STAGING_DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`]
+				: []
+		)
+		.join('\n')
 	const hasPrivateSecrets = cfg.choices.auth.length > 0 || db === 'postgres'
-	const privateSecretsStep = isHono && hasPrivateSecrets ? `\n\n${previewPrivateSecretsStep(cfg, db)}` : ''
-	const removePrivateSecretsStep = isHono && hasPrivateSecrets
-		? `      - name: Remove private Worker preview secret files
-        if: always()
-        run: rm -rf "$RUNNER_TEMP/gateway-preview-secrets"`
-		: ''
+	const privateSecretsStep = hasPrivateSecrets
+		? `      - id: preview_secrets
+        name: Write private Worker preview secret files from trusted code
+        run: |
+          set -euo pipefail
+          secret_dir="$RUNNER_TEMP/gateway-preview-secrets"
+          umask 077
+          node trusted-source/scripts/write-cloudflare-preview-secrets.mjs "$secret_dir"
+          echo "directory=$secret_dir" >> "$GITHUB_OUTPUT"
+        env:
+${privateSecretEnv}
+`
+		: `      - id: preview_secrets
+        run: echo "directory=$RUNNER_TEMP/gateway-preview-secrets" >> "$GITHUB_OUTPUT"
+`
+	const migrationStep = trustedPreviewMigrationStep(db)
+	const publishDatabaseEnv =
+		db === 'sqlite'
+			? `
+          STAGING_D1_DATABASE_NAME: \${{ needs.preview-db.outputs.d1_database_name }}
+          STAGING_D1_DATABASE_ID: \${{ needs.preview-db.outputs.d1_database_id }}`
+			: ''
 	return `# Per-PR staging deploy for ${project}.
-# Staging uses PR-scoped preview database resources and temporary Wrangler configs.
+# The pull_request_target workflow definition is trusted. PR code is built without provider
+# credentials, then a separate job uploads only prebuilt bundles with pinned provider tools.
 # Tear-down lives in cleanup-staging.yml.
 #
 # Required GitHub Secrets:
@@ -883,7 +1131,7 @@ ${authSecretRequirements}${db === 'postgres' ? '#   - NEON_API_KEY\n# Required G
 name: deploy-staging
 
 on:
-  pull_request:
+  pull_request_target:
     types: [opened, synchronize, reopened]
     paths-ignore:
       - '**.md'
@@ -898,23 +1146,27 @@ jobs:
 ${previewIngressGate}
 ${previewDbJob}
 
-  deploy:
+  build-preview:
     needs: preview-db
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      pull-requests: write
-      actions: read
+    outputs:
+      api_origin: \${{ steps.preview_config.outputs.api_origin }}
+      web_origin: \${{ steps.preview_config.outputs.web_origin }}
+      marketing_origin: \${{ steps.preview_config.outputs.marketing_origin }}
+      short_sha: \${{ steps.meta.outputs.short_sha }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout untrusted preview source without provider credentials
+        uses: actions/checkout@v4
         with:
           fetch-depth: 0
           filter: blob:none
           ref: \${{ github.event.pull_request.head.sha || github.sha }}
       - id: meta
-        run: |
-          echo "alias=\${{ needs.preview-db.outputs.alias }}" >> $GITHUB_OUTPUT
-          echo "short_sha=\${GITHUB_SHA:0:7}" >> $GITHUB_OUTPUT
+        run: echo "short_sha=$(printf '%s' "$PREVIEW_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
+        env:
+          PREVIEW_SHA: \${{ github.event.pull_request.head.sha || github.sha }}
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.1
@@ -926,31 +1178,96 @@ ${previewDbJob}
 
 ${stagingConfigStep}
 
-      - name: Run preview database migrations
-        run: ${previewMigrationCommand(db)}
+      - name: Build untrusted preview source and package passive Worker bundles
+        run: |
+          pnpm turbo run build${buildFilters}
+${bundleCommands}
         env:
-${previewMigrationEnv(db)}
+          STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}${buildPublicEnv}
+
+      - name: Upload passive preview bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudflare-preview-build-\${{ needs.preview-db.outputs.alias }}-\${{ github.run_id }}
+          path: |
+${artifactPaths}
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
+
+  deploy:
+    needs: [preview-db, build-preview]
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout trusted deployment code
+        uses: actions/checkout@v4
+        with:
+          path: trusted-source
+          ref: \${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Download passive preview bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: cloudflare-preview-build-\${{ needs.preview-db.outputs.alias }}-\${{ github.run_id }}
+          path: preview-artifact
+
+${migrationStep}
 
 ${privateSecretsStep}
+      - name: Publish prebuilt preview Workers from trusted code
+        run: sh trusted-source/scripts/publish-cloudflare-preview.sh
+        env:
+          PREVIEW_ARTIFACT: \${{ github.workspace }}/preview-artifact
+          PREVIEW_SECRETS_DIR: \${{ steps.preview_secrets.outputs.directory }}
+          TRUSTED_SOURCE: \${{ github.workspace }}/trusted-source
+          STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}
+          CLOUDFLARE_PREVIEW_ZONE_NAME: \${{ vars.CLOUDFLARE_PREVIEW_ZONE_NAME }}
+          CLOUDFLARE_PREVIEW_WEB_DOMAIN: \${{ vars.CLOUDFLARE_PREVIEW_WEB_DOMAIN }}
+          CLOUDFLARE_PREVIEW_API_DOMAIN: \${{ vars.CLOUDFLARE_PREVIEW_API_DOMAIN }}${publishDatabaseEnv}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
-${privateDeployments}
-
-${removePrivateSecretsStep}
-
-${gatewayDeployment}
-
-${publicDeployments}
-
+      - name: Validate and seal exact preview deployment inventory
+        run: |
+          set -euo pipefail
+          manifest=preview-artifact/cloudflare-preview-manifest.json
+          alias=\${{ needs.preview-db.outputs.alias }}
+          repository_id=\${{ github.repository_id }}
+          database_kind=${db === 'sqlite' ? 'd1' : 'neon'}
+          database_name=\${{ needs.preview-db.outputs.${db === 'sqlite' ? 'd1_database_name' : 'neon_branch_name'} }}
+          database_id=\${{ needs.preview-db.outputs.${db === 'sqlite' ? 'd1_database_id' : 'neon_branch_id'} }}
+          jq -e --arg alias "$alias" --arg kind "$database_kind" --arg name "$database_name" --arg id "$database_id" '
+            .schemaVersion == 1 and .alias == $alias and
+            (.workers | type == "array") and
+            .database == { kind: $kind, name: $name, id: $id }
+          ' "$manifest" >/dev/null
+          jq -r '.workers[].name' "$manifest" | while IFS= read -r worker_name; do
+            node trusted-source/scripts/cloudflare-preview-name.mjs --validate-name "$worker_name" "$alias" >/dev/null
+          done
+          mkdir -p "$RUNNER_TEMP/trusted-preview-inventory"
+          jq --arg repository_id "$repository_id" '
+            .schemaVersion = 2 | .repositoryId = $repository_id
+          ' "$manifest" > "$RUNNER_TEMP/trusted-preview-inventory/cloudflare-preview-manifest.json"
       - name: Record exact preview deployment inventory
         uses: actions/upload-artifact@v4
         with:
-          name: cloudflare-preview-inventory-\${{ needs.preview-db.outputs.alias }}-\${{ github.run_id }}
-          path: cloudflare-preview-manifest.json
+          name: cloudflare-preview-inventory-\${{ needs.preview-db.outputs.alias }}
+          path: \${{ runner.temp }}/trusted-preview-inventory/cloudflare-preview-manifest.json
           if-no-files-found: error
           retention-days: 90
 
+      - name: Remove private Worker preview secret files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/gateway-preview-secrets"
+
       - uses: marocchino/sticky-pull-request-comment@v2
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request_target'
         with:
           header: staging-deploy
           message: |
@@ -958,10 +1275,10 @@ ${publicDeployments}
 
             | Public endpoint | URL |
             |---|---|
-            | web | \`\${{ steps.preview_config.outputs.web_origin }}\` |
-            | canonical API | \`\${{ steps.preview_config.outputs.api_origin }}\` |
+            | web | \`\${{ needs.build-preview.outputs.web_origin }}\` |
+            | canonical API | \`\${{ needs.build-preview.outputs.api_origin }}\` |
 
-            **Commit**: \`\${{ steps.meta.outputs.short_sha }}\`
+            **Commit**: \`\${{ needs.build-preview.outputs.short_sha }}\`
             **Updated**: \${{ github.event.pull_request.updated_at }}
 `
 }
@@ -973,7 +1290,6 @@ function writeStagingWranglerConfigStep({ db }: { db: GvKitConfig['choices']['db
           STAGING_D1_DATABASE_NAME: \${{ needs.preview-db.outputs.d1_database_name }}
           STAGING_D1_DATABASE_ID: \${{ needs.preview-db.outputs.d1_database_id }}`
 			: `          PREVIEW_DB_KIND: neon
-          STAGING_DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}
           STAGING_NEON_BRANCH_NAME: \${{ needs.preview-db.outputs.neon_branch_name }}
           STAGING_NEON_BRANCH_ID: \${{ needs.preview-db.outputs.neon_branch_id }}`
 	return `      - id: preview_config
@@ -987,17 +1303,44 @@ function writeStagingWranglerConfigStep({ db }: { db: GvKitConfig['choices']['db
 ${envLines}`
 }
 
-function previewMigrationCommand(db: GvKitConfig['choices']['db']): string {
-	return db === 'sqlite'
-		? 'pnpm --filter @repo/db exec wrangler d1 migrations apply "${{ needs.preview-db.outputs.d1_database_name }}" --remote'
-		: 'pnpm --filter @repo/db db:migrate:production'
-}
-
-function previewMigrationEnv(db: GvKitConfig['choices']['db']): string {
-	return db === 'sqlite'
-		? `          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+function trustedPreviewMigrationStep(db: GvKitConfig['choices']['db']): string {
+	if (db === 'sqlite') {
+		return `      - name: Apply preview D1 migrations with a trusted pinned tool
+        run: |
+          set -euo pipefail
+          cat > trusted-source/packages/db/wrangler.preview-migrations.json <<'JSON'
+          {
+            "name": "preview-migrations",
+            "compatibility_date": "2026-08-24",
+            "d1_databases": [{
+              "binding": "DB",
+              "database_name": "\${{ needs.preview-db.outputs.d1_database_name }}",
+              "database_id": "\${{ needs.preview-db.outputs.d1_database_id }}",
+              "migrations_dir": "migrations"
+            }]
+          }
+          JSON
+          npx wrangler@${WRANGLER_VERSION} d1 migrations apply "\${{ needs.preview-db.outputs.d1_database_name }}" --remote --config trusted-source/packages/db/wrangler.preview-migrations.json
+        env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
-		: `          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`
+	}
+	return `      - name: Apply preview Neon migrations with a trusted pinned tool
+        run: |
+          set -euo pipefail
+          cat > "$RUNNER_TEMP/drizzle.preview.config.mjs" <<'JS'
+          export default {
+            out: process.env.PREVIEW_MIGRATIONS,
+            dialect: 'postgresql',
+            dbCredentials: { url: process.env.DATABASE_URL },
+            strict: true,
+            verbose: true
+          }
+          JS
+          npx drizzle-kit@0.31.8 migrate --config "$RUNNER_TEMP/drizzle.preview.config.mjs"
+        env:
+          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}
+          PREVIEW_MIGRATIONS: \${{ github.workspace }}/trusted-source/packages/db/migrations`
 }
 
 function honoPreviewIngressGateJob({ publicKeys }: { publicKeys: string[] }): string {
@@ -1010,11 +1353,15 @@ ${publicKeys.map((key) => `          test -n "$${key}"`).join('\n')}
         env:${workflowVariableEnv(publicKeys)}
 `
 	return `  preview-ingress:
+    if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout trusted ingress verification
+        uses: actions/checkout@v4
+        with:
+          ref: \${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
 ${publicVariableValidation}      - name: Verify managed preview ingress
         run: node scripts/verify-cloudflare-preview-ingress.mjs
         env:
@@ -1025,11 +1372,16 @@ ${publicVariableValidation}      - name: Verify managed preview ingress
 `
 }
 
-const PREVIEW_ALIAS_SCRIPT = `alias=$(node scripts/cloudflare-preview-name.mjs --from-id "\${{ github.event.pull_request.number || github.run_id }}")
+const PREVIEW_ALIAS_SCRIPT = `preview_id="\${{ github.event.pull_request.number || github.run_id }}"
+          if ! printf '%s' "$preview_id" | grep -Eq '^[1-9][0-9]*$' || [ "\${#preview_id}" -gt 29 ]; then
+            echo "Preview id must be a bounded positive integer." >&2
+            exit 1
+          fi
+          alias="pr-$preview_id"
           echo "alias=$alias" >> "$GITHUB_OUTPUT"
           printf '%s\\n' "gh workflow run cleanup-staging.yml -f alias=$alias" >> "$GITHUB_STEP_SUMMARY"`
 
-function d1PreviewDbJob(project: string): string {
+function d1PreviewDbJob(): string {
 	return `  preview-db:
     runs-on: ubuntu-latest
     outputs:
@@ -1039,7 +1391,6 @@ function d1PreviewDbJob(project: string): string {
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
       - id: meta
         run: |
           ${PREVIEW_ALIAS_SCRIPT}
@@ -1050,7 +1401,7 @@ function d1PreviewDbJob(project: string): string {
         name: Create or reuse D1 preview database
         run: |
           set -euo pipefail
-          db_name="${project}-db-\${{ steps.meta.outputs.alias }}"
+          db_name="preview-\${{ github.repository_id }}-d1-\${{ steps.meta.outputs.alias }}"
           db_id=$(npx wrangler@${WRANGLER_VERSION} d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
           if [ -z "$db_id" ]; then
             npx wrangler@${WRANGLER_VERSION} d1 create "$db_name"
@@ -1067,7 +1418,7 @@ function d1PreviewDbJob(project: string): string {
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
 }
 
-function neonPreviewDbJob(project: string): string {
+function neonPreviewDbJob(): string {
 	return `  preview-db:
     runs-on: ubuntu-latest
     outputs:
@@ -1078,11 +1429,10 @@ function neonPreviewDbJob(project: string): string {
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
       - id: meta
         run: |
           ${PREVIEW_ALIAS_SCRIPT}
-          echo "neon_branch_name=${project}-db-$alias" >> "$GITHUB_OUTPUT"
+          echo "neon_branch_name=preview-\${{ github.repository_id }}-neon-$alias" >> "$GITHUB_OUTPUT"
       - id: expiration
         run: echo "expires_at=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
       - id: create_neon_branch
@@ -1095,18 +1445,18 @@ function neonPreviewDbJob(project: string): string {
           expires_at: \${{ steps.expiration.outputs.expires_at }}`
 }
 
-function cleanupStagingWorkflow(project: string, db: GvKitConfig['choices']['db']): string {
+function cleanupStagingWorkflow(db: GvKitConfig['choices']['db']): string {
 	const previewDbCleanupStep =
-		db === 'sqlite' ? d1PreviewDbCleanupStep(project) : neonPreviewDbCleanupStep(project)
+		db === 'sqlite' ? d1PreviewDbCleanupStep() : neonPreviewDbCleanupStep()
 	return `# Tear down a PR preview when it closes or a manual preview by canonical alias.
-# Cleanup always inventories Workers from the trusted default branch. Source
-# branches, production Workers, and shared wildcard DNS records are unchanged.
+# Cleanup always inventories preview resources from the trusted default branch. Source
+# branches, production resources, and shared wildcard DNS records are unchanged.
 ${db === 'postgres' ? '# Neon preview branch cleanup uses NEON_API_KEY and NEON_PROJECT_ID.\n' : ''}
 
 name: cleanup-staging
 
 on:
-  pull_request:
+  pull_request_target:
     types: [closed]
   workflow_dispatch:
     inputs:
@@ -1121,8 +1471,10 @@ concurrency:
 
 jobs:
   cleanup:
+    if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     permissions:
+      actions: read
       contents: read
       pull-requests: write
     steps:
@@ -1148,6 +1500,91 @@ jobs:
         env:
           RAW_PREVIEW_ALIAS: \${{ inputs.alias || format('pr-{0}', github.event.pull_request.number) }}
 
+      - id: preview_inventories
+        name: Download durable preview inventories
+        run: |
+          set -euo pipefail
+          inventory_dir="$RUNNER_TEMP/cloudflare-preview-inventories"
+          mkdir -p "$inventory_dir"
+          pages=$(mktemp)
+          trap 'rm -f "$pages" "$RUNNER_TEMP"/cloudflare-preview-inventory-*.zip' EXIT HUP INT TERM
+          gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" > "$pages"
+          if ! jq -e 'type == "array" and length <= 100 and all(.[]; (.artifacts | type) == "array")' "$pages" >/dev/null; then
+            echo "GitHub returned a malformed preview inventory artifact listing." >&2
+            exit 1
+          fi
+          artifact_records=$(jq -r --arg prefix "cloudflare-preview-inventory-\${{ steps.alias.outputs.alias }}" '
+            [.[].artifacts[]
+              | select(
+                  .expired == false and (.workflow_run.id | type) == "number" and
+                  (.name == $prefix or (.name | startswith($prefix + "-")))
+                )]
+            | sort_by(.created_at) | reverse
+            | .[] | [.id, .workflow_run.id, .name] | @tsv
+          ' "$pages")
+          artifact_count=$(printf '%s\\n' "$artifact_records" | awk 'NF { count++ } END { print count + 0 }')
+          if [ "$artifact_count" -gt 100 ]; then
+            echo "Preview inventory artifact count exceeds the cleanup bound." >&2
+            exit 1
+          fi
+          printf '%s\\n' "$artifact_records" | while IFS="$(printf '\\t')" read -r artifact_id run_id artifact_name; do
+            [ -n "$artifact_id" ] || continue
+            run=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id")
+            if ! printf '%s' "$run" | jq -e --arg repository_id "$EXPECTED_REPOSITORY_ID" --arg default_branch "$EXPECTED_DEFAULT_BRANCH" --arg preview_alias "\${{ steps.alias.outputs.alias }}" '
+              .name == "deploy-staging" and .path == ".github/workflows/deploy-staging.yml" and
+              .status == "completed" and .conclusion == "success" and
+              (.repository.id | tostring) == $repository_id and
+              (
+                .event == "pull_request_target" or
+                (.event == "workflow_dispatch" and .head_branch == $default_branch) or
+                (
+                  .event == "pull_request" and (.pull_requests | length) == 1 and
+                  ("pr-" + (.pull_requests[0].number | tostring)) == $preview_alias and
+                  (.pull_requests[0].base.repo.id | tostring) == $repository_id and
+                  .pull_requests[0].base.ref == $default_branch
+                )
+              )
+            ' >/dev/null; then
+              echo "Preview inventory artifact $artifact_id has no trusted successful deployment run." >&2
+              exit 1
+            fi
+            event=$(printf '%s' "$run" | jq -r '.event')
+            prefix="cloudflare-preview-inventory-\${{ steps.alias.outputs.alias }}"
+            if [ "$event" = "pull_request" ]; then
+              expected_artifact_name="$prefix-$run_id"
+            else
+              expected_artifact_name="$prefix"
+            fi
+            if [ "$artifact_name" != "$expected_artifact_name" ]; then
+              echo "Preview inventory artifact $artifact_id does not match its trusted deployment generation." >&2
+              exit 1
+            fi
+            zip="$RUNNER_TEMP/cloudflare-preview-inventory-$artifact_id.zip"
+            manifest="$inventory_dir/$artifact_id.$event.json"
+            gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$zip"
+            if ! unzip -p "$zip" cloudflare-preview-manifest.json > "$manifest"; then
+              echo "Preview inventory artifact $artifact_id is malformed." >&2
+              exit 1
+            fi
+            if [ "$event" = "pull_request" ]; then
+              base_sha=$(printf '%s' "$run" | jq -er '.pull_requests[0].base.sha | select(test("^[0-9a-f]{40}$"))')
+              encoded_workflow=$(gh api "/repos/$GITHUB_REPOSITORY/contents/.github/workflows/deploy-staging.yml?ref=$base_sha" --jq .content)
+              trusted_project=$(printf '%s' "$encoded_workflow" | tr -d '\\n' | base64 --decode | sed -n 's/^# Per-PR staging deploy for \\([a-z0-9][a-z0-9-]*\\)\\.$/\\1/p' | head -n 1)
+              if [ -z "$trusted_project" ] || ! jq -e --arg alias "\${{ steps.alias.outputs.alias }}" --arg project "$trusted_project" '
+                .schemaVersion == 1 and .project == $project and .alias == $alias and
+                .database.name == ($project + "-db-" + $alias)
+              ' "$manifest" >/dev/null; then
+                echo "Legacy preview inventory artifact $artifact_id does not match its immutable trusted base." >&2
+                exit 1
+              fi
+            fi
+          done
+          echo "authenticated_count=$artifact_count" >> "$GITHUB_OUTPUT"
+        env:
+          EXPECTED_DEFAULT_BRANCH: \${{ github.event.repository.default_branch }}
+          EXPECTED_REPOSITORY_ID: \${{ github.repository_id }}
+          GH_TOKEN: \${{ github.token }}
+
       - id: worker_cleanup
         name: Delete staging Workers
         run: sh scripts/cleanup-cloudflare-preview-workers.sh "\${{ steps.alias.outputs.alias }}"
@@ -1170,6 +1607,10 @@ ${previewDbCleanupStep}
             echo "Database cleanup outcome: $DATABASE_CLEANUP_OUTCOME" >&2
             failures=$((failures + 1))
           fi
+          if ! printf '%s' "$AUTHENTICATED_INVENTORY_COUNT" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "No authenticated preview deployment inventory exists for $PREVIEW_ALIAS; cleanup is incomplete." >&2
+            failures=$((failures + 1))
+          fi
           if [ "$failures" -ne 0 ]; then
             echo "Preview cleanup completed with $failures failed resource group(s)." >&2
             exit 1
@@ -1178,9 +1619,11 @@ ${previewDbCleanupStep}
         env:
           WORKER_CLEANUP_OUTCOME: \${{ steps.worker_cleanup.outcome }}
           DATABASE_CLEANUP_OUTCOME: \${{ steps.database_cleanup.outcome }}
+          AUTHENTICATED_INVENTORY_COUNT: \${{ steps.preview_inventories.outputs.authenticated_count }}
+          PREVIEW_ALIAS: \${{ steps.alias.outputs.alias }}
 
       - uses: marocchino/sticky-pull-request-comment@v2
-        if: github.event_name == 'pull_request' && steps.cleanup_result.outcome == 'success'
+        if: github.event_name == 'pull_request_target' && steps.cleanup_result.outcome == 'success'
         with:
           header: staging-deploy
           message: |
@@ -1190,44 +1633,121 @@ ${previewDbCleanupStep}
 `
 }
 
-function d1PreviewDbCleanupStep(project: string): string {
+function d1PreviewDbCleanupStep(): string {
 	return `      - id: database_cleanup
-        name: Delete preview D1 database
+        name: Delete preview D1 databases
         if: always() && steps.alias.outcome == 'success'
         run: |
           set -euo pipefail
-          db_name="${project}-db-\${{ steps.alias.outputs.alias }}"
+          repository_id="\${{ github.repository_id }}"
+          alias="\${{ steps.alias.outputs.alias }}"
+          if ! printf '%s' "$repository_id" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "GitHub supplied an invalid repository id." >&2
+            exit 1
+          fi
+          prefix="preview-$repository_id-"
+          suffix="-$alias"
+          candidates=$(mktemp)
+          trap 'rm -f "$candidates"' EXIT HUP INT TERM
           databases_json=$(npx wrangler@${WRANGLER_VERSION} d1 list --json)
-          if ! printf '%s' "$databases_json" | jq -e 'type == "array" and all(.[]; (.name | type) == "string" and (((.uuid // .id) // "") | type) == "string")' >/dev/null; then
+          if ! printf '%s' "$databases_json" | jq -e 'type == "array" and length <= 10000 and all(.[]; (.name | type) == "string" and (((.uuid // .id) // "") | type) == "string")' >/dev/null; then
             echo "Cloudflare returned a malformed preview D1 inventory." >&2
             exit 1
           fi
-          db_ids=$(printf '%s' "$databases_json" | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")')
-          db_count=$(printf '%s\\n' "$db_ids" | awk 'NF { count++ } END { print count + 0 }')
-          if [ "$db_count" -eq 0 ]; then
-            echo "Preview D1 database $db_name is missing or already deleted."
-            exit 0
-          fi
-          if [ "$db_count" -ne 1 ] || ! printf '%s' "$db_ids" | grep -Eq '^[0-9a-fA-F-]{32,36}$'; then
-            echo "Cloudflare returned an unsafe preview D1 inventory for $db_name." >&2
+          if ! printf '%s' "$databases_json" | jq -e 'group_by(.uuid // .id // "") | all(.[]; length == 1)' >/dev/null; then
+            echo "Cloudflare returned duplicate preview D1 identities." >&2
             exit 1
           fi
-          npx wrangler@${WRANGLER_VERSION} d1 delete "$db_name" --skip-confirmation
-          echo "Deleted preview D1 database $db_name."
+          printf '%s' "$databases_json" | jq -r --arg prefix "$prefix" --arg suffix "$suffix" '.[] | select(.name | startswith($prefix) and endswith($suffix)) | [.name, (.uuid // .id // "")] | @tsv' > "$candidates"
+          if [ -d "\${PREVIEW_MANIFEST_DIR:-}" ]; then
+            for manifest in "$PREVIEW_MANIFEST_DIR"/*.json; do
+              [ -e "$manifest" ] || continue
+              case "$manifest" in
+                *.pull_request.json) manifest_generation=pull_request ;;
+                *.pull_request_target.json) manifest_generation=pull_request_target ;;
+                *.workflow_dispatch.json) manifest_generation=workflow_dispatch ;;
+                *) echo "Recorded preview D1 identity has no trusted deployment generation." >&2; exit 1 ;;
+              esac
+              if ! identity=$(jq -er --arg alias "$alias" --arg repository_id "$repository_id" --arg generation "$manifest_generation" '
+                if .schemaVersion == 1 then
+                  select($generation == "pull_request") | select(
+                    .alias == $alias and .project != null and
+                    (.project | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*$") and length <= 255) and
+                    .database.kind == "d1" and
+                    .database.name == (.project + "-db-" + $alias)
+                  )
+                elif .schemaVersion == 2 then
+                  select($generation == "pull_request_target" or $generation == "workflow_dispatch") | select(
+                    .repositoryId == $repository_id and .alias == $alias and
+                    .database.kind == "d1" and
+                    (.database.name | test("^preview-" + $repository_id + "-[a-z0-9]+(-[a-z0-9]+)*-" + $alias + "$"))
+                  )
+                else error("unsupported manifest schema") end
+                | select(.database.id | type == "string")
+                | [.database.name, .database.id] | @tsv
+              ' "$manifest"); then
+                echo "Recorded preview D1 identity is malformed or outside this repository preview." >&2
+                exit 1
+              fi
+              db_name=$(printf '%s' "$identity" | cut -f1)
+              db_id=$(printf '%s' "$identity" | cut -f2)
+              if printf '%s' "$databases_json" | jq -e --arg name "$db_name" --arg id "$db_id" 'any(.[]; .name == $name and (.uuid // .id // "") == $id)' >/dev/null; then
+                printf '%s\\t%s\\n' "$db_name" "$db_id" >> "$candidates"
+              fi
+            done
+          fi
+          sort -u "$candidates" -o "$candidates"
+          candidate_count=$(awk 'END { print NR + 0 }' "$candidates")
+          if [ "$candidate_count" -gt 100 ]; then
+            echo "Cloudflare preview D1 inventory exceeds the cleanup bound." >&2
+            exit 1
+          fi
+          if [ "$candidate_count" -eq 0 ]; then
+            echo "Preview D1 databases for $alias are missing or already deleted."
+            exit 0
+          fi
+          while IFS="$(printf '\\t')" read -r db_name db_id; do
+            if { ! printf '%s' "$db_name" | grep -Eq "^preview-$repository_id-[a-z0-9]+(-[a-z0-9]+)*-$alias$" && ! printf '%s' "$db_name" | grep -Eq "^[a-z0-9]+(-[a-z0-9]+)*-db-$alias$"; } || ! printf '%s' "$db_id" | grep -Eq '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'; then
+              echo "Cloudflare returned an unsafe preview D1 identity." >&2
+              exit 1
+            fi
+          done < "$candidates"
+          failures=0
+          while IFS="$(printf '\\t')" read -r db_name db_id; do
+            if npx wrangler@${WRANGLER_VERSION} d1 delete "$db_id" --skip-confirmation; then
+              echo "Deleted preview D1 database $db_name ($db_id)."
+            else
+              echo "Failed to delete preview D1 database $db_name ($db_id)." >&2
+              failures=$((failures + 1))
+            fi
+          done < "$candidates"
+          if [ "$failures" -ne 0 ]; then
+            echo "$failures preview D1 database deletion(s) failed." >&2
+            exit 1
+          fi
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          PREVIEW_MANIFEST_DIR: \${{ runner.temp }}/cloudflare-preview-inventories`
 }
 
-function neonPreviewDbCleanupStep(project: string): string {
+function neonPreviewDbCleanupStep(): string {
 	return `      - id: database_cleanup
-        name: Delete preview Neon branch
+        name: Delete preview Neon branches
         if: always() && steps.alias.outcome == 'success'
         run: |
           set -euo pipefail
-          branch_name="${project}-db-\${{ steps.alias.outputs.alias }}"
+          repository_id="\${{ github.repository_id }}"
+          alias="\${{ steps.alias.outputs.alias }}"
+          if ! printf '%s' "$repository_id" | grep -Eq '^[1-9][0-9]*$'; then
+            echo "GitHub supplied an invalid repository id." >&2
+            exit 1
+          fi
+          prefix="preview-$repository_id-"
+          suffix="-$alias"
           branch_inventory=$(mktemp)
-          trap 'rm -f "$branch_inventory"' EXIT HUP INT TERM
+          candidates=$(mktemp)
+          trap 'rm -f "$branch_inventory" "$candidates"' EXIT HUP INT TERM
           cursor=''
           page=1
           while :; do
@@ -1240,7 +1760,7 @@ function neonPreviewDbCleanupStep(project: string): string {
               echo "Could not list Neon branches." >&2
               exit 1
             fi
-            if ! printf '%s' "$branches_json" | jq -e '(.branches | type == "array") and all(.branches[]; (.name | type) == "string" and (.id | type) == "string") and (.pagination | type == "object") and ((.pagination.next == null) or ((.pagination.next | type) == "string" and (.pagination.next | length) > 0 and (.pagination.next | length) <= 2048))' >/dev/null; then
+            if ! printf '%s' "$branches_json" | jq -e '(.branches | type == "array") and (.branches | length) <= 1000 and all(.branches[]; (.name | type) == "string" and (.id | type) == "string" and (.default | type) == "boolean" and (.protected | type) == "boolean") and (.pagination | type == "object") and ((.pagination.next == null) or ((.pagination.next | type) == "string" and (.pagination.next | length) > 0 and (.pagination.next | length) <= 2048))' >/dev/null; then
               echo "Neon returned a malformed preview branch inventory." >&2
               exit 1
             fi
@@ -1254,21 +1774,85 @@ function neonPreviewDbCleanupStep(project: string): string {
             cursor="$next_cursor"
             page=$((page + 1))
           done
-          branch_ids=$(jq -r --arg name "$branch_name" 'select(.name == $name) | .id' "$branch_inventory")
-          branch_count=$(printf '%s\\n' "$branch_ids" | awk 'NF { count++ } END { print count + 0 }')
-          if [ "$branch_count" -eq 0 ]; then
-            echo "Preview Neon branch $branch_name is missing or already deleted."
-            exit 0
-          fi
-          if [ "$branch_count" -ne 1 ] || ! printf '%s' "$branch_ids" | grep -Eq '^br-[A-Za-z0-9_-]+$'; then
-            echo "Neon returned an unsafe preview branch inventory for $branch_name." >&2
+          if ! jq -s -e 'group_by(.id) | all(.[]; length == 1)' "$branch_inventory" >/dev/null; then
+            echo "Neon returned duplicate preview branch identities." >&2
             exit 1
           fi
-          curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$branch_ids" >/dev/null
-          echo "Deleted preview Neon branch $branch_name."
+          jq -r --arg prefix "$prefix" --arg suffix "$suffix" 'select(.name | startswith($prefix) and endswith($suffix)) | [.name, .id] | @tsv' "$branch_inventory" > "$candidates"
+          if [ -d "\${PREVIEW_MANIFEST_DIR:-}" ]; then
+            for manifest in "$PREVIEW_MANIFEST_DIR"/*.json; do
+              [ -e "$manifest" ] || continue
+              case "$manifest" in
+                *.pull_request.json) manifest_generation=pull_request ;;
+                *.pull_request_target.json) manifest_generation=pull_request_target ;;
+                *.workflow_dispatch.json) manifest_generation=workflow_dispatch ;;
+                *) echo "Recorded preview Neon identity has no trusted deployment generation." >&2; exit 1 ;;
+              esac
+              if ! identity=$(jq -er --arg alias "$alias" --arg repository_id "$repository_id" --arg generation "$manifest_generation" '
+                if .schemaVersion == 1 then
+                  select($generation == "pull_request") | select(
+                    .alias == $alias and .project != null and
+                    (.project | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*$") and length <= 255) and
+                    .database.kind == "neon" and
+                    .database.name == (.project + "-db-" + $alias)
+                  )
+                elif .schemaVersion == 2 then
+                  select($generation == "pull_request_target" or $generation == "workflow_dispatch") | select(
+                    .repositoryId == $repository_id and .alias == $alias and
+                    .database.kind == "neon" and
+                    (.database.name | test("^preview-" + $repository_id + "-[a-z0-9]+(-[a-z0-9]+)*-" + $alias + "$"))
+                  )
+                else error("unsupported manifest schema") end
+                | select(.database.id | type == "string")
+                | [.database.name, .database.id] | @tsv
+              ' "$manifest"); then
+                echo "Recorded preview Neon identity is malformed or outside this repository preview." >&2
+                exit 1
+              fi
+              branch_name=$(printf '%s' "$identity" | cut -f1)
+              branch_id=$(printf '%s' "$identity" | cut -f2)
+              if jq -e --arg name "$branch_name" --arg id "$branch_id" 'select(.name == $name and .id == $id)' "$branch_inventory" >/dev/null; then
+                printf '%s\\t%s\\n' "$branch_name" "$branch_id" >> "$candidates"
+              fi
+            done
+          fi
+          sort -u "$candidates" -o "$candidates"
+          candidate_count=$(awk 'END { print NR + 0 }' "$candidates")
+          if [ "$candidate_count" -gt 100 ]; then
+            echo "Neon preview branch inventory exceeds the cleanup candidate bound." >&2
+            exit 1
+          fi
+          if [ "$candidate_count" -eq 0 ]; then
+            echo "Preview Neon branches for $alias are missing or already deleted."
+            exit 0
+          fi
+          while IFS="$(printf '\\t')" read -r branch_name branch_id; do
+            if { ! printf '%s' "$branch_name" | grep -Eq "^preview-$repository_id-[a-z0-9]+(-[a-z0-9]+)*-$alias$" && ! printf '%s' "$branch_name" | grep -Eq "^[a-z0-9]+(-[a-z0-9]+)*-db-$alias$"; } || ! printf '%s' "$branch_id" | grep -Eq '^br-[A-Za-z0-9_-]+$'; then
+              echo "Neon returned an unsafe preview branch identity." >&2
+              exit 1
+            fi
+            if ! jq -e --arg name "$branch_name" --arg id "$branch_id" 'select(.name == $name and .id == $id and .default == false and .protected == false)' "$branch_inventory" >/dev/null; then
+              echo "Neon refused cleanup of a default or protected preview branch." >&2
+              exit 1
+            fi
+          done < "$candidates"
+          failures=0
+          while IFS="$(printf '\\t')" read -r branch_name branch_id; do
+            if curl -fsS -X DELETE -H "Authorization: Bearer $NEON_API_KEY" "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$branch_id" >/dev/null; then
+              echo "Deleted preview Neon branch $branch_name ($branch_id)."
+            else
+              echo "Failed to delete preview Neon branch $branch_name ($branch_id)." >&2
+              failures=$((failures + 1))
+            fi
+          done < "$candidates"
+          if [ "$failures" -ne 0 ]; then
+            echo "$failures preview Neon branch deletion(s) failed." >&2
+            exit 1
+          fi
         env:
           NEON_PROJECT_ID: \${{ vars.NEON_PROJECT_ID }}
-          NEON_API_KEY: \${{ secrets.NEON_API_KEY }}`
+          NEON_API_KEY: \${{ secrets.NEON_API_KEY }}
+          PREVIEW_MANIFEST_DIR: \${{ runner.temp }}/cloudflare-preview-inventories`
 }
 
 interface DockerOpts {

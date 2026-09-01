@@ -13,6 +13,7 @@ import {
 	assertPermittedWranglerInvocation,
 	writeSanitizedArtifact
 } from './gateway-verification-evidence.js'
+import { verifyPreviewSecurityContracts } from './verify-gateway-preview-security.js'
 
 const PNPM_VERSION = '11.1.1'
 const CORE_WORKERS = [
@@ -996,6 +997,22 @@ printf '%s\\n' "$DATABASE_CLEANUP_INVENTORY"
 		previewSecretValues[name] = values
 		if ( JSON.stringify(Object.keys(values).sort()) !== JSON.stringify(requiredPreviewSecrets[name].sort()) ) throw new Error(`${name} preview secrets file does not match required secrets`)
 	}
+	const previewSecurityProbes = await verifyPreviewSecurityContracts({
+		project,
+		cleanupWorkflow,
+		workers,
+		alias: args.stagingAlias,
+		repositoryId,
+		database: {
+			provider: config.choices.db === 'sqlite' ? 'd1' : 'neon',
+			name: previewDatabaseName,
+			id: config.choices.db === 'sqlite' ? previewDatabaseId : previewNeonBranchId
+		},
+		previewSecretDirectory,
+		previewZoneName,
+		previewWebDomain,
+		previewApiDomain
+	})
 	const databaseEvidence = assertPreviewDatabaseIsolation({
 		config,
 		production: configs,
@@ -1118,6 +1135,7 @@ printf '%s\\n' "$DATABASE_CLEANUP_INVENTORY"
 		),
 		preview: {
 			alias: args.stagingAlias,
+			securityProbes: previewSecurityProbes,
 			aliases: {
 				pr: args.stagingAlias,
 				manual: manualAlias,

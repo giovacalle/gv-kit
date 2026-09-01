@@ -8,6 +8,7 @@ import { GvKitConfig } from '../../src/schema/config.js'
 
 const repositoryRoot = join(import.meta.dir, '..', '..')
 const gatewayGeneratorPath = join(repositoryRoot, 'src/generators/gateway.ts')
+const previewWorkflowTestPath = join(repositoryRoot, 'tests/contracts/gateway-preview-workflows.test.ts')
 const expectedGatewayRenderers = [
 	'renderGatewayPackageJson',
 	'renderGatewayTsconfig',
@@ -58,6 +59,40 @@ function generatedCloudflareGateway() {
 }
 
 describe('gateway source standards', () => {
+	test('preview workflow tests do not import filesystem mutation APIs', () => {
+		const source = readFileSync(previewWorkflowTestPath, 'utf8')
+		const sourceFile = ts.createSourceFile(
+			previewWorkflowTestPath,
+			source,
+			ts.ScriptTarget.Latest,
+			true,
+			ts.ScriptKind.TS
+		)
+		const filesystemImports = sourceFile.statements.flatMap((statement) => {
+			if (!ts.isImportDeclaration(statement)) return []
+			if (!ts.isStringLiteral(statement.moduleSpecifier)) return []
+			return /^node:fs(?:\/promises)?$/.test(statement.moduleSpecifier.text)
+				? [statement.moduleSpecifier.text]
+				: []
+		})
+		expect(filesystemImports).toEqual([])
+		expect(source).not.toMatch(/\bBun\.(?:write|file\([^)]*\)\.writer)\b/)
+		const subprocessCommands: string[] = []
+		function visit(node: ts.Node): void {
+			if (
+				ts.isCallExpression(node) &&
+				ts.isPropertyAccessExpression(node.expression) &&
+				node.expression.expression.getText(sourceFile) === 'Bun' &&
+				node.expression.name.text === 'spawn'
+			) {
+				subprocessCommands.push(node.arguments[0]?.getText(sourceFile) ?? '')
+			}
+			ts.forEachChild(node, visit)
+		}
+		visit(sourceFile)
+		expect(subprocessCommands).toEqual(["['sh', '-n']"])
+	})
+
 	test('gateway string renderers use outcome-oriented render names', () => {
 		const source = readFileSync(gatewayGeneratorPath, 'utf8')
 		expect(stringRendererNames(source)).toEqual(expectedGatewayRenderers)

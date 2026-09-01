@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join, posix as path } from 'node:path'
+import { posix as path } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { generateDeploy } from '../../src/generators/deploy.js'
 import { runGenerators } from '../../src/generators/index.js'
@@ -251,100 +249,7 @@ async function shellSyntax(source: string): Promise<void> {
 	if (exitCode !== 0) throw new Error(`Generated shell syntax failed:\n${stderr}`)
 }
 
-type CleanupMode =
-	| 'inventory-failure'
-	| 'malformed-inventory'
-	| 'delete-failure'
-	| 'missing'
-	| 'success'
-
-async function runCleanupScript({
-	source,
-	mode,
-	validWorkers
-}: {
-	source: string
-	mode: CleanupMode
-	validWorkers: string[]
-}) {
-	const inventoryEntries =
-		mode === 'missing'
-			? []
-			: [
-					...validWorkers.map((id) => ({ id })),
-					{ id: 'demo-web' },
-					{ id: 'pv-unrelated-project-worker-pr-123' }
-				]
-	const inventory = JSON.stringify({
-		success: true,
-		errors: [],
-		messages: [],
-		result: mode === 'malformed-inventory' ? [{ id: 42 }] : inventoryEntries
-	})
-	const injectedCommands = `node() {
-	if [ "$1" != 'scripts/cloudflare-preview-name.mjs' ]; then return 91; fi
-	if [ "$2" = '--validate' ] && [ "$3" = 'pr-123' ]; then
-		printf '%s\\n' 'pr-123'
-		return 0
-	fi
-	if [ "$2" = '--validate-name' ] && [ "$4" = 'pr-123' ]; then
-		case ",$MOCK_VALID_WORKERS," in
-			*,"$3",*) printf '%s\\n' "$3"; return 0 ;;
-		esac
-		return 1
-	fi
-	return 92
-}
-curl() {
-	if [ "$MOCK_CLEANUP" = 'inventory-failure' ]; then
-		echo 'mock Worker inventory failure' >&2
-		return 17
-	fi
-	case " $* " in
-		*page=*|*per_page=*) return 93 ;;
-	esac
-	printf '%s\\n' "$MOCK_INVENTORY"
-}
-npx() {
-	if [ "$2" != 'delete' ]; then return 92; fi
-	if [ "$MOCK_CLEANUP" = 'delete-failure' ] && [ "$4" = "${validWorkers[0] ?? ''}" ]; then
-		echo 'mock Worker deletion failure' >&2
-		return 23
-	fi
-	return 0
-}`
-	const child = Bun.spawn(['sh', '-s', '--', 'pr-123'], {
-		cwd: import.meta.dir,
-		env: {
-			...Bun.env,
-			CLOUDFLARE_ACCOUNT_ID: 'verification-account',
-			CLOUDFLARE_API_TOKEN: 'verification-token',
-			MOCK_CLEANUP: mode,
-			MOCK_INVENTORY: inventory,
-			MOCK_VALID_WORKERS: validWorkers.join(',')
-		},
-		stdin: new Blob([`${injectedCommands}\n${source}`]),
-		stdout: 'pipe',
-		stderr: 'pipe'
-	})
-	const [exitCode, stdout, stderr] = await Promise.all([
-		child.exited,
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text()
-	])
-	return { exitCode, stdout, stderr }
-}
-
 type DatabaseProvider = 'd1' | 'neon'
-type DatabaseCleanupMode =
-	| 'default-branch'
-	| 'duplicate-provider-id'
-	| 'malformed-identity'
-	| 'missing'
-	| 'partial-failure'
-	| 'protected-branch'
-	| 'success'
-
 function databaseCleanupSource(provider: DatabaseProvider, project = 'demo'): string {
 	const workflow = Bun.YAML.parse(
 		entry(
@@ -357,466 +262,6 @@ function databaseCleanupSource(provider: DatabaseProvider, project = 'demo'): st
 	return source
 		.replaceAll('${{ github.repository_id }}', '123456')
 		.replaceAll('${{ steps.alias.outputs.alias }}', 'pr-123')
-}
-
-async function runDatabaseCleanup({
-	provider,
-	mode,
-	manifestGeneration = 'pull_request'
-}: {
-	provider: DatabaseProvider
-	mode: DatabaseCleanupMode
-	manifestGeneration?: 'pull_request' | 'pull_request_target' | 'none'
-}) {
-	const d1Candidates = [
-		{ name: 'preview-123456-d1-pr-123', uuid: '11111111-1111-4111-8111-111111111111' },
-		{
-			name: 'preview-123456-database-v2-pr-123',
-			uuid: '22222222-2222-4222-8222-222222222222'
-		},
-		{ name: 'demo-db-pr-123', uuid: '55555555-5555-4555-8555-555555555555' }
-	]
-	const neonCandidates = [
-		{
-			name: 'preview-123456-neon-pr-123',
-			id: 'br-preview-123',
-			default: mode === 'default-branch',
-			protected: mode === 'protected-branch'
-		},
-		{
-			name: 'preview-123456-branch-v2-pr-123',
-			id: 'br-preview-v2-123',
-			default: false,
-			protected: false
-		},
-		{
-			name: 'demo-db-pr-123',
-			id: 'br-preview-legacy-123',
-			default: false,
-			protected: false
-		}
-	]
-	const unrelatedD1 = [
-		{
-			name: 'demo-db',
-			uuid:
-				mode === 'duplicate-provider-id'
-					? d1Candidates[0]!.uuid
-					: '33333333-3333-4333-8333-333333333333'
-		},
-		{ name: 'preview-999999-d1-pr-123', uuid: '44444444-4444-4444-8444-444444444444' }
-	]
-	const unrelatedNeon = [
-		{
-			name: 'demo-db',
-			id: mode === 'duplicate-provider-id' ? neonCandidates[0]!.id : 'br-production',
-			default: true,
-			protected: true
-		},
-		{
-			name: 'preview-999999-neon-pr-123',
-			id: 'br-unrelated',
-			default: false,
-			protected: false
-		}
-	]
-	const d1Inventory = JSON.stringify([
-		...(mode === 'missing' ? [] : d1Candidates),
-		...(mode === 'malformed-identity'
-			? [{ name: 'preview-123456-malformed-pr-123', uuid: 'production-database' }]
-			: []),
-		...unrelatedD1
-	])
-	const neonInventory = JSON.stringify({
-		branches: [
-			...(mode === 'missing' ? [] : neonCandidates),
-			...(mode === 'malformed-identity'
-				? [
-						{
-							name: 'preview-123456-malformed-pr-123',
-							id: 'production-branch',
-							default: false,
-							protected: false
-						}
-					]
-				: []),
-			...unrelatedNeon
-		],
-		pagination: { next: null }
-	})
-	const failureId =
-		mode === 'partial-failure'
-			? provider === 'd1'
-				? d1Candidates[0]!.uuid
-				: neonCandidates[0]!.id
-			: ''
-	const injectedCommands = `npx() {
-	if [ "$2" = 'd1' ] && [ "$3" = 'list' ]; then printf '%s\\n' "$MOCK_D1_INVENTORY"; return 0; fi
-	if [ "$2" = 'd1' ] && [ "$3" = 'delete' ]; then
-		echo "delete:$4"
-		if [ "$4" = "$MOCK_FAILURE_ID" ]; then return 23; fi
-		return 0
-	fi
-	return 92
-}
-curl() {
-	case " $* " in
-		*' -X DELETE '*)
-			url="\${!#}"
-			echo "delete:$url" >&2
-			case "$url" in *"/$MOCK_FAILURE_ID") return 23 ;; esac
-			return 0
-			;;
-	esac
-	printf '%s\\n' "$MOCK_NEON_INVENTORY"
-}`
-	const manifestDirectory = await mkdtemp(join(tmpdir(), 'gv-kit-preview-manifest-'))
-	if (manifestGeneration !== 'none') {
-		await writeFile(
-			join(manifestDirectory, `legacy.${manifestGeneration}.json`),
-			JSON.stringify({
-				schemaVersion: 1,
-				project: 'demo',
-				alias: 'pr-123',
-				workers: [],
-				database: {
-					kind: provider,
-					name: 'demo-db-pr-123',
-					id: provider === 'd1' ? '55555555-5555-4555-8555-555555555555' : 'br-preview-legacy-123'
-				}
-			})
-		)
-	}
-	try {
-		const child = Bun.spawn(['bash', '-s'], {
-			env: {
-				...Bun.env,
-				CLOUDFLARE_ACCOUNT_ID: 'verification-account',
-				CLOUDFLARE_API_TOKEN: 'verification-token',
-				NEON_API_KEY: 'verification-token',
-				NEON_PROJECT_ID: 'verification-project',
-				PREVIEW_MANIFEST_DIR: manifestDirectory,
-				MOCK_D1_INVENTORY: d1Inventory,
-				MOCK_NEON_INVENTORY: neonInventory,
-				MOCK_FAILURE_ID: failureId
-			},
-			stdin: new Blob([`${injectedCommands}\n${databaseCleanupSource(provider)}`]),
-			stdout: 'pipe',
-			stderr: 'pipe'
-		})
-		const [exitCode, stdout, stderr] = await Promise.all([
-			child.exited,
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text()
-		])
-		return { exitCode, stdout, stderr, d1Candidates, neonCandidates }
-	} finally {
-		await rm(manifestDirectory, { recursive: true, force: true })
-	}
-}
-
-function cleanupWorkflowSteps(provider: DatabaseProvider) {
-	const workflow = Bun.YAML.parse(
-		entry(
-			generateDeploy(makeCfg({ db: provider === 'd1' ? 'sqlite' : 'postgres' })),
-			'.github/workflows/cleanup-staging.yml'
-		)
-	) as {
-		jobs: { cleanup: { steps: Array<{ id?: string; run?: string }> } }
-	}
-	return workflow.jobs.cleanup.steps
-}
-
-async function runEmptyInventoryDownload(provider: DatabaseProvider) {
-	const generatedSource = cleanupWorkflowSteps(provider).find(
-		({ id }) => id === 'preview_inventories'
-	)?.run
-	if (!generatedSource) throw new Error('Missing preview inventory download source')
-	const source = generatedSource.replaceAll('${{ steps.alias.outputs.alias }}', 'pr-123')
-	const directory = await mkdtemp(join(tmpdir(), 'gv-kit-empty-preview-inventory-'))
-	const githubOutput = join(directory, 'github-output.txt')
-	const injectedCommands = `gh() {
-	case "$*" in
-		*'/actions/artifacts?per_page=100'*) printf '%s\\n' '[{"artifacts":[]}]' ;;
-		*) echo "Unexpected mocked GitHub API request: $*" >&2; return 91 ;;
-	esac
-}`
-	try {
-		const child = Bun.spawn(['bash', '-s'], {
-			cwd: directory,
-			env: {
-				...Bun.env,
-				EXPECTED_DEFAULT_BRANCH: 'main',
-				EXPECTED_REPOSITORY_ID: '123456',
-				GH_TOKEN: 'verification-token',
-				GITHUB_OUTPUT: githubOutput,
-				GITHUB_REPOSITORY: 'owner/repository',
-				RUNNER_TEMP: directory
-			},
-			stdin: new Blob([`${injectedCommands}\n${source}`]),
-			stdout: 'pipe',
-			stderr: 'pipe'
-		})
-		const [exitCode, stdout, stderr] = await Promise.all([
-			child.exited,
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text()
-		])
-		return {
-			exitCode,
-			stdout,
-			stderr,
-			githubOutput: await readFile(githubOutput, 'utf8').catch(() => '')
-		}
-	} finally {
-		await rm(directory, { recursive: true, force: true })
-	}
-}
-
-async function runLegacyInventoryDownload({
-	prNumber = 123,
-	artifactRunSuffix = 777
-}: {
-	prNumber?: number
-	artifactRunSuffix?: number
-} = {}) {
-	const generatedSource = cleanupWorkflowSteps('d1').find(
-		({ id }) => id === 'preview_inventories'
-	)?.run
-	if (!generatedSource) throw new Error('Missing preview inventory download source')
-	const source = generatedSource.replaceAll('${{ steps.alias.outputs.alias }}', 'pr-123')
-	const directory = await mkdtemp(join(tmpdir(), 'gv-kit-legacy-preview-inventory-'))
-	const githubOutput = join(directory, 'github-output.txt')
-	const requestLog = join(directory, 'requests.log')
-	const workflowContent = Buffer.from('# Per-PR staging deploy for demo.\n').toString('base64')
-	const artifactPages = JSON.stringify([
-		{
-			artifacts: [
-				{
-					id: 888,
-					name: `cloudflare-preview-inventory-pr-123-${artifactRunSuffix}`,
-					expired: false,
-					created_at: '2026-01-01T00:00:00Z',
-					workflow_run: { id: 777 }
-				}
-			]
-		}
-	])
-	const run = JSON.stringify({
-		name: 'deploy-staging',
-		path: '.github/workflows/deploy-staging.yml',
-		status: 'completed',
-		conclusion: 'success',
-		repository: { id: 123456 },
-		event: 'pull_request',
-		pull_requests: [
-			{
-				number: prNumber,
-				base: { repo: { id: 123456 }, ref: 'main', sha: 'a'.repeat(40) }
-			}
-		]
-	})
-	const manifest = JSON.stringify({
-		schemaVersion: 1,
-		project: 'demo',
-		alias: 'pr-123',
-		database: {
-			kind: 'd1',
-			name: 'demo-db-pr-123',
-			id: '55555555-5555-4555-8555-555555555555'
-		}
-	})
-	const injectedCommands = `gh() {
-	printf '%s\\n' "$*" >> "$MOCK_REQUEST_LOG"
-	case "$*" in
-		*'/actions/artifacts?per_page=100'*) printf '%s\\n' "$MOCK_ARTIFACT_PAGES" ;;
-		*'/actions/runs/777'*) printf '%s\\n' "$MOCK_RUN" ;;
-		*'/contents/.github/workflows/deploy-staging.yml?ref='*) printf '%s\\n' "$MOCK_WORKFLOW_CONTENT" ;;
-		*'/actions/artifacts/888/zip'*) printf '%s\\n' 'mock zip' ;;
-		*) echo "Unexpected mocked GitHub API request: $*" >&2; return 91 ;;
-	esac
-}
-unzip() {
-	printf '%s\\n' "$MOCK_MANIFEST"
-}`
-	try {
-		await writeFile(requestLog, '')
-		const child = Bun.spawn(['bash', '-s'], {
-			cwd: directory,
-			env: {
-				...Bun.env,
-				EXPECTED_DEFAULT_BRANCH: 'main',
-				EXPECTED_REPOSITORY_ID: '123456',
-				GH_TOKEN: 'verification-token',
-				GITHUB_OUTPUT: githubOutput,
-				GITHUB_REPOSITORY: 'owner/repository',
-				RUNNER_TEMP: directory,
-				MOCK_ARTIFACT_PAGES: artifactPages,
-				MOCK_MANIFEST: manifest,
-				MOCK_REQUEST_LOG: requestLog,
-				MOCK_RUN: run,
-				MOCK_WORKFLOW_CONTENT: workflowContent
-			},
-			stdin: new Blob([`${injectedCommands}\n${source}`]),
-			stdout: 'pipe',
-			stderr: 'pipe'
-		})
-		const [exitCode, stdout, stderr] = await Promise.all([
-			child.exited,
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text()
-		])
-		return {
-			exitCode,
-			stdout,
-			stderr,
-			githubOutput: await readFile(githubOutput, 'utf8').catch(() => ''),
-			requestLog: await readFile(requestLog, 'utf8')
-		}
-	} finally {
-		await rm(directory, { recursive: true, force: true })
-	}
-}
-
-async function runCleanupResult({
-	provider,
-	authenticatedCount
-}: {
-	provider: DatabaseProvider
-	authenticatedCount: string
-}) {
-	const source = cleanupWorkflowSteps(provider).find(({ id }) => id === 'cleanup_result')?.run
-	if (!source) throw new Error('Missing preview cleanup result source')
-	const child = Bun.spawn(['bash', '-s'], {
-		env: {
-			...Bun.env,
-			WORKER_CLEANUP_OUTCOME: 'success',
-			DATABASE_CLEANUP_OUTCOME: 'success',
-			AUTHENTICATED_INVENTORY_COUNT: authenticatedCount,
-			PREVIEW_ALIAS: 'pr-123'
-		},
-		stdin: new Blob([source]),
-		stdout: 'pipe',
-		stderr: 'pipe'
-	})
-	const [exitCode, stdout, stderr] = await Promise.all([
-		child.exited,
-		new Response(child.stdout).text(),
-		new Response(child.stderr).text()
-	])
-	return { exitCode, stdout, stderr }
-}
-
-async function runTrustedPublisher({
-	db,
-	injectD1Binding = false,
-	injectProductionRoute = false,
-	injectWorkerCollision = false
-}: {
-	db: 'sqlite' | 'postgres'
-	injectD1Binding?: boolean
-	injectProductionRoute?: boolean
-	injectWorkerCollision?: boolean
-}) {
-	const cfg = makeCfg({ db })
-	const prepared = await runPreviewPreparation({ cfg })
-	if (prepared.exitCode !== 0) throw new Error(prepared.stderr)
-	const directory = await mkdtemp(join(tmpdir(), 'gv-kit-preview-publisher-'))
-	const artifactDirectory = join(directory, 'preview-artifact')
-	const trustedSource = join(directory, 'trusted-source')
-	const secretsDirectory = join(directory, 'preview-secrets')
-	const publishLog = join(directory, 'publish.log')
-	const targets = [
-		{ directory: 'services/auth', bundle: 'index.js' },
-		{ directory: 'services/users', bundle: 'index.js' },
-		{ directory: 'apps/api', bundle: 'index.js' },
-		{ directory: 'apps/web', bundle: '_worker.js' }
-	]
-	try {
-		await Promise.all([
-			mkdir(join(trustedSource, 'scripts'), { recursive: true }),
-			mkdir(secretsDirectory, { recursive: true }),
-			...targets.map(({ directory: target, bundle }) =>
-				mkdir(join(artifactDirectory, target, '.preview-bundle'), { recursive: true }).then(() =>
-					writeFile(
-						join(artifactDirectory, target, '.preview-bundle', bundle),
-						'export default {}\n'
-					)
-				)
-			)
-		])
-		await writeFile(
-			join(trustedSource, 'scripts/cloudflare-preview-name.mjs'),
-			entry(prepared.entries, 'scripts/cloudflare-preview-name.mjs')
-		)
-		const authConfig = JSON.parse(
-			prepared.files.get('services/auth/wrangler.staging.jsonc') ?? ''
-		) as { name: string }
-		for (const { directory: target } of targets) {
-			const config = JSON.parse(prepared.files.get(`${target}/wrangler.staging.jsonc`) ?? '') as {
-				name: string
-				d1_databases?: Array<Record<string, string>>
-				services?: Array<{ binding: string; service: string }>
-			}
-			if (injectWorkerCollision && target === 'apps/api') config.name = authConfig.name
-			if (injectWorkerCollision && target === 'apps/web' && config.services) {
-				config.services = config.services.map((service) =>
-					service.binding === 'GATEWAY' ? { ...service, service: authConfig.name } : service
-				)
-			}
-			if (injectProductionRoute && target === 'apps/web') {
-				;(config as { routes?: Array<Record<string, string>> }).routes = [
-					{ pattern: 'production.example.com/*', zone_name: 'example.com' }
-				]
-			}
-			if (injectD1Binding && target === 'services/users') {
-				config.d1_databases = [
-					...(config.d1_databases ?? []),
-					{
-						binding: 'PRODUCTION',
-						database_name: 'production-db',
-						database_id: '99999999-9999-4999-8999-999999999999'
-					}
-				]
-			}
-			await writeFile(
-				join(artifactDirectory, target, 'wrangler.staging.jsonc'),
-				JSON.stringify(config)
-			)
-		}
-		await writeFile(publishLog, '')
-		const publisher = entry(prepared.entries, 'scripts/publish-cloudflare-preview.sh')
-		const child = Bun.spawn(['sh', '-s'], {
-			env: {
-				...Bun.env,
-				PREVIEW_ARTIFACT: artifactDirectory,
-				PREVIEW_SECRETS_DIR: secretsDirectory,
-				TRUSTED_SOURCE: trustedSource,
-				STAGING_ALIAS: 'pr-123',
-				CLOUDFLARE_PREVIEW_ZONE_NAME: 'example.com',
-				CLOUDFLARE_PREVIEW_WEB_DOMAIN: 'app.example.com',
-				CLOUDFLARE_PREVIEW_API_DOMAIN: 'api.example.com',
-				PUBLISH_LOG: publishLog,
-				...(db === 'sqlite'
-					? {
-							STAGING_D1_DATABASE_NAME: 'preview-123456-d1-pr-123',
-							STAGING_D1_DATABASE_ID: '11111111-1111-4111-8111-111111111111'
-						}
-					: {})
-			},
-			stdin: new Blob([`npx() { printf '%s\\n' "$*" >> "$PUBLISH_LOG"; }\n${publisher}`]),
-			stdout: 'pipe',
-			stderr: 'pipe'
-		})
-		const [exitCode, stdout, stderr] = await Promise.all([
-			child.exited,
-			new Response(child.stdout).text(),
-			new Response(child.stderr).text()
-		])
-		return { exitCode, stdout, stderr, publishLog: await readFile(publishLog, 'utf8') }
-	} finally {
-		await rm(directory, { recursive: true, force: true })
-	}
 }
 
 describe('Cloudflare gateway preview contracts', () => {
@@ -864,24 +309,38 @@ describe('Cloudflare gateway preview contracts', () => {
 		}
 		const verify = async ({ missingWildcard }: { missingWildcard?: string } = {}) => {
 			const output: string[] = []
+			const requests: string[] = []
 			await new execute(
 				'dependencies',
 				`const { fetch, process, console } = dependencies\n${source}`
 			)({
-				fetch: async (input: string) => {
+				fetch: async (input: string, init?: RequestInit) => {
 					const url = new URL(input)
+					if (url.origin !== 'https://api.cloudflare.com') throw new Error(`Unexpected origin: ${url.origin}`)
+					if (init?.method && init.method !== 'GET') throw new Error(`Unexpected method: ${init.method}`)
+					expect(init?.headers).toEqual({ Authorization: 'Bearer verification-token' })
+					requests.push(`${url.pathname}${url.search}`)
+					if (url.pathname === '/client/v4/zones') {
+						expect([...url.searchParams]).toEqual([
+							['name', 'example.com'],
+							['status', 'active']
+						])
+						return Response.json({ success: true, result: [{ id: 'zone-id' }] })
+					}
+					if (url.pathname !== '/client/v4/zones/zone-id/dns_records') throw new Error(`Unexpected Cloudflare API path: ${url.pathname}`)
 					const name = url.searchParams.get('name')
-					const result =
-						url.pathname === '/client/v4/zones'
-							? [{ id: 'zone-id' }]
-							: missingWildcard === name
-								? []
-								: [{ name, proxied: true }]
+					if (!['*.app.example.com', '*.api.example.com'].includes(name ?? '')) throw new Error(`Unexpected DNS inventory name: ${name}`)
+					const result = missingWildcard === name ? [] : [{ name, proxied: true }]
 					return Response.json({ success: true, result })
 				},
 				process: { env },
 				console: { log: (value: string) => output.push(value) }
 			})
+			expect(requests).toEqual([
+				'/client/v4/zones?name=example.com&status=active',
+				'/client/v4/zones/zone-id/dns_records?name=*.app.example.com',
+				'/client/v4/zones/zone-id/dns_records?name=*.api.example.com'
+			])
 			return output.join('\n')
 		}
 
@@ -1120,57 +579,6 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(cleanup).not.toContain('find "$@" -name wrangler.jsonc')
 		expect(cleanup).not.toContain('|| true')
 
-		const inventoryFailure = await runCleanupScript({
-			source: cleanup,
-			mode: 'inventory-failure',
-			validWorkers: driftedWorkers
-		})
-		expect(inventoryFailure.exitCode).toBe(1)
-		expect(inventoryFailure.stderr).toContain(
-			'Could not inventory preview Workers from Cloudflare.'
-		)
-
-		const malformedInventory = await runCleanupScript({
-			source: cleanup,
-			mode: 'malformed-inventory',
-			validWorkers: driftedWorkers
-		})
-		expect(malformedInventory.exitCode).toBe(1)
-		expect(malformedInventory.stderr).toContain(
-			'Cloudflare returned a malformed preview Worker inventory.'
-		)
-
-		const deletionFailure = await runCleanupScript({
-			source: cleanup,
-			mode: 'delete-failure',
-			validWorkers: driftedWorkers
-		})
-		expect(deletionFailure.exitCode).toBe(1)
-		expect(deletionFailure.stderr).toContain('mock Worker deletion failure')
-		expect(deletionFailure.stderr).toContain('1 preview Worker deletion(s) failed.')
-		for (const worker of driftedWorkers) expect(deletionFailure.stdout).toContain(`Deleting ${worker}`)
-
-		const missingWorkers = await runCleanupScript({
-			source: cleanup,
-			mode: 'missing',
-			validWorkers: driftedWorkers
-		})
-		expect(missingWorkers.exitCode).toBe(0)
-		expect(missingWorkers.stdout).not.toContain('Deleting ')
-
-		const success = await runCleanupScript({
-			source: cleanup,
-			mode: 'success',
-			validWorkers: driftedWorkers
-		})
-		expect(success.exitCode).toBe(0)
-		for (const worker of driftedWorkers) {
-			expect(success.stdout).toContain(`Deleting ${worker}`)
-			expect(success.stdout).toContain(`Deleted ${worker} and its attached preview routes.`)
-		}
-		expect(success.stdout).not.toContain('demo-web')
-		expect(success.stdout).not.toContain('pv-unrelated-project-worker-pr-123')
-
 		expect(names.validateCloudflarePreviewAlias('pr-123')).toBe('pr-123')
 		expect(() => names.validateCloudflarePreviewAlias('demo-web')).toThrow()
 		expect(() => names.validateCloudflarePreviewAlias('pr-0')).toThrow()
@@ -1190,11 +598,25 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(workflow).toContain('Preview cleanup completed with $failures failed resource group(s).')
 	})
 
-	test('database cleanup survives project and naming drift within the repository preview namespace', async () => {
+	test('database cleanup keeps durable bounded provider contracts', () => {
 		for (const provider of ['d1', 'neon'] as const) {
-			expect(databaseCleanupSource(provider, 'renamed-project')).toBe(
-				databaseCleanupSource(provider, 'demo')
+			const cleanup = databaseCleanupSource(provider)
+			expect(databaseCleanupSource(provider, 'renamed-project')).toBe(cleanup)
+			expect(cleanup).toContain(
+				provider === 'd1'
+					? 'Cloudflare returned duplicate preview D1 identities.'
+					: 'Neon returned duplicate preview branch identities.'
 			)
+			expect(cleanup).toContain(
+				provider === 'd1'
+					? 'Cloudflare returned an unsafe preview D1 identity.'
+					: 'Neon returned an unsafe preview branch identity.'
+			)
+			if (provider === 'neon') {
+				expect(cleanup).toContain(
+					'Neon refused cleanup of a default or protected preview branch.'
+				)
+			}
 
 			const staging = entry(
 				generateDeploy(makeCfg({ db: provider === 'd1' ? 'sqlite' : 'postgres' })),
@@ -1205,136 +627,20 @@ describe('Cloudflare gateway preview contracts', () => {
 					? 'preview-${{ github.repository_id }}-d1-${{ steps.meta.outputs.alias }}'
 					: 'preview-${{ github.repository_id }}-neon-$alias'
 			)
-
-			const success = await runDatabaseCleanup({ provider, mode: 'success' })
-			expect(success.exitCode, success.stderr).toBe(0)
-			if (provider === 'd1') {
-				for (const candidate of success.d1Candidates) {
-					expect(success.stdout).toContain(`delete:${candidate.uuid}`)
-					expect(success.stdout).toContain(`${candidate.name} (${candidate.uuid})`)
-				}
-				expect(success.stdout).not.toContain('33333333-3333-4333-8333-333333333333')
-				expect(success.stdout).not.toContain('44444444-4444-4444-8444-444444444444')
-			} else {
-				for (const candidate of success.neonCandidates) {
-					expect(success.stderr).toContain(`/branches/${candidate.id}`)
-					expect(success.stdout).toContain(`${candidate.name} (${candidate.id})`)
-				}
-				expect(success.stderr).not.toContain('/branches/br-production')
-				expect(success.stderr).not.toContain('/branches/br-unrelated')
-			}
-
-			const wrongGeneration = await runDatabaseCleanup({
-				provider,
-				mode: 'success',
-				manifestGeneration: 'pull_request_target'
-			})
-			expect(wrongGeneration.exitCode).toBe(1)
-			expect(wrongGeneration.stderr).toContain(
-				provider === 'd1'
-					? 'Recorded preview D1 identity is malformed'
-					: 'Recorded preview Neon identity is malformed'
-			)
-			expect(wrongGeneration.stdout).not.toContain('delete:')
-
-			const duplicateProviderId = await runDatabaseCleanup({
-				provider,
-				mode: 'duplicate-provider-id'
-			})
-			expect(duplicateProviderId.exitCode).toBe(1)
-			expect(duplicateProviderId.stderr).toContain(
-				provider === 'd1'
-					? 'Cloudflare returned duplicate preview D1 identities.'
-					: 'Neon returned duplicate preview branch identities.'
-			)
-			expect(duplicateProviderId.stdout).not.toContain('delete:')
-			if (provider === 'neon') {
-				expect(duplicateProviderId.stderr).not.toContain('/branches/br-preview-123')
-				for (const mode of ['default-branch', 'protected-branch'] as const) {
-					const unsafeOwnership = await runDatabaseCleanup({ provider, mode })
-					expect(unsafeOwnership.exitCode).toBe(1)
-					expect(unsafeOwnership.stderr).toContain(
-						'Neon refused cleanup of a default or protected preview branch.'
-					)
-					expect(unsafeOwnership.stderr).not.toContain('/branches/br-preview-123')
-				}
-			}
-
-			const malformed = await runDatabaseCleanup({ provider, mode: 'malformed-identity' })
-			expect(malformed.exitCode).toBe(1)
-			expect(malformed.stderr).toContain(
-				provider === 'd1'
-					? 'Cloudflare returned an unsafe preview D1 identity.'
-					: 'Neon returned an unsafe preview branch identity.'
-			)
-			expect(malformed.stdout).not.toContain('delete:')
-			if (provider === 'neon') expect(malformed.stderr).not.toContain('/branches/br-preview')
-
-			const missing = await runDatabaseCleanup({ provider, mode: 'missing' })
-			expect(missing.exitCode, missing.stderr).toBe(0)
-			expect(missing.stdout).not.toContain('delete:')
-			if (provider === 'neon') expect(missing.stderr).not.toContain('/branches/')
-
-			const partial = await runDatabaseCleanup({ provider, mode: 'partial-failure' })
-			expect(partial.exitCode).toBe(1)
-			if (provider === 'd1') {
-				for (const candidate of partial.d1Candidates) expect(partial.stdout).toContain(`delete:${candidate.uuid}`)
-				expect(partial.stderr).toContain('1 preview D1 database deletion(s) failed.')
-			} else {
-				for (const candidate of partial.neonCandidates) expect(partial.stderr).toContain(`/branches/${candidate.id}`)
-				expect(partial.stderr).toContain('1 preview Neon branch deletion(s) failed.')
-			}
 		}
 	})
 
-	test('legacy inventories are bound to their exact PR and historical artifact identity', async () => {
-		const valid = await runLegacyInventoryDownload()
-		expect(valid.exitCode, valid.stderr).toBe(0)
-		expect(valid.githubOutput).toBe('authenticated_count=1\n')
-		expect(valid.requestLog).toContain(
-			'/contents/.github/workflows/deploy-staging.yml?ref=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+	test('inventory authentication and incomplete cleanup remain fail-closed', () => {
+		const workflow = entry(generateDeploy(makeCfg()), '.github/workflows/cleanup-staging.yml')
+		expect(workflow).toContain(
+			'("pr-" + (.pull_requests[0].number | tostring)) == $preview_alias'
 		)
-		expect(valid.requestLog).toContain('/actions/artifacts/888/zip')
-
-		const crossPr = await runLegacyInventoryDownload({ prNumber: 999 })
-		expect(crossPr.exitCode).toBe(1)
-		expect(crossPr.stderr).toContain('has no trusted successful deployment run.')
-		expect(crossPr.requestLog).not.toContain('/actions/artifacts/888/zip')
-
-		const forgedArtifact = await runLegacyInventoryDownload({ artifactRunSuffix: 999 })
-		expect(forgedArtifact.exitCode).toBe(1)
-		expect(forgedArtifact.stderr).toContain(
-			'does not match its trusted deployment generation.'
+		expect(workflow).toContain('expected_artifact_name="$prefix-$run_id"')
+		expect(workflow).toContain('[ "$artifact_name" != "$expected_artifact_name" ]')
+		expect(workflow).toContain('authenticated_count=$artifact_count')
+		expect(workflow).toContain(
+			'No authenticated preview deployment inventory exists for $PREVIEW_ALIAS; cleanup is incomplete.'
 		)
-		expect(forgedArtifact.requestLog).not.toContain('/actions/artifacts/888/zip')
-	})
-
-	test('empty authenticated inventory fails the result after safe bounded database cleanup', async () => {
-		for (const provider of ['d1', 'neon'] as const) {
-			const inventory = await runEmptyInventoryDownload(provider)
-			expect(inventory.exitCode, inventory.stderr).toBe(0)
-			expect(inventory.githubOutput).toBe('authenticated_count=0\n')
-
-			const database = await runDatabaseCleanup({
-				provider,
-				mode: 'success',
-				manifestGeneration: 'none'
-			})
-			expect(database.exitCode, database.stderr).toBe(0)
-			if (provider === 'd1') {
-				for (const candidate of database.d1Candidates.slice(0, 2)) expect(database.stdout).toContain(`delete:${candidate.uuid}`)
-				expect(database.stdout).not.toContain(`delete:${database.d1Candidates[2]!.uuid}`)
-			} else {
-				for (const candidate of database.neonCandidates.slice(0, 2)) expect(database.stderr).toContain(`/branches/${candidate.id}`)
-				expect(database.stderr).not.toContain(`/branches/${database.neonCandidates[2]!.id}`)
-			}
-
-			const result = await runCleanupResult({ provider, authenticatedCount: '0' })
-			expect(result.exitCode).toBe(1)
-			expect(result.stderr).toContain(
-				'No authenticated preview deployment inventory exists for pr-123; cleanup is incomplete.'
-			)
-		}
 	})
 
 	test('provider credentials never reach PR-controlled processes', async () => {
@@ -1386,30 +692,8 @@ describe('Cloudflare gateway preview contracts', () => {
 			expect(publisher).toContain('--no-bundle')
 			expect(publisher).not.toMatch(/pnpm|turbo|node_modules/)
 
-			const validPublish = await runTrustedPublisher({ db })
-			expect(validPublish.exitCode, validPublish.stderr).toBe(0)
-			expect(validPublish.publishLog.trim().split('\n')).toHaveLength(4)
-
-			const injectedBinding = await runTrustedPublisher({ db, injectD1Binding: true })
-			expect(injectedBinding.exitCode).toBe(1)
-			expect(injectedBinding.stderr).toContain(
-				db === 'sqlite'
-					? 'Preview D1 bindings are unsafe for services/users.'
-					: 'Preview D1 bindings are forbidden for services/users.'
-			)
-			expect(injectedBinding.publishLog).toBe('')
-
-			const injectedRoute = await runTrustedPublisher({ db, injectProductionRoute: true })
-			expect(injectedRoute.exitCode).toBe(1)
-			expect(injectedRoute.stderr).toContain('Preview routes are unsafe for apps/web.')
-			expect(injectedRoute.publishLog).toBe('')
-
-			const injectedCollision = await runTrustedPublisher({ db, injectWorkerCollision: true })
-			expect(injectedCollision.exitCode).toBe(1)
-			expect(injectedCollision.stderr).toContain('Preview Worker name is unsafe for apps/api.')
-			expect(injectedCollision.publishLog).toBe('')
 		}
-	}, 15_000)
+	})
 
 	test('web Worker never handles inbound browser API aliases', () => {
 		const entries = runGenerators(makeCfg())

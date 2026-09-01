@@ -39,10 +39,7 @@ function setupNarrationFindings(path: string, source: string): string[] {
 	const scanner = ts.createScanner(ts.ScriptTarget.Latest, false, ts.LanguageVariant.Standard, source)
 	const findings: string[] = []
 	for (let kind = scanner.scan(); kind !== ts.SyntaxKind.EndOfFileToken; kind = scanner.scan()) {
-		if (
-			kind !== ts.SyntaxKind.SingleLineCommentTrivia &&
-			kind !== ts.SyntaxKind.MultiLineCommentTrivia
-		) continue
+		if (kind !== ts.SyntaxKind.SingleLineCommentTrivia && kind !== ts.SyntaxKind.MultiLineCommentTrivia) continue
 		const comment = scanner.getTokenText()
 		if (!/\b(?:replace|configure|set[ -]?up)\b/i.test(comment)) continue
 		const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
@@ -79,14 +76,7 @@ describe('gateway source standards', () => {
 		expect(source).not.toMatch(/\bBun\.(?:write|file\([^)]*\)\.writer)\b/)
 		const subprocessCommands: string[] = []
 		function visit(node: ts.Node): void {
-			if (
-				ts.isCallExpression(node) &&
-				ts.isPropertyAccessExpression(node.expression) &&
-				node.expression.expression.getText(sourceFile) === 'Bun' &&
-				node.expression.name.text === 'spawn'
-			) {
-				subprocessCommands.push(node.arguments[0]?.getText(sourceFile) ?? '')
-			}
+			if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.expression.getText(sourceFile) === 'Bun' && node.expression.name.text === 'spawn') subprocessCommands.push(node.arguments[0]?.getText(sourceFile) ?? '')
 			ts.forEachChild(node, visit)
 		}
 		visit(sourceFile)

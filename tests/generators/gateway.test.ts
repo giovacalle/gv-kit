@@ -121,11 +121,7 @@ describe('generateGateway', () => {
 		).toThrow(
 			'fragment "users" path "/api/v1/invoices/list" routes to "auth" through the more specific prefix "/api/v1/invoices"'
 		)
-		for (const guidance of [renderCoreStackRule(cfg, services), renderApiTopology(cfg, services)]) {
-			for (const prefix of ['/api/v1/invoices/*', '/api/v1/users/*']) {
-				expect(guidance).toContain(prefix)
-			}
-		}
+		for (const guidance of [renderCoreStackRule(cfg, services), renderApiTopology(cfg, services)]) for (const prefix of ['/api/v1/invoices/*', '/api/v1/users/*']) expect(guidance).toContain(prefix)
 	})
 
 	test('renders and routes every prefix owned by a synthetic multi-prefix service', async () => {
@@ -292,9 +288,7 @@ describe('generateGateway', () => {
 				'/api/v1/*',
 				'/api/profiles/me/*',
 				'/api/profiles/*'
-			]) {
-				expect(guidance).toContain(prefix)
-			}
+			]) expect(guidance).toContain(prefix)
 		}
 	})
 })

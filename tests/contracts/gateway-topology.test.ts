@@ -36,6 +36,7 @@ const gatewayOwnedSourcePaths = [
 	'scripts/verify-gateway-cloudflare.ts',
 	'scripts/verify-gateway-docker.ts',
 	'scripts/verify-gateway-local.ts',
+	'scripts/verify-gateway-preview-security.ts',
 	'scripts/verify-gateway-scaffold-matrix.ts',
 	'src/generators/api.ts',
 	'src/generators/backend.ts',
@@ -55,9 +56,11 @@ const gatewayOwnedSourcePaths = [
 	'tests/contracts/gateway-preview-workflows.test.ts',
 	'tests/contracts/gateway-rollout-compatibility.test.ts',
 	'tests/contracts/gateway-scaffold-matrix.test.ts',
+	'tests/contracts/gateway-source-standards.test.ts',
 	'tests/contracts/gateway-streaming.test.ts',
 	'tests/contracts/gateway-topology.test.ts',
 	'tests/contracts/users-bindings.test.ts',
+	'tests/generators/gateway.test.ts',
 	'tests/generators/hono-topology.test.ts'
 ]
 
@@ -74,6 +77,7 @@ const gatewayEffortSourcePaths = [
 	'scripts/verify-gateway-cloudflare.ts',
 	'scripts/verify-gateway-docker.ts',
 	'scripts/verify-gateway-local.ts',
+	'scripts/verify-gateway-preview-security.ts',
 	'scripts/verify-gateway-scaffold-matrix.ts',
 	'src/generators/ai-tooling-claude.ts',
 	'src/generators/ai-tooling-codex.ts',
@@ -107,6 +111,7 @@ const gatewayEffortSourcePaths = [
 	'tests/contracts/gateway-preview-workflows.test.ts',
 	'tests/contracts/gateway-rollout-compatibility.test.ts',
 	'tests/contracts/gateway-scaffold-matrix.test.ts',
+	'tests/contracts/gateway-source-standards.test.ts',
 	'tests/contracts/gateway-streaming.test.ts',
 	'tests/contracts/gateway-topology.test.ts',
 	'tests/contracts/inside-frontend-bindings.test.ts',
@@ -115,6 +120,7 @@ const gatewayEffortSourcePaths = [
 	'tests/generators/ai-tooling.test.ts',
 	'tests/generators/deploy.test.ts',
 	'tests/generators/frontend-sveltekit.test.ts',
+	'tests/generators/gateway.test.ts',
 	'tests/generators/hono-topology.test.ts',
 	'tests/generators/openapi-client.test.ts',
 	'tests/generators/root.test.ts',
@@ -266,6 +272,34 @@ function positionalParameterFindings(path: string, source: string): string[] {
 	return findings
 }
 
+function genericVerifierHelperNameFindings(path: string, source: string): string[] {
+	if (!/^scripts\/verify-.*\.ts$/.test(path)) return []
+
+	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
+	const findings: string[] = []
+
+	function visit(node: ts.Node) {
+		const isGenericFunctionDeclaration =
+			ts.isFunctionDeclaration(node) && node.name?.text === 'run'
+		const isGenericMethod = ts.isMethodDeclaration(node) && node.name.getText(sourceFile) === 'run'
+		const isGenericVariable =
+			ts.isVariableDeclaration(node) &&
+			ts.isIdentifier(node.name) &&
+			node.name.text === 'run' &&
+			(node.initializer === undefined ||
+				ts.isArrowFunction(node.initializer) ||
+				ts.isFunctionExpression(node.initializer))
+		if (isGenericFunctionDeclaration || isGenericMethod || isGenericVariable) {
+			const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile))
+			findings.push(`${path}:${line + 1} generic verifier helper name run`)
+		}
+		ts.forEachChild(node, visit)
+	}
+
+	visit(sourceFile)
+	return findings
+}
+
 function dynamicSourceParameterFindings(path: string, source: string): string[] {
 	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
 	const findings: string[] = []
@@ -351,7 +385,10 @@ function isProtectedComment(comment: string): boolean {
 
 function sourceStandardFindings(path: string, source: string): string[] {
 	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
-	const findings = positionalParameterFindings(path, source)
+	const findings = [
+		...positionalParameterFindings(path, source),
+		...genericVerifierHelperNameFindings(path, source)
+	]
 	const literalRanges: Array<{ start: number; end: number }> = []
 
 	function visit(node: ts.Node) {
@@ -624,6 +661,12 @@ describe('local private-service gateway topology', () => {
 				"new AsyncFunction('filesystem', 'path', 'process', source)"
 			)
 		).toEqual(['sample.ts:1 3 dynamic positional parameters'])
+		expect(
+			genericVerifierHelperNameFindings(
+				'scripts/verify-sample.ts',
+				'async function run() {}'
+			)
+		).toEqual(['scripts/verify-sample.ts:1 generic verifier helper name run'])
 	})
 
 	test('source standards reject bound rest helpers without rejecting API callbacks', () => {
@@ -716,6 +759,17 @@ describe('local private-service gateway topology', () => {
 		const findings = gatewayOwnedSourcePaths.flatMap((path) =>
 			sourceStandardFindings(path, readFileSync(join(fixturesDir, '..', path), 'utf8'))
 		)
+		expect(findings).toEqual([])
+	})
+
+	test('gateway effort source uses named options and outcome-oriented verifier names', () => {
+		const findings = gatewayEffortSourcePaths.flatMap((path) => {
+			const source = readFileSync(join(fixturesDir, '..', path), 'utf8')
+			return [
+				...positionalParameterFindings(path, source),
+				...genericVerifierHelperNameFindings(path, source)
+			]
+		})
 		expect(findings).toEqual([])
 	})
 

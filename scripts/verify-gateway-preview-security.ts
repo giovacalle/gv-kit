@@ -64,11 +64,17 @@ function requirePassed(result: ProbeResult, name: string): void {
 	if (result.exitCode !== 0) throw new Error(`${name} failed:\n${result.stderr || result.stdout}`)
 }
 
-function requireRejected(result: ProbeResult, name: string, message: string): void {
+function requireRejected({
+	result,
+	name,
+	message
+}: {
+	result: ProbeResult
+	name: string
+	message: string
+}): void {
 	if (result.exitCode === 0) throw new Error(`${name} unexpectedly passed`)
-	if (!result.stderr.includes(message)) {
-		throw new Error(`${name} did not fail with ${JSON.stringify(message)}:\n${result.stderr}`)
-	}
+	if (!result.stderr.includes(message)) throw new Error(`${name} did not fail with ${JSON.stringify(message)}:\n${result.stderr}`)
 }
 
 async function readOptional(path: string): Promise<string> {
@@ -106,7 +112,7 @@ async function verifyLegacyInventoryAuthentication({
 		}
 	})
 
-	async function run({
+	async function probeLegacyInventoryAuthentication({
 		name,
 		prNumber = Number(alias.slice(3)),
 		artifactRunSuffix = 777,
@@ -207,43 +213,36 @@ unzip() {
 		}
 	}
 
-	const valid = await run({ name: 'valid' })
+	const valid = await probeLegacyInventoryAuthentication({ name: 'valid' })
 	requirePassed(valid, 'legacy preview inventory authentication')
-	if (valid.output !== 'authenticated_count=1\n') {
-		throw new Error('legacy preview inventory did not record one authenticated artifact')
-	}
-	if (!valid.requests.includes('/actions/artifacts/888/zip')) {
-		throw new Error('legacy preview inventory did not download the authenticated artifact')
-	}
+	if (valid.output !== 'authenticated_count=1\n') throw new Error('legacy preview inventory did not record one authenticated artifact')
+	if (!valid.requests.includes('/actions/artifacts/888/zip')) throw new Error('legacy preview inventory did not download the authenticated artifact')
 
-	const crossPr = await run({
+	const crossPr = await probeLegacyInventoryAuthentication({
 		name: 'cross-pr',
 		prNumber: Number(alias.slice(3)) + 1
 	})
-	requireRejected(
-		crossPr,
-		'cross-PR preview inventory',
-		'has no trusted successful deployment run.'
-	)
-	if (crossPr.requests.includes('/actions/artifacts/888/zip')) {
-		throw new Error('cross-PR preview inventory reached artifact download')
-	}
+	requireRejected({
+		result: crossPr,
+		name: 'cross-PR preview inventory',
+		message: 'has no trusted successful deployment run.'
+	})
+	if (crossPr.requests.includes('/actions/artifacts/888/zip')) throw new Error('cross-PR preview inventory reached artifact download')
 
-	const forged = await run({ name: 'forged-artifact', artifactRunSuffix: 999 })
-	requireRejected(
-		forged,
-		'forged preview inventory artifact',
-		'does not match its trusted deployment generation.'
-	)
-	if (forged.requests.includes('/actions/artifacts/888/zip')) {
-		throw new Error('forged preview inventory reached artifact download')
-	}
+	const forged = await probeLegacyInventoryAuthentication({
+		name: 'forged-artifact',
+		artifactRunSuffix: 999
+	})
+	requireRejected({
+		result: forged,
+		name: 'forged preview inventory artifact',
+		message: 'does not match its trusted deployment generation.'
+	})
+	if (forged.requests.includes('/actions/artifacts/888/zip')) throw new Error('forged preview inventory reached artifact download')
 
-	const empty = await run({ name: 'empty', empty: true })
+	const empty = await probeLegacyInventoryAuthentication({ name: 'empty', empty: true })
 	requirePassed(empty, 'empty preview inventory download')
-	if (empty.output !== 'authenticated_count=0\n') {
-		throw new Error('empty preview inventory did not record zero authenticated artifacts')
-	}
+	if (empty.output !== 'authenticated_count=0\n') throw new Error('empty preview inventory did not record zero authenticated artifacts')
 
 	return ['legacy-artifact-valid', 'legacy-artifact-cross-pr', 'legacy-artifact-forged', 'empty-artifact-inventory']
 }
@@ -269,11 +268,11 @@ async function verifyCleanupResult({
 			PREVIEW_ALIAS: alias
 		}
 	})
-	requireRejected(
+	requireRejected({
 		result,
-		'empty authenticated preview inventory result',
-		`No authenticated preview deployment inventory exists for ${alias}; cleanup is incomplete.`
-	)
+		name: 'empty authenticated preview inventory result',
+		message: `No authenticated preview deployment inventory exists for ${alias}; cleanup is incomplete.`
+	})
 	return 'empty-artifact-result-fail-closed'
 }
 
@@ -333,7 +332,7 @@ printf '%s\\n' "$4" >> "$WORKER_CLEANUP_DELETION_LOG"
 		{ mode: 0o755 }
 	)
 
-	async function run({
+	async function probeWorkerCleanup({
 		mode,
 		inventory,
 		failureName = ''
@@ -374,50 +373,49 @@ printf '%s\\n' "$4" >> "$WORKER_CLEANUP_DELETION_LOG"
 			{ id: 'pv-unrelated-project-worker-pr-123' }
 		]
 	}
-	const inventoryFailure = await run({ mode: 'inventory-failure', inventory: safeInventory })
-	requireRejected(
-		inventoryFailure,
-		'Worker inventory failure',
-		'Could not inventory preview Workers from Cloudflare.'
-	)
+	const inventoryFailure = await probeWorkerCleanup({
+		mode: 'inventory-failure',
+		inventory: safeInventory
+	})
+	requireRejected({
+		result: inventoryFailure,
+		name: 'Worker inventory failure',
+		message: 'Could not inventory preview Workers from Cloudflare.'
+	})
 
-	const malformed = await run({
+	const malformed = await probeWorkerCleanup({
 		mode: 'malformed',
 		inventory: { success: true, errors: [], messages: [], result: [{ id: 42 }] }
 	})
-	requireRejected(
-		malformed,
-		'malformed Worker inventory',
-		'Cloudflare returned a malformed preview Worker inventory.'
-	)
+	requireRejected({
+		result: malformed,
+		name: 'malformed Worker inventory',
+		message: 'Cloudflare returned a malformed preview Worker inventory.'
+	})
 	if (malformed.deletions.length !== 0) throw new Error('malformed Worker inventory reached deletion')
 
-	const deletionFailure = await run({
+	const deletionFailure = await probeWorkerCleanup({
 		mode: 'delete-failure',
 		inventory: safeInventory,
 		failureName: validWorkers[0]!
 	})
-	requireRejected(
-		deletionFailure,
-		'Worker deletion failure',
-		'1 preview Worker deletion(s) failed.'
-	)
-	if (JSON.stringify(deletionFailure.deletions.sort()) !== JSON.stringify([...validWorkers].sort())) {
-		throw new Error('Worker cleanup did not attempt every bounded candidate after one failure')
-	}
+	requireRejected({
+		result: deletionFailure,
+		name: 'Worker deletion failure',
+		message: '1 preview Worker deletion(s) failed.'
+	})
+	if (JSON.stringify(deletionFailure.deletions.sort()) !== JSON.stringify([...validWorkers].sort())) throw new Error('Worker cleanup did not attempt every bounded candidate after one failure')
 
-	const missing = await run({
+	const missing = await probeWorkerCleanup({
 		mode: 'missing',
 		inventory: { success: true, errors: [], messages: [], result: [] }
 	})
 	requirePassed(missing, 'missing Worker cleanup inventory')
 	if (missing.deletions.length !== 0) throw new Error('missing Worker inventory reached deletion')
 
-	const success = await run({ mode: 'success', inventory: safeInventory })
+	const success = await probeWorkerCleanup({ mode: 'success', inventory: safeInventory })
 	requirePassed(success, 'bounded Worker cleanup inventory')
-	if (JSON.stringify(success.deletions.sort()) !== JSON.stringify([...validWorkers].sort())) {
-		throw new Error('Worker cleanup crossed its validated preview namespace')
-	}
+	if (JSON.stringify(success.deletions.sort()) !== JSON.stringify([...validWorkers].sort())) throw new Error('Worker cleanup crossed its validated preview namespace')
 
 	return [
 		'worker-inventory-failure',
@@ -535,7 +533,7 @@ exit 92
 		)
 	}
 
-	async function run({
+	async function probeDatabaseCleanup({
 		name,
 		records,
 		manifestGeneration = 'pull_request',
@@ -593,12 +591,10 @@ exit 92
 	}
 
 	const successRecords = [...stableRecords, legacyRecord, unrelatedRecord]
-	const success = await run({ name: 'success', records: successRecords })
+	const success = await probeDatabaseCleanup({ name: 'success', records: successRecords })
 	requirePassed(success, `${provider} preview database cleanup`)
 	const expectedSuccess = [previewId, driftedId, legacyId].sort()
-	if (JSON.stringify(success.deletions.sort()) !== JSON.stringify(expectedSuccess)) {
-		throw new Error(`${provider} cleanup did not delete the exact bounded inventory`)
-	}
+	if (JSON.stringify(success.deletions.sort()) !== JSON.stringify(expectedSuccess)) throw new Error(`${provider} cleanup did not delete the exact bounded inventory`)
 
 	const sharedId = previewId
 	const duplicateRecords =
@@ -608,7 +604,7 @@ exit 92
 					{ name: 'verification-db', id: sharedId }
 				]
 			: [{ name: previewName, id: sharedId, default: false, protected: false }]
-	const duplicate = await run({
+	const duplicate = await probeDatabaseCleanup({
 		name: 'duplicate',
 		records: duplicateRecords,
 		pageTwoRecords:
@@ -616,13 +612,14 @@ exit 92
 				? [{ name: 'verification-db', id: sharedId, default: true, protected: true }]
 				: []
 	})
-	requireRejected(
-		duplicate,
-		`${provider} duplicate provider identity`,
-		provider === 'd1'
-			? 'Cloudflare returned duplicate preview D1 identities.'
-			: 'Neon returned duplicate preview branch identities.'
-	)
+	requireRejected({
+		result: duplicate,
+		name: `${provider} duplicate provider identity`,
+		message:
+			provider === 'd1'
+				? 'Cloudflare returned duplicate preview D1 identities.'
+				: 'Neon returned duplicate preview branch identities.'
+	})
 	if (duplicate.deletions.length !== 0) throw new Error(`${provider} duplicate identity reached deletion`)
 
 	const malformedRecords =
@@ -636,19 +633,20 @@ exit 92
 						protected: false
 					}
 				]
-	const malformed = await run({ name: 'malformed', records: malformedRecords })
-	requireRejected(
-		malformed,
-		`${provider} malformed provider identity`,
-		provider === 'd1'
-			? 'Cloudflare returned an unsafe preview D1 identity.'
-			: 'Neon returned an unsafe preview branch identity.'
-	)
+	const malformed = await probeDatabaseCleanup({ name: 'malformed', records: malformedRecords })
+	requireRejected({
+		result: malformed,
+		name: `${provider} malformed provider identity`,
+		message:
+			provider === 'd1'
+				? 'Cloudflare returned an unsafe preview D1 identity.'
+				: 'Neon returned an unsafe preview branch identity.'
+	})
 	if (malformed.deletions.length !== 0) throw new Error(`${provider} malformed identity reached deletion`)
 
 	if (provider === 'neon') {
 		for (const ownership of ['default', 'protected'] as const) {
-			const unsafe = await run({
+			const unsafe = await probeDatabaseCleanup({
 				name: ownership,
 				records: [
 					{
@@ -659,56 +657,50 @@ exit 92
 					}
 				]
 			})
-			requireRejected(
-				unsafe,
-				`Neon ${ownership} preview branch`,
-				'Neon refused cleanup of a default or protected preview branch.'
-			)
+			requireRejected({
+				result: unsafe,
+				name: `Neon ${ownership} preview branch`,
+				message: 'Neon refused cleanup of a default or protected preview branch.'
+			})
 			if (unsafe.deletions.length !== 0) throw new Error(`Neon ${ownership} branch reached deletion`)
 		}
 	}
 
-	const wrongGeneration = await run({
+	const wrongGeneration = await probeDatabaseCleanup({
 		name: 'wrong-generation',
 		records: successRecords,
 		manifestGeneration: 'pull_request_target'
 	})
-	requireRejected(
-		wrongGeneration,
-		`${provider} wrong manifest generation`,
-		`Recorded preview ${provider === 'd1' ? 'D1' : 'Neon'} identity is malformed`
-	)
-	if (wrongGeneration.deletions.length !== 0) {
-		throw new Error(`${provider} wrong manifest generation reached deletion`)
-	}
+	requireRejected({
+		result: wrongGeneration,
+		name: `${provider} wrong manifest generation`,
+		message: `Recorded preview ${provider === 'd1' ? 'D1' : 'Neon'} identity is malformed`
+	})
+	if (wrongGeneration.deletions.length !== 0) throw new Error(`${provider} wrong manifest generation reached deletion`)
 
-	const missing = await run({ name: 'missing', records: [] })
+	const missing = await probeDatabaseCleanup({ name: 'missing', records: [] })
 	requirePassed(missing, `${provider} missing preview database cleanup`)
 	if (missing.deletions.length !== 0) throw new Error(`${provider} missing inventory reached deletion`)
 
-	const partial = await run({
+	const partial = await probeDatabaseCleanup({
 		name: 'partial',
 		records: successRecords,
 		failureId: previewId
 	})
-	requireRejected(
-		partial,
-		`${provider} partial cleanup failure`,
-		`1 preview ${provider === 'd1' ? 'D1 database' : 'Neon branch'} deletion(s) failed.`
-	)
-	if (JSON.stringify(partial.deletions.sort()) !== JSON.stringify(expectedSuccess)) {
-		throw new Error(`${provider} partial cleanup did not attempt every bounded candidate`)
-	}
+	requireRejected({
+		result: partial,
+		name: `${provider} partial cleanup failure`,
+		message: `1 preview ${provider === 'd1' ? 'D1 database' : 'Neon branch'} deletion(s) failed.`
+	})
+	if (JSON.stringify(partial.deletions.sort()) !== JSON.stringify(expectedSuccess)) throw new Error(`${provider} partial cleanup did not attempt every bounded candidate`)
 
-	const noManifest = await run({
+	const noManifest = await probeDatabaseCleanup({
 		name: 'no-manifest',
 		records: successRecords,
 		manifestGeneration: 'none'
 	})
 	requirePassed(noManifest, `${provider} cleanup without an authenticated inventory`)
-	if (JSON.stringify(noManifest.deletions.sort()) !== JSON.stringify([previewId, driftedId].sort())) {
-		throw new Error(`${provider} cleanup without a manifest crossed the stable namespace`)
-	}
+	if (JSON.stringify(noManifest.deletions.sort()) !== JSON.stringify([previewId, driftedId].sort())) throw new Error(`${provider} cleanup without a manifest crossed the stable namespace`)
 
 	return [
 		`${provider}-exact-cleanup`,
@@ -802,7 +794,9 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 		{ mode: 0o755 }
 	)
 
-	async function run(mode: 'valid' | 'd1-binding' | 'route' | 'collision'): Promise<ProbeResult & { invocations: string[] }> {
+	async function probeTrustedPublisher(
+		mode: 'valid' | 'd1-binding' | 'route' | 'collision'
+	): Promise<ProbeResult & { invocations: string[] }> {
 		await resetDirectory(artifact)
 		await writeFile(publishLog, '')
 		const authName = configs['services/auth']?.name
@@ -819,9 +813,7 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 					service.binding === 'GATEWAY' ? { ...service, service: authName } : service
 				)
 			}
-			if (mode === 'route' && worker.directory === 'apps/web') {
-				config.routes = [{ pattern: 'production.example.com/*', zone_name: 'example.com' }]
-			}
+			if (mode === 'route' && worker.directory === 'apps/web') config.routes = [{ pattern: 'production.example.com/*', zone_name: 'example.com' }]
 			if (mode === 'd1-binding' && worker.directory === 'services/users') {
 				config.d1_databases = [
 					...(config.d1_databases ?? []),
@@ -864,32 +856,35 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 		}
 	}
 
-	const valid = await run('valid')
+	const valid = await probeTrustedPublisher('valid')
 	requirePassed(valid, 'trusted preview publisher')
-	if (valid.invocations.length !== workers.length) {
-		throw new Error('trusted preview publisher did not invoke Wrangler once per Worker')
-	}
+	if (valid.invocations.length !== workers.length) throw new Error('trusted preview publisher did not invoke Wrangler once per Worker')
 
-	const binding = await run('d1-binding')
-	requireRejected(
-		binding,
-		'unsafe preview D1 binding',
-		provider === 'd1'
-			? 'Preview D1 bindings are unsafe for services/users.'
-			: 'Preview D1 bindings are forbidden for services/users.'
-	)
+	const binding = await probeTrustedPublisher('d1-binding')
+	requireRejected({
+		result: binding,
+		name: 'unsafe preview D1 binding',
+		message:
+			provider === 'd1'
+				? 'Preview D1 bindings are unsafe for services/users.'
+				: 'Preview D1 bindings are forbidden for services/users.'
+	})
 	if (binding.invocations.length !== 0) throw new Error('unsafe D1 binding reached Wrangler')
 
-	const route = await run('route')
-	requireRejected(route, 'unsafe preview route', 'Preview routes are unsafe for apps/web.')
+	const route = await probeTrustedPublisher('route')
+	requireRejected({
+		result: route,
+		name: 'unsafe preview route',
+		message: 'Preview routes are unsafe for apps/web.'
+	})
 	if (route.invocations.length !== 0) throw new Error('unsafe preview route reached Wrangler')
 
-	const collision = await run('collision')
-	requireRejected(
-		collision,
-		'preview Worker identity collision',
-		'Preview Worker name is unsafe for apps/api.'
-	)
+	const collision = await probeTrustedPublisher('collision')
+	requireRejected({
+		result: collision,
+		name: 'preview Worker identity collision',
+		message: 'Preview Worker name is unsafe for apps/api.'
+	})
 	if (collision.invocations.length !== 0) throw new Error('Worker identity collision reached Wrangler')
 
 	return ['publisher-valid', 'publisher-unsafe-d1-binding', 'publisher-unsafe-route', 'publisher-worker-collision']
@@ -919,9 +914,7 @@ export async function verifyPreviewSecurityContracts({
 		?.run?.replaceAll('${{ github.repository_id }}', repositoryId)
 		.replaceAll('${{ steps.alias.outputs.alias }}', alias)
 	const cleanupResultSource = steps.find(({ id }) => id === 'cleanup_result')?.run
-	if (!inventorySource || !databaseSource || !cleanupResultSource) {
-		throw new Error('preview cleanup workflow is missing a security verification seam')
-	}
+	if (!inventorySource || !databaseSource || !cleanupResultSource) throw new Error('preview cleanup workflow is missing a security verification seam')
 
 	const results = await verifyWorkerCleanup({ project, workers, alias })
 	results.push(

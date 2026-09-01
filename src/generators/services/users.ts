@@ -17,7 +17,7 @@ import {
 } from '../hono-topology.js'
 import { createUsersOpenApiFragment, stringifyOpenApi } from '../openapi-contract.js'
 
-const PUBLIC_USERS_PREFIX = USERS_SERVICE.publicPrefixes[0]
+const USERS_RESOURCE_PREFIX = '/api/v1/users' satisfies (typeof USERS_SERVICE.publicPrefixes)[number]
 
 type Runtime = 'cf-workers' | 'node'
 
@@ -62,7 +62,13 @@ export function generateUsersService(cfg: GvKitConfig): FileEntry[] {
 		},
 		{
 			path: honoServicePath(USERS_SERVICE, 'openapi.json'),
-			content: stringifyOpenApi(createUsersOpenApiFragment({ project, hasAuth }).document)
+			content: stringifyOpenApi(
+				createUsersOpenApiFragment({
+					project,
+					hasAuth,
+					publicPrefixes: USERS_SERVICE.publicPrefixes
+				}).document
+			)
 		},
 		{
 			path: honoServicePath(USERS_SERVICE, 'src/app.ts'),
@@ -418,9 +424,9 @@ app.use('*', errorHandler())
 
 app.get('/healthz', (c) => c.text('ok'))
 
-app.use('${PUBLIC_USERS_PREFIX}/*', requireAuth)
+app.use('${USERS_RESOURCE_PREFIX}/*', requireAuth)
 
-app.route('${PUBLIC_USERS_PREFIX}', meRouter)
+app.route('${USERS_RESOURCE_PREFIX}', meRouter)
 
 mountOpenApi(app)
 `
@@ -550,7 +556,7 @@ ${bindingDoc}${bindingDoc ? '\n\n' : ''}${dev}
 | Route | Reachability | Description |
 | --- | --- | --- |${
 		hasAuth
-			? `\n| \`GET ${PUBLIC_USERS_PREFIX}/me\` | gateway-forwarded | Returns the current session |`
+			? `\n| \`GET ${USERS_RESOURCE_PREFIX}/me\` | gateway-forwarded | Returns the current session |`
 			: ''
 	}
 | \`GET /openapi.json\` | private diagnostics | Runtime view of the service contract |

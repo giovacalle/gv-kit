@@ -29,6 +29,17 @@ export interface HonoServiceTopology {
 	}
 }
 
+export interface HonoPublicRoute<Identity extends string = string, Target extends string = string> {
+	owner: Identity
+	prefix: `/${string}`
+	target: Target
+}
+
+const LEGACY_HONO_PUBLIC_ROUTES = [
+	{ owner: 'auth', prefix: '/api/auth', target: 'AUTH' },
+	{ owner: 'users', prefix: '/api/v1/users', target: 'USERS' }
+] as const satisfies readonly HonoPublicRoute[]
+
 export function defineHonoTopology<const T extends readonly HonoServiceTopology[]>(
 	services: T
 ): T {
@@ -48,10 +59,7 @@ export function defineHonoTopology<const T extends readonly HonoServiceTopology[
 		services.map((service) => service.internalTarget),
 		'internal target name'
 	)
-	assertUnique(
-		services.flatMap((service) => service.publicPrefixes),
-		'public prefix'
-	)
+	honoPublicRoutes(services)
 	assertUnique(
 		services.map((service) => service.development.port),
 		'development port'
@@ -65,6 +73,67 @@ function assertUnique(values: readonly (number | string)[], label: string): void
 		if (seen.has(value)) throw new Error(`duplicate ${label}: ${value}`)
 		seen.add(value)
 	}
+}
+
+function assertCanonicalPublicPrefix({
+	owner,
+	prefix,
+	position
+}: {
+	owner: string
+	prefix: string
+	position: number
+}): void {
+	const segments = prefix.split('/').slice(1)
+	const hasDotSegment = segments.some((segment) => segment === '.' || segment === '..')
+	const canonical = /^\/api(?:\/[A-Za-z0-9._~-]+)+$/.test(prefix) && !hasDotSegment
+	if (!canonical) {
+		throw new Error(
+			`public prefix "${prefix}" at "${owner}" publicPrefixes[${position}] is ambiguous; use a canonical /api path with static segments, single slashes, and no trailing slash, query, fragment, encoding, or dot segments`
+		)
+	}
+	if (prefix === '/api/healthz' || prefix === '/api/openapi.json') {
+		throw new Error(
+			`public prefix "${prefix}" at "${owner}" publicPrefixes[${position}] conflicts with a gateway-owned operational route`
+		)
+	}
+}
+
+function containsPrefix(parent: string, child: string): boolean {
+	return child.startsWith(`${parent}/`)
+}
+
+export function honoPublicRoutes<const T extends readonly HonoServiceTopology[]>(
+	services: T
+): readonly HonoPublicRoute<T[number]['identity'], T[number]['internalTarget']>[] {
+	type Route = HonoPublicRoute<T[number]['identity'], T[number]['internalTarget']>
+	const routes: Route[] = []
+	const owners = new Map<string, { identity: string; position: number }>()
+
+	for (const service of services) {
+		for (const [position, prefix] of service.publicPrefixes.entries()) {
+			assertCanonicalPublicPrefix({ owner: service.identity, prefix, position })
+			const firstOwner = owners.get(prefix)
+			if (firstOwner) {
+				throw new Error(
+					`public prefix "${prefix}" has ambiguous ownership between "${firstOwner.identity}" publicPrefixes[${firstOwner.position}] and "${service.identity}" publicPrefixes[${position}]`
+				)
+			}
+			owners.set(prefix, { identity: service.identity, position })
+			const route = {
+				owner: service.identity,
+				prefix,
+				target: service.internalTarget
+			} as Route
+			const ancestorIndex = routes.findIndex((candidate) =>
+				containsPrefix(candidate.prefix, route.prefix)
+			)
+			if (ancestorIndex === -1) routes.push(route)
+			else routes.splice(ancestorIndex, 0, route)
+		}
+	}
+
+	return routes
 }
 
 export const HONO_GATEWAY = {
@@ -152,6 +221,25 @@ export const HONO_SERVICES = defineHonoTopology([
 ] as const)
 
 export type HonoServiceIdentity = (typeof HONO_SERVICES)[number]['identity']
+
+export const HONO_PUBLIC_ROUTES = honoPublicRoutes(HONO_SERVICES)
+
+export function hasLegacyHonoPublicRouteTable(
+	services: readonly HonoServiceTopology[]
+): boolean {
+	const routes = honoPublicRoutes(services)
+	return (
+		routes.length === LEGACY_HONO_PUBLIC_ROUTES.length &&
+		routes.every((route, index) => {
+			const legacyRoute = LEGACY_HONO_PUBLIC_ROUTES[index]
+			return (
+				route.owner === legacyRoute?.owner &&
+				route.prefix === legacyRoute?.prefix &&
+				route.target === legacyRoute?.target
+			)
+		})
+	)
+}
 
 export const AUTH_SERVICE = HONO_SERVICES[0]
 export const USERS_SERVICE = HONO_SERVICES[1]

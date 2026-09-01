@@ -6,6 +6,9 @@ import {
 import {
 	AUTH_SERVICE,
 	defineHonoTopology,
+	hasLegacyHonoPublicRouteTable,
+	honoPublicRoutes,
+	HONO_PUBLIC_ROUTES,
 	HONO_SERVICES,
 	type HonoServiceTopology,
 	USERS_SERVICE
@@ -111,13 +114,71 @@ describe('Hono topology contracts', () => {
 		).toThrow('duplicate internal target name: AUTH')
 	})
 
-	test('rejects duplicate public-prefix ownership', () => {
+	test('flattens public prefixes into explicit target routes', () => {
+		expect(HONO_PUBLIC_ROUTES).toEqual([
+			{ owner: 'auth', prefix: '/api/auth', target: 'AUTH' },
+			{ owner: 'users', prefix: '/api/v1/users', target: 'USERS' }
+		])
+	})
+
+	test('limits legacy byte compatibility to the frozen auth and users route table', () => {
+		expect(hasLegacyHonoPublicRouteTable(HONO_SERVICES)).toBe(true)
+		expect(
+			hasLegacyHonoPublicRouteTable(
+				defineHonoTopology([
+					AUTH_SERVICE,
+					usersWith({ publicPrefixes: ['/api/v1/users', '/api/profiles'] })
+				])
+			)
+		).toBe(false)
+	})
+
+	test('orders a more specific prefix before its ancestor without reordering unrelated routes', () => {
+		const services = defineHonoTopology([
+			{ ...AUTH_SERVICE, publicPrefixes: ['/api/auth', '/api/v1'] },
+			usersWith({ publicPrefixes: ['/api/v1/users', '/api/profiles'] })
+		])
+
+		expect(honoPublicRoutes(services)).toEqual([
+			{ owner: 'auth', prefix: '/api/auth', target: 'AUTH' },
+			{ owner: 'users', prefix: '/api/v1/users', target: 'USERS' },
+			{ owner: 'auth', prefix: '/api/v1', target: 'AUTH' },
+			{ owner: 'users', prefix: '/api/profiles', target: 'USERS' }
+		])
+	})
+
+	test('rejects duplicate public-prefix ownership across services with both owners', () => {
 		expect(() =>
 			defineHonoTopology([
 				AUTH_SERVICE,
 				usersWith({ publicPrefixes: AUTH_SERVICE.publicPrefixes })
 			])
-		).toThrow('duplicate public prefix: /api/auth')
+		).toThrow(
+			'public prefix "/api/auth" has ambiguous ownership between "auth" publicPrefixes[0] and "users" publicPrefixes[0]'
+		)
+	})
+
+	test('rejects duplicate public-prefix ownership within one service with both positions', () => {
+		expect(() =>
+			defineHonoTopology([
+				usersWith({ publicPrefixes: ['/api/v1/users', '/api/v1/users'] })
+			])
+		).toThrow(
+			'public prefix "/api/v1/users" has ambiguous ownership between "users" publicPrefixes[0] and "users" publicPrefixes[1]'
+		)
+	})
+
+	test('rejects non-canonical and gateway-owned public prefixes with the owner position', () => {
+		expect(() =>
+			defineHonoTopology([usersWith({ publicPrefixes: ['/api/v1/users/'] })])
+		).toThrow(
+			'public prefix "/api/v1/users/" at "users" publicPrefixes[0] is ambiguous'
+		)
+		expect(() =>
+			defineHonoTopology([usersWith({ publicPrefixes: ['/api/openapi.json'] })])
+		).toThrow(
+			'public prefix "/api/openapi.json" at "users" publicPrefixes[0] conflicts with a gateway-owned operational route'
+		)
 	})
 
 	test('rejects duplicate development ports', () => {

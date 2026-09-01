@@ -3,8 +3,12 @@ import type { GvKitConfig } from '../schema/config.js'
 import {
 	AUTH_SERVICE,
 	developmentOrigin,
+	hasLegacyHonoPublicRouteTable,
 	HONO_GATEWAY,
 	honoPackageIdentity,
+	honoPublicRoutes,
+	HONO_SERVICES,
+	type HonoServiceTopology,
 	nodeDevelopmentOrigin,
 	USERS_SERVICE
 } from './hono-topology.js'
@@ -466,7 +470,17 @@ origins such as \`https://example.com\` and \`https://app.example.com\`.
 The marketing site only uses the application origin for navigation; it is not an
 authentication trusted origin.`
 }
-function renderApiTopology(cfg: GvKitConfig): string {
+function renderOwnedPublicPrefixes(services: readonly HonoServiceTopology[]): string {
+	if (hasLegacyHonoPublicRouteTable(services)) return ''
+	return `\n\nOwned public prefixes:\n\n${honoPublicRoutes(services)
+		.map((route) => `- \`${route.prefix}/*\` -> \`${route.target}\``)
+		.join('\n')}`
+}
+
+export function renderApiTopology(
+	cfg: GvKitConfig,
+	services: readonly HonoServiceTopology[] = HONO_SERVICES
+): string {
 	if (cfg.choices.backend !== 'hono') return ''
 
 	const client =
@@ -523,7 +537,7 @@ cases or orchestrate business workflows. Both ingress paths reach the same gatew
 - the web origin's \`/api/*\` alias for browser traffic
 - the canonical API origin for integrations and independent clients
 
-Better Auth stays at \`/api/auth/*\`. Domain routes are versioned under \`/api/v1/*\`.
+Better Auth stays at \`/api/auth/*\`. Domain routes are versioned under \`/api/v1/*\`.${renderOwnedPublicPrefixes(services)}
 Gateway liveness and the composed contract are available at \`/api/healthz\` and
 \`/api/openapi.json\`.
 

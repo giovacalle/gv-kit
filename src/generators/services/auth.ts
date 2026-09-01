@@ -15,7 +15,11 @@ import {
 	USERS_SERVICE
 } from '../hono-topology.js'
 
-const PUBLIC_AUTH_PREFIX = AUTH_SERVICE.publicPrefixes[0]
+const PUBLIC_AUTH_PREFIXES = AUTH_SERVICE.publicPrefixes
+
+function publicAuthRouteList(): string {
+	return PUBLIC_AUTH_PREFIXES.map((prefix) => `\`${prefix}/*\``).join(', ')
+}
 
 type Runtime = 'cf-workers' | 'node'
 type AuthChoice = GvKitConfig['choices']['auth'][number]
@@ -672,6 +676,36 @@ export default app
 `
 	}
 
+	const cloudflarePublicRoutes = PUBLIC_AUTH_PREFIXES.map(
+		(prefix) => `app.use('${prefix}/*', async (c, next) => {
+	const mw = cors({
+		origin: (origin) => resolveCorsOrigin(origin, c.env.AUTH_CORS_ORIGINS),
+		credentials: true,
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
+		maxAge: 600
+	})
+	return mw(c, next)
+})
+
+app.all('${prefix}/*', async (c) => {
+	const auth = getAuth(c.env)
+	return auth.handler(c.req.raw)
+})`
+	).join('\n\n')
+	const nodePublicRoutes = PUBLIC_AUTH_PREFIXES.map(
+		(prefix) => `app.use(
+	'${prefix}/*',
+	cors({
+		origin: (origin) => resolveCorsOrigin(origin, process.env.AUTH_CORS_ORIGINS),
+		credentials: true,
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
+		maxAge: 600
+	})
+)
+
+app.all('${prefix}/*', async (c) => auth.handler(c.req.raw))`
+	).join('\n\n')
+
 	if (runtime === 'cf-workers') {
 		return `import { OpenAPIHono } from '@hono/zod-openapi'
 import { logger } from '@repo/backend/middleware'
@@ -686,20 +720,7 @@ const app = new OpenAPIHono<{ Bindings: Env }>()
 app.use('*', logger('auth'))
 app.get('/healthz', (c) => c.text('ok'))
 
-app.use('${PUBLIC_AUTH_PREFIX}/*', async (c, next) => {
-	const mw = cors({
-		origin: (origin) => resolveCorsOrigin(origin, c.env.AUTH_CORS_ORIGINS),
-		credentials: true,
-		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
-		maxAge: 600
-	})
-	return mw(c, next)
-})
-
-app.all('${PUBLIC_AUTH_PREFIX}/*', async (c) => {
-	const auth = getAuth(c.env)
-	return auth.handler(c.req.raw)
-})
+${cloudflarePublicRoutes}
 
 app.openapi(sessionRoute, async (c) => {
 	const auth = getAuth(c.env)
@@ -734,17 +755,7 @@ const app = new OpenAPIHono<{ Bindings: Env }>()
 app.use('*', logger('auth'))
 app.get('/healthz', (c) => c.text('ok'))
 
-app.use(
-	'${PUBLIC_AUTH_PREFIX}/*',
-	cors({
-		origin: (origin) => resolveCorsOrigin(origin, process.env.AUTH_CORS_ORIGINS),
-		credentials: true,
-		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
-		maxAge: 600
-	})
-)
-
-app.all('${PUBLIC_AUTH_PREFIX}/*', async (c) => auth.handler(c.req.raw))
+${nodePublicRoutes}
 
 app.openapi(sessionRoute, async (c) => {
 	const session = await auth.api.getSession({ headers: c.req.raw.headers })
@@ -849,7 +860,7 @@ It is reachable externally only through the gateway, where no public auth method
 
 ## Boundary
 
-- No public authentication methods are mounted under \`${PUBLIC_AUTH_PREFIX}/*\`.
+- No public authentication methods are mounted under ${publicAuthRouteList()}.
 - The service owns no authentication credentials or database access.
 
 Do not add public ingress or authentication behavior to this service. Select an authentication provider before adding login behavior.
@@ -1030,7 +1041,7 @@ The auth service is a private service and the Better Auth transport/runtime adap
 
 ## What this service does
 
-- Configures Better Auth directly in \`${AUTH_SERVICE.workspacePath}/src/auth.ts\` and owns its gateway-forwarded routes at \`${PUBLIC_AUTH_PREFIX}/*\`
+- Configures Better Auth directly in \`${AUTH_SERVICE.workspacePath}/src/auth.ts\` and owns its gateway-forwarded routes at ${publicAuthRouteList()}
 - Exposes \`/internal/session\` RPC for sibling services
 - Supplies Better Auth with the deploy-aware database client for its session, account, and verification behavior
 

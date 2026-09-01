@@ -14,7 +14,13 @@ export type OpenApiDocument = {
 export type OpenApiFragment = {
 	owner: string
 	operationIdPrefix: string
+	publicPrefixes: readonly `/${string}`[]
 	document: OpenApiDocument
+}
+
+export type OpenApiPublicRoute = {
+	owner: string
+	prefix: `/${string}`
 }
 
 const HTTP_METHODS = new Set(['delete', 'get', 'head', 'options', 'patch', 'post', 'put', 'trace'])
@@ -25,10 +31,12 @@ function compareText(left: string, right: string): number {
 
 export function createUsersOpenApiFragment({
 	project,
-	hasAuth
+	hasAuth,
+	publicPrefixes
 }: {
 	project: string
 	hasAuth: boolean
+	publicPrefixes: readonly `/${string}`[]
 }): OpenApiFragment {
 	const userSchema: JsonObject = hasAuth
 		? {
@@ -61,6 +69,7 @@ export function createUsersOpenApiFragment({
 	return {
 		owner: 'users',
 		operationIdPrefix: 'users',
+		publicPrefixes,
 		document: {
 			openapi: '3.0.0',
 			info: {
@@ -96,11 +105,13 @@ export function createUsersOpenApiFragment({
 export function composeGatewayOpenApi({
 	title,
 	version,
-	fragments
+	fragments,
+	publicRoutes
 }: {
 	title: string
 	version: string
 	fragments: readonly OpenApiFragment[]
+	publicRoutes?: readonly OpenApiPublicRoute[]
 }): OpenApiDocument {
 	const paths: Record<string, JsonObject> = {}
 	const components: Record<string, Record<string, JsonValue>> = {}
@@ -110,7 +121,7 @@ export function composeGatewayOpenApi({
 	for (const fragment of [...fragments].sort((left, right) =>
 		compareText(left.owner, right.owner)
 	)) {
-		validateFragment(fragment, operationOwners)
+		validateFragment({ fragment, operationOwners, publicRoutes })
 		mergeComponents(components, fragment)
 		mergePaths({
 			target: paths,
@@ -129,7 +140,15 @@ export function composeGatewayOpenApi({
 	return sortJson(document) as OpenApiDocument
 }
 
-function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string, string>): void {
+function validateFragment({
+	fragment,
+	operationOwners,
+	publicRoutes
+}: {
+	fragment: OpenApiFragment
+	operationOwners: Map<string, string>
+	publicRoutes: readonly OpenApiPublicRoute[] | undefined
+}): void {
 	if (fragment.document.servers !== undefined) throw new Error(`OpenAPI fragment "${fragment.owner}" must not declare servers`)
 	if (fragment.document.openapi !== '3.0.0') {
 		throw new Error(
@@ -155,9 +174,22 @@ function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string
 	}
 
 	for (const [path, pathItem] of Object.entries(fragment.document.paths)) {
-		if (path === '/api/auth' || path.startsWith('/api/auth/') || !path.startsWith('/api/v1/')) {
+		const winningRoute = publicRoutes?.find((route) =>
+			matchesPublicPrefix(path, route.prefix)
+		)
+		if (publicRoutes && !winningRoute) {
 			throw new Error(
-				`OpenAPI fragment "${fragment.owner}" path "${path}" must use a public /api/v1 path`
+				`OpenAPI fragment "${fragment.owner}" path "${path}" is outside the public route table`
+			)
+		}
+		if (winningRoute && winningRoute.owner !== fragment.owner) {
+			throw new Error(
+				`OpenAPI fragment "${fragment.owner}" path "${path}" routes to "${winningRoute.owner}" through the more specific prefix "${winningRoute.prefix}"`
+			)
+		}
+		if (!publicRoutes && !fragment.publicPrefixes.some((prefix) => matchesPublicPrefix(path, prefix))) {
+			throw new Error(
+				`OpenAPI fragment "${fragment.owner}" path "${path}" is outside owned public prefixes: ${fragment.publicPrefixes.join(', ')}`
 			)
 		}
 		if (pathItem.$ref !== undefined) {
@@ -226,6 +258,10 @@ function validateFragment(fragment: OpenApiFragment, operationOwners: Map<string
 			}
 		}
 	}
+}
+
+function matchesPublicPrefix(path: string, prefix: string): boolean {
+	return path === prefix || path.startsWith(`${prefix}/`)
 }
 
 function rejectResponseLinks({

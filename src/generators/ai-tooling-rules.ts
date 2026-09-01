@@ -3,7 +3,14 @@ import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
 import { HONO_WORKERS_COMPAT_DATE, WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
-import { AUTH_SERVICE, USERS_SERVICE } from './hono-topology.js'
+import {
+	AUTH_SERVICE,
+	hasLegacyHonoPublicRouteTable,
+	honoPublicRoutes,
+	HONO_SERVICES,
+	type HonoServiceTopology,
+	USERS_SERVICE
+} from './hono-topology.js'
 
 /**
  * Canonical source of rule bodies. Emits `.ai/rules/*.md`, the neutral
@@ -127,7 +134,17 @@ function renderPrivateTransportPolicy(cfg: GvKitConfig): string {
 	return node
 }
 
-export function renderCoreStackRule(cfg: GvKitConfig): string {
+function renderOwnedPublicPrefixes(services: readonly HonoServiceTopology[]): string {
+	if (hasLegacyHonoPublicRouteTable(services)) return ''
+	return `\n   Owned prefix routes:\n${honoPublicRoutes(services)
+		.map((route) => `   - \`${route.prefix}/*\` -> \`${route.target}\``)
+		.join('\n')}\n  `
+}
+
+export function renderCoreStackRule(
+	cfg: GvKitConfig,
+	services: readonly HonoServiceTopology[] = HONO_SERVICES
+): string {
 	if (cfg.choices.backend !== 'hono') {
 		return `# Stack
 
@@ -187,7 +204,7 @@ ${
 }
 2. SvelteKit SSR passes its request-scoped \`fetch\` ${cfg.choices.apiClient === 'hey-api' ? 'to the flat gateway client' : 'to same-origin gateway requests'}.
    ${renderWebGatewayTransport(cfg)}
-3. The gateway maps explicit public prefixes to private services. Private
+3. The gateway maps explicit public prefixes to private services.${renderOwnedPublicPrefixes(services)} Private
    services call one another directly and never hairpin through the gateway.
    Web code never bypasses the gateway.
 

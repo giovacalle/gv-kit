@@ -8,9 +8,13 @@ import {
 	renderCloudflareBootstrapTypes
 } from './cloudflare-worker-types.js'
 import {
-	AUTH_SERVICE,
+	hasLegacyHonoPublicRouteTable,
 	HONO_GATEWAY,
 	honoPackageIdentity,
+	honoPublicRoutes,
+	HONO_SERVICES,
+	type HonoPublicRoute,
+	type HonoServiceTopology,
 	USERS_SERVICE
 } from './hono-topology.js'
 import {
@@ -32,12 +36,32 @@ function deriveRuntime(deploy: GvKitConfig['choices']['deploy']): Runtime {
 }
 
 export function generateGateway(cfg: GvKitConfig): FileEntry[] {
+	return generateGatewayForTopology({ cfg, services: HONO_SERVICES })
+}
+
+export function generateGatewayForTopology({
+	cfg,
+	services
+}: {
+	cfg: GvKitConfig
+	services: readonly HonoServiceTopology[]
+}): FileEntry[] {
 	const project = cfg.choices.name
 	const runtime = deriveRuntime(cfg.choices.deploy)
+	const routes = honoPublicRoutes(services)
+	const openApiServices = services.filter((service) => service.openApi !== undefined)
 	const checkedOpenApi = composeGatewayOpenApi({
 		title: `${project} API`,
 		version: '0.0.0',
-		fragments: [createUsersOpenApiFragment({ project, hasAuth: cfg.choices.auth.length > 0 })]
+		publicRoutes: routes,
+		fragments: openApiServices.map((service) => {
+			if (service.identity !== USERS_SERVICE.identity) throw new Error(`no OpenAPI fragment renderer for service "${service.identity}"`)
+			return createUsersOpenApiFragment({
+				project,
+				hasAuth: cfg.choices.auth.length > 0,
+				publicPrefixes: service.publicPrefixes
+			})
+		})
 	})
 	const entries: FileEntry[] = [
 		{ path: 'apps/api/package.json', content: renderGatewayPackageJson({ project, runtime }) },
@@ -45,22 +69,23 @@ export function generateGateway(cfg: GvKitConfig): FileEntry[] {
 		{ path: 'apps/api/openapi.json', content: stringifyOpenApi(checkedOpenApi) },
 		{
 			path: 'apps/api/scripts/compose-openapi.ts',
-			content: renderGatewayOpenApiComposerSource(project, runtime)
+			content: renderGatewayOpenApiComposerSource({ project, runtime, services })
 		},
-		{ path: 'apps/api/src/app.ts', content: renderGatewayAppSource() },
+		{ path: 'apps/api/src/app.ts', content: renderGatewayAppSource({ routes, services }) },
 		{
 			path: 'apps/api/src/index.ts',
 			content: renderGatewayEntrySource({
 				runtime,
+				services,
 				streamsChunkedIngress: cfg.choices.deploy === 'docker'
 			})
 		},
-		{ path: 'apps/api/README.md', content: renderGatewayReadme(runtime) }
+		{ path: 'apps/api/README.md', content: renderGatewayReadme({ routes, runtime }) }
 	]
 
 	if (runtime === 'cf-workers') {
 		const webHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
-		const wrangler = renderGatewayWranglerConfig(project, webHost)
+		const wrangler = renderGatewayWranglerConfig({ project, services, webHost })
 		entries.push(
 			{ path: 'apps/api/wrangler.jsonc', content: wrangler },
 			{
@@ -143,7 +168,21 @@ function renderGatewayTsconfig(runtime: Runtime): string {
 	)}\n`
 }
 
-function renderGatewayAppSource(): string {
+function renderGatewayAppSource({
+	routes,
+	services
+}: {
+	routes: readonly HonoPublicRoute[]
+	services: readonly HonoServiceTopology[]
+}): string {
+	const gatewayTargets = services
+		.map((service) => `\t${service.internalTarget}?: GatewayTarget`)
+		.join('\n')
+	const publicRoutes = routes
+		.map((route) =>
+			`\t{ prefix: '${route.prefix}', target: '${route.target}' }`
+		)
+		.join(',\n')
 	return `import { Hono, type Context } from 'hono'
 
 export type OpenApiDocument = {
@@ -159,8 +198,7 @@ export type GatewayTarget = {
 }
 
 export type GatewayTargets = {
-	${AUTH_SERVICE.internalTarget}?: GatewayTarget
-	${USERS_SERVICE.internalTarget}?: GatewayTarget
+${gatewayTargets}
 }
 
 export type GatewayOptions = {
@@ -195,8 +233,7 @@ const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
 class UpstreamTimeoutError extends Error {}
 
 const routes = [
-	{ prefix: '${AUTH_SERVICE.publicPrefixes[0]}', target: '${AUTH_SERVICE.internalTarget}' },
-	{ prefix: '${USERS_SERVICE.publicPrefixes[0]}', target: '${USERS_SERVICE.internalTarget}' }
+${publicRoutes}
 ] as const
 
 function matchesPrefix(pathname: string, prefix: string): boolean {
@@ -550,9 +587,11 @@ export function createGateway(
 
 function renderGatewayEntrySource({
 	runtime,
+	services,
 	streamsChunkedIngress
 }: {
 	runtime: Runtime
+	services: readonly HonoServiceTopology[]
 	streamsChunkedIngress: boolean
 }): string {
 	if (runtime === 'cf-workers') {
@@ -573,6 +612,13 @@ export default {
 } satisfies ExportedHandler<Env>
 `
 	}
+
+	const nodeTargets = services
+		.map(
+			(service) =>
+				`\t\t${service.internalTarget}: httpTarget(process.env.${service.transport.node.targetEnvironmentVariable} ?? 'http://${service.transport.node.hostname}:${service.development.port}')`
+		)
+		.join(',\n')
 
 	return `import { serve } from '@hono/node-server'
 import openApiDocument from '../openapi.json' with { type: 'json' }
@@ -597,8 +643,7 @@ if (!trustedIngressSecret) throw new Error('${GATEWAY_TRUSTED_INGRESS_SECRET} is
 
 const app = createGateway(
 	{
-		${AUTH_SERVICE.internalTarget}: httpTarget(process.env.${AUTH_SERVICE.transport.node.targetEnvironmentVariable} ?? 'http://${AUTH_SERVICE.transport.node.hostname}:${AUTH_SERVICE.development.port}'),
-		${USERS_SERVICE.internalTarget}: httpTarget(process.env.${USERS_SERVICE.transport.node.targetEnvironmentVariable} ?? 'http://${USERS_SERVICE.transport.node.hostname}:${USERS_SERVICE.development.port}')
+${nodeTargets}
 	},
 	{
 		openApiDocument,
@@ -616,7 +661,24 @@ console.log(\`${HONO_GATEWAY.identity} listening on http://\${hostname}:\${port}
 `
 }
 
-function renderGatewayWranglerConfig(project: string, webHost: string): string {
+function renderGatewayWranglerConfig({
+	project,
+	services,
+	webHost
+}: {
+	project: string
+	services: readonly HonoServiceTopology[]
+	webHost: string
+}): string {
+	const serviceBindings = services
+		.map(
+			(service) =>
+				`\t\t{ "binding": "${service.internalTarget}", "service": "${cloudflareProductionWorkerName({
+					project,
+					service: service.transport.cfWorkers.serviceNameSuffix
+				})}" }`
+		)
+		.join(',\n')
 	return `{
 	"$schema": "node_modules/wrangler/config-schema.json",
 	"name": "${cloudflareProductionWorkerName({
@@ -642,14 +704,7 @@ function renderGatewayWranglerConfig(project: string, webHost: string): string {
 	},
 	"secrets": { "required": [] },
 	"services": [
-		{ "binding": "${AUTH_SERVICE.internalTarget}", "service": "${cloudflareProductionWorkerName({
-			project,
-			service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix
-		})}" },
-		{ "binding": "${USERS_SERVICE.internalTarget}", "service": "${cloudflareProductionWorkerName({
-			project,
-			service: USERS_SERVICE.transport.cfWorkers.serviceNameSuffix
-		})}" }
+${serviceBindings}
 	],
 	"dev": {
 		"ip": "${HONO_GATEWAY.development.ip}",
@@ -662,7 +717,37 @@ function renderGatewayWranglerConfig(project: string, webHost: string): string {
 `
 }
 
-function renderGatewayOpenApiComposerSource(project: string, runtime: Runtime): string {
+function renderGatewayOpenApiComposerSource({
+	project,
+	runtime,
+	services
+}: {
+	project: string
+	runtime: Runtime
+	services: readonly HonoServiceTopology[]
+}): string {
+	const renderPublicRouteContract = !hasLegacyHonoPublicRouteTable(services)
+	const fragmentFiles = services
+		.filter(
+			(service): service is HonoServiceTopology & { openApi: NonNullable<HonoServiceTopology['openApi']> } =>
+				service.openApi !== undefined
+		)
+		.map(
+			(service) =>
+				`\t{\n\t\towner: '${service.identity}',\n\t\toperationIdPrefix: '${service.openApi.operationIdPrefix}',\n\t\tpath: resolve(scriptDirectory, '../../../${service.workspacePath}/${service.openApi.fragmentPath}')\n\t}`
+		)
+		.join(',\n')
+	const routeContract = renderPublicRouteContract
+		? `\n\nconst publicRoutes = [\n${honoPublicRoutes(services)
+				.map(
+					(route) =>
+						`\t{ owner: '${route.owner}', prefix: '${route.prefix}', target: '${route.target}' }`
+				)
+				.join(',\n')}\n] as const\n\nfunction matchesPrefix(path: string, prefix: string): boolean {\n\treturn path === prefix || path.startsWith(prefix + '/')\n}\n\n`
+		: '\n\n'
+	const pathOwnership = renderPublicRouteContract
+		? `\t\t\tconst winningRoute = publicRoutes.find((route) => matchesPrefix(path, route.prefix))\n\t\t\tif (!winningRoute) throw new Error('fragment "' + fragment.owner + '" path "' + path + '" is outside the public route table')\n\t\t\tif (winningRoute.owner !== fragment.owner) throw new Error('fragment "' + fragment.owner + '" path "' + path + '" routes to "' + winningRoute.owner + '" through the more specific prefix "' + winningRoute.prefix + '"')`
+		: `\t\t\tif (!path.startsWith('/api/v1/') || path.startsWith('/api/auth/')) throw new Error('fragment "' + fragment.owner + '" path "' + path + '" must use /api/v1')`
 	return `import { createHash } from 'node:crypto'
 import { readFile, writeFile } from 'node:fs/promises'
 import { dirname, resolve } from 'node:path'
@@ -686,15 +771,9 @@ type LoadedFragment = {
 const scriptDirectory = dirname(fileURLToPath(import.meta.url))
 const outputPath = resolve(scriptDirectory, '../openapi.json')
 const fragmentFiles = [
-	{
-		owner: 'users',
-		operationIdPrefix: 'users',
-		path: resolve(scriptDirectory, '../../../services/users/openapi.json')
-	}
+${fragmentFiles}
 ] as const
-const methods = new Set(['delete', 'get', 'head', 'options', 'patch', 'post', 'put', 'trace'])
-
-function compareText(left: string, right: string): number {
+const methods = new Set(['delete', 'get', 'head', 'options', 'patch', 'post', 'put', 'trace'])${routeContract}function compareText(left: string, right: string): number {
 	return left < right ? -1 : left > right ? 1 : 0
 }
 
@@ -887,7 +966,7 @@ export function composeOpenApi(fragments: readonly LoadedFragment[]): OpenApiDoc
 			}
 		}
 		for (const [path, incoming] of Object.entries(fragment.document.paths)) {
-			if (!path.startsWith('/api/v1/') || path.startsWith('/api/auth/')) throw new Error('fragment "' + fragment.owner + '" path "' + path + '" must use /api/v1')
+${pathOwnership}
 			const pathIdentity = path.replaceAll(/\\{[^}]+\\}/g, '{}')
 			const equivalentPath = pathIdentities.get(pathIdentity)
 			if (equivalentPath && equivalentPath !== path) throw new Error('path collision between templates "' + equivalentPath + '" and "' + path + '"')
@@ -1015,7 +1094,13 @@ function renderGatewayOpenApiMainSource(runtime: Runtime): string {
 }`
 }
 
-function renderGatewayReadme(runtime: Runtime): string {
+function renderGatewayReadme({
+	routes,
+	runtime
+}: {
+	routes: readonly HonoPublicRoute[]
+	runtime: Runtime
+}): string {
 	const cloudflareDeployment =
 		runtime === 'cf-workers'
 			? `
@@ -1023,6 +1108,13 @@ function renderGatewayReadme(runtime: Runtime): string {
 ## Cloudflare deployment
 
 Before deploying to Cloudflare, replace each \`<domain>\` placeholder in \`wrangler.jsonc\` with the project's apex domain.`
+			: ''
+	const prefixRows = routes
+		.map((route) => `| ${route.prefix}/* | ${route.target} |`)
+		.join('\n')
+	const rolloutPrefixes =
+		new Set(routes.map((route) => route.owner)).size < routes.length
+			? `\nThe prefix-to-target table below is part of this rollout contract. Add or move an owned prefix before callers use it, and keep the previous owner compatible until every adjacent version has moved.\n`
 			: ''
 	return `# API gateway
 
@@ -1073,7 +1165,7 @@ Removing or renaming a path or method, making an optional request field or heade
 status or body semantics require a coordinated rollout. So do incompatible changes to forwarded host or
 protocol, request IDs, or auth cookies. Keep the previous shape until every adjacent gateway, service,
 and web version has moved past it; otherwise deploy all affected components in one controlled window.
-
+${rolloutPrefixes}
 ## Local development
 
 The gateway listens on http://${HONO_GATEWAY.development.ip}:${HONO_GATEWAY.development.port}.
@@ -1081,7 +1173,6 @@ Run pnpm dev at the workspace root to start the web application, gateway, and se
 
 | Prefix | Private target |
 | --- | --- |
-| ${AUTH_SERVICE.publicPrefixes[0]}/* | ${AUTH_SERVICE.internalTarget} |
-| ${USERS_SERVICE.publicPrefixes[0]}/* | ${USERS_SERVICE.internalTarget} |
+${prefixRows}
 `
 }

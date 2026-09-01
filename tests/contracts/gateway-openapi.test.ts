@@ -1,6 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import { generateGateway } from '../../src/generators/gateway.js'
 import {
+	AUTH_SERVICE,
+	defineHonoTopology,
+	honoPublicRoutes,
+	USERS_SERVICE
+} from '../../src/generators/hono-topology.js'
+import {
 	composeGatewayOpenApi,
 	createUsersOpenApiFragment,
 	stringifyOpenApi,
@@ -35,7 +41,7 @@ function entry(path: string, cfg = makeCfg()): string {
 }
 
 function fragment(owner: string, document: OpenApiDocument): OpenApiFragment {
-	return { owner, operationIdPrefix: owner, document }
+	return { owner, operationIdPrefix: owner, publicPrefixes: ['/api/v1'], document }
 }
 
 function document({
@@ -148,8 +154,16 @@ function referencedParameterCollisionFragment(): OpenApiFragment {
 	return fragment('example', value)
 }
 
-function compose(fragments: OpenApiFragment[]) {
-	return composeGatewayOpenApi({ title: 'Gateway', version: '0.0.0', fragments })
+function compose(
+	fragments: OpenApiFragment[],
+	publicRoutes?: readonly { owner: string; prefix: `/${string}` }[]
+) {
+	return composeGatewayOpenApi({
+		title: 'Gateway',
+		version: '0.0.0',
+		fragments,
+		...(publicRoutes ? { publicRoutes } : {})
+	})
 }
 
 async function loadGeneratedComposer() {
@@ -186,7 +200,11 @@ async function loadGeneratedGateway() {
 
 describe('gateway OpenAPI composition', () => {
 	test('composes service-owned public fragments deterministically without auth or servers', () => {
-		const users = createUsersOpenApiFragment({ project: 'demo', hasAuth: true })
+		const users = createUsersOpenApiFragment({
+			project: 'demo',
+			hasAuth: true,
+			publicPrefixes: ['/api/v1/users']
+		})
 		const invoices = fragment(
 			'invoices',
 			document({ path: '/api/v1/invoices', operationId: 'invoicesList' })
@@ -199,6 +217,38 @@ describe('gateway OpenAPI composition', () => {
 		expect(stringifyOpenApi(forward)).toContain('usersGetMe')
 		expect(stringifyOpenApi(forward)).not.toContain('/api/auth')
 		expect(forward.servers).toBeUndefined()
+	})
+
+	test('validates each fragment path against every prefix owned by its service', () => {
+		const profiles = fragment(
+			'profiles',
+			document({ path: '/api/profiles/me', operationId: 'profilesGet' })
+		)
+		profiles.publicPrefixes = ['/api/v1/users', '/api/profiles']
+
+		expect(Object.keys(compose([profiles]).paths)).toEqual(['/api/profiles/me'])
+		profiles.document = document({ path: '/api/accounts/me', operationId: 'profilesGet' })
+		expect(() => compose([profiles])).toThrow(
+			'OpenAPI fragment "profiles" path "/api/accounts/me" is outside owned public prefixes: /api/v1/users, /api/profiles'
+		)
+	})
+
+	test('rejects a fragment path shadowed by a more specific route from another owner', () => {
+		const users = createUsersOpenApiFragment({
+			project: 'demo',
+			hasAuth: true,
+			publicPrefixes: ['/api/v1/users']
+		})
+		const routes = honoPublicRoutes(
+			defineHonoTopology([
+				{ ...USERS_SERVICE, publicPrefixes: ['/api/v1/users'] },
+				{ ...AUTH_SERVICE, publicPrefixes: ['/api/auth', '/api/v1/users/me'] }
+			])
+		)
+
+		expect(() => compose([users], routes)).toThrow(
+			'OpenAPI fragment "users" path "/api/v1/users/me" routes to "auth" through the more specific prefix "/api/v1/users/me"'
+		)
 	})
 
 	test('emits the same checked document that its explicit composition command regenerates', () => {
@@ -226,6 +276,7 @@ describe('gateway OpenAPI composition', () => {
 				{
 					owner: 'other',
 					operationIdPrefix: 'example',
+					publicPrefixes: ['/api/v1'],
 					document: document({ path: '/api/v1/other', operationId: 'exampleGet' })
 				}
 			])
@@ -361,6 +412,7 @@ describe('gateway OpenAPI composition', () => {
 		const duplicateOperation = {
 			owner: 'other',
 			operationIdPrefix: 'example',
+			publicPrefixes: ['/api/v1'] as const,
 			document: document({ path: '/api/v1/other', operationId: 'exampleGet' })
 		}
 		expect(() => composeGenerated([fragment('example', document()), duplicateOperation])).toThrow(
@@ -442,7 +494,7 @@ describe('gateway OpenAPI composition', () => {
 
 	test('rejects private paths, deployment servers, missing IDs, and wrong domain prefixes', () => {
 		expect(() => compose([fragment('example', document({ path: '/api/auth/session' }))])).toThrow(
-			'must use a public /api/v1 path'
+			'is outside owned public prefixes: /api/v1'
 		)
 		const withServers = document()
 		withServers.servers = [{ url: 'https://api.example.test' }]

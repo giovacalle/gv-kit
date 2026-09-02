@@ -117,7 +117,7 @@ function renderGatewayPackageJson({ project, runtime }: { project: string; runti
 		devDependencies.wrangler = '^4.125.0'
 		devDependencies['@cloudflare/workers-types'] = '^5.20260825.1'
 		scripts['cf-typegen'] = CLOUDFLARE_TYPEGEN_SCRIPT
-		scripts.dev = 'pnpm cf-typegen && wrangler dev'
+		scripts.dev = `pnpm cf-typegen && wrangler dev --host api.localhost:${HONO_GATEWAY.development.port}`
 		scripts.build = 'wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'

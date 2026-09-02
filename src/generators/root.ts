@@ -13,6 +13,8 @@ import {
 	USERS_SERVICE
 } from './hono-topology.js'
 
+const CLOUDFLARE_INCLUDE_PROCESS_ENV = 'CLOUDFLARE_INCLUDE_PROCESS_ENV'
+
 /** Generator for the scaffolded project's root files (workspace + lint/format shims). */
 export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 	const entries: FileEntry[] = [
@@ -188,6 +190,7 @@ function renderTurboJson(cfg: GvKitConfig): string {
 
 function renderHonoDevTasks(cfg: GvKitConfig) {
 	const task = (env: string[]) => ({ dependsOn: ['^build'], cache: false, persistent: true, env })
+	const cloudflareDevEnv = cfg.choices.deploy === 'cf-workers' ? [CLOUDFLARE_INCLUDE_PROCESS_ENV] : []
 	const databaseEnv = cfg.choices.db === 'postgres' ? 'DATABASE_URL' : 'SQLITE_PATH'
 	const authEnv = [databaseEnv]
 	if (cfg.choices.auth.length > 0) authEnv.push('BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS')
@@ -195,6 +198,7 @@ function renderHonoDevTasks(cfg: GvKitConfig) {
 	if (cfg.choices.email === 'resend') authEnv.push('RESEND_API_KEY', 'FROM_EMAIL')
 	if (cfg.choices.email === 'notifuse') authEnv.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
 	if (cfg.choices.auth.includes('emailOTP')) authEnv.push('TURNSTILE_SECRET_KEY')
+	authEnv.push(...cloudflareDevEnv)
 
 	const webEnv: string[] = [HONO_GATEWAY.transport.node.targetEnvironmentVariable]
 	if (cfg.choices.deploy !== 'cf-workers') webEnv.push('GATEWAY_TRUSTED_INGRESS_SECRET')
@@ -209,12 +213,14 @@ function renderHonoDevTasks(cfg: GvKitConfig) {
 			'API_CORS_ORIGINS',
 			'GATEWAY_UPSTREAM_TIMEOUT_MS',
 			AUTH_SERVICE.transport.node.targetEnvironmentVariable,
-			USERS_SERVICE.transport.node.targetEnvironmentVariable
+			USERS_SERVICE.transport.node.targetEnvironmentVariable,
+			...cloudflareDevEnv
 		]),
 		[`${honoPackageIdentity(cfg.choices.name, AUTH_SERVICE)}#dev`]: task(authEnv),
 		[`${honoPackageIdentity(cfg.choices.name, USERS_SERVICE)}#dev`]: task([
 			databaseEnv,
-			AUTH_SERVICE.transport.node.targetEnvironmentVariable
+			AUTH_SERVICE.transport.node.targetEnvironmentVariable,
+			...cloudflareDevEnv
 		]),
 		[`${cfg.choices.name}-web#dev`]: task(webEnv)
 	}
@@ -250,6 +256,10 @@ function renderLocalScript(cfg: GvKitConfig): string {
 		prepareTask,
 		...(prepareTask === 'db:push' ? ['--force'] : [])
 	]
+	const cloudflareProcessEnvironment =
+		cfg.choices.deploy === 'cf-workers'
+			? `\nif (action === 'dev') process.env.${CLOUDFLARE_INCLUDE_PROCESS_ENV} = 'true'`
+			: ''
 	return `import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
@@ -285,7 +295,7 @@ const args = commands[action]
 if (!args) {
 	console.error('[local] Expected one command: dev or prepare.')
 	process.exit(1)
-}
+}${cloudflareProcessEnvironment}
 
 const result = spawnSync('pnpm', args, { env: process.env, stdio: 'inherit' })
 if (result.error) throw result.error

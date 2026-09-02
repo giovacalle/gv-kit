@@ -42,9 +42,7 @@ describe('Cloudflare gateway local environment', () => {
 		expect(local).toContain(
 			"if (action === 'dev') process.env.CLOUDFLARE_INCLUDE_PROCESS_ENV = 'true'"
 		)
-		for (const packageTask of cloudflareWorkerPackages) {
-			expect(turbo.tasks[packageTask]?.env, packageTask).toContain(PROCESS_ENV_BRIDGE)
-		}
+		for (const packageTask of cloudflareWorkerPackages) expect(turbo.tasks[packageTask]?.env, packageTask).toContain(PROCESS_ENV_BRIDGE)
 		expect(gatewayPackage.scripts.dev).toContain('wrangler dev --host api.localhost:8786')
 		expect(gatewayWrangler.dev.host).toBe('localhost')
 		expect(entry(entries, '.env.example')).not.toContain(PROCESS_ENV_BRIDGE)

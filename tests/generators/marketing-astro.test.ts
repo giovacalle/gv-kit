@@ -54,9 +54,7 @@ describe('generateMarketingAstro — shape gating', () => {
 			'apps/marketing/src/pages/index.astro',
 			'apps/marketing/src/pages/404.astro',
 			'apps/marketing/src/pages/robots.txt.ts'
-		]) {
-			expect(paths).toContain(path)
-		}
+		]) expect(paths).toContain(path)
 		expect(paths.some((path) => path.startsWith('apps/marketing/src/pages/blog'))).toBe(false)
 	})
 
@@ -91,9 +89,7 @@ describe('generateMarketingAstro — static and shared UI contract', () => {
 		expect(home).toContain('@repo/ui/')
 		expect(tsconfig).toContain('../../packages/ui/src/lib')
 		expect(astroConfig).toContain('../../packages/ui/src/lib')
-		for (const entry of entries.filter((entry) => entry.path.match(/\.(astro|ts|js|svelte)$/))) {
-			expect(entry.content, entry.path).not.toMatch(/from\s+['"]@lib(?:\/|['"])/)
-		}
+		for (const entry of entries.filter((entry) => entry.path.match(/\.(astro|ts|js|svelte)$/))) expect(entry.content, entry.path).not.toMatch(/from\s+['"]@lib(?:\/|['"])/)
 	})
 
 	test('loads shared styles/fonts once and scans Astro plus raw Svelte sources', () => {
@@ -116,9 +112,7 @@ describe('generateMarketingAstro — static and shared UI contract', () => {
 			'@repo/backend',
 			'@repo/db',
 			'$app/'
-		]) {
-			expect(all).not.toContain(forbidden)
-		}
+		]) expect(all).not.toContain(forbidden)
 	})
 })
 

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
@@ -92,6 +93,7 @@ const gatewayEffortSourcePaths = [
 	'src/generators/gateway.ts',
 	'src/generators/hono-topology.ts',
 	'src/generators/i18n.ts',
+	'src/generators/index.ts',
 	'src/generators/integrated-deploy.ts',
 	'src/generators/marketing-astro.ts',
 	'src/generators/openapi-client.ts',
@@ -99,6 +101,7 @@ const gatewayEffortSourcePaths = [
 	'src/generators/root.ts',
 	'src/generators/services/auth.ts',
 	'src/generators/services/users.ts',
+	'src/lib/cloudflare-worker-name.ts',
 	'src/lib/workers.ts',
 	'tests/contracts/astro-scaffold-matrix.test.ts',
 	'tests/contracts/auth-bindings.test.ts',
@@ -107,6 +110,7 @@ const gatewayEffortSourcePaths = [
 	'tests/contracts/gateway-auth.test.ts',
 	'tests/contracts/gateway-cloudflare.test.ts',
 	'tests/contracts/gateway-docker.test.ts',
+	'tests/contracts/gateway-local.test.ts',
 	'tests/contracts/gateway-openapi.test.ts',
 	'tests/contracts/gateway-preview-workflows.test.ts',
 	'tests/contracts/gateway-rollout-compatibility.test.ts',
@@ -115,18 +119,32 @@ const gatewayEffortSourcePaths = [
 	'tests/contracts/gateway-streaming.test.ts',
 	'tests/contracts/gateway-topology.test.ts',
 	'tests/contracts/inside-frontend-bindings.test.ts',
+	'tests/contracts/non-hono-output.test.ts',
 	'tests/contracts/topology-routes.test.ts',
 	'tests/contracts/users-bindings.test.ts',
+	'tests/fixtures.test.ts',
 	'tests/generators/ai-tooling.test.ts',
 	'tests/generators/deploy.test.ts',
 	'tests/generators/frontend-sveltekit.test.ts',
 	'tests/generators/gateway.test.ts',
 	'tests/generators/hono-topology.test.ts',
+	'tests/generators/integrated-deploy.test.ts',
+	'tests/generators/marketing-astro.test.ts',
 	'tests/generators/openapi-client.test.ts',
 	'tests/generators/root.test.ts',
 	'tests/pipeline.test.ts',
 	'tests/schema.test.ts'
 ]
+
+const gatewayEffortGeneratedSourcePaths = [
+	'src/generated/marketing-templates.ts',
+	'src/generated/root-templates.ts',
+	'src/generated/web-templates.ts'
+]
+const gatewayEffortLiveTypeScriptPathContract = {
+	count: 71,
+	digest: '7369a3d804dee244c2fef18705c0de31527268a23b3b0e4503a81b499ba1dfd4'
+}
 
 function inlineControlBodyFindings(path: string, source: string): string[] {
 	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true)
@@ -753,6 +771,25 @@ describe('local private-service gateway topology', () => {
 			'sample.ts:29 (if, split)',
 			'sample.ts:30 (if, unbraced multi-line)'
 		])
+	})
+
+	test('gateway effort source inventory covers its live TypeScript range', () => {
+		const liveTypeScriptPaths = [
+			...gatewayEffortSourcePaths,
+			...gatewayEffortGeneratedSourcePaths
+		].sort()
+		expect(gatewayEffortSourcePaths).toEqual([...gatewayEffortSourcePaths].sort())
+		expect(gatewayEffortGeneratedSourcePaths).toEqual(
+			[...gatewayEffortGeneratedSourcePaths].sort()
+		)
+		expect(new Set(liveTypeScriptPaths).size).toBe(liveTypeScriptPaths.length)
+		expect(liveTypeScriptPaths).toHaveLength(gatewayEffortLiveTypeScriptPathContract.count)
+		expect(
+			createHash('sha256').update(liveTypeScriptPaths.join('\n')).digest('hex')
+		).toBe(gatewayEffortLiveTypeScriptPathContract.digest)
+		liveTypeScriptPaths.forEach((path) =>
+			readFileSync(join(fixturesDir, '..', path), 'utf8')
+		)
 	})
 
 	test('gateway-owned source uses named options and no multi-line comments', () => {

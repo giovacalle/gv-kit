@@ -5,7 +5,7 @@
 .ai/rules/core-stack.md  85da00f5a6c06e7b
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  59dd8baf18b69696
-.ai/rules/core-workflow.md  3cbbc129cb5f28c2
+.ai/rules/core-workflow.md  6536298fd78d4f4f
 .ai/rules/db-drizzle.md  3ed290ece43f6304
 .ai/rules/deploy-cf-workers.md  d07c8dd18c2fe2a8
 .ai/rules/email-templates.md  f58e0bafccda69df

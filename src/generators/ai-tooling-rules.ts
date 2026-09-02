@@ -34,6 +34,7 @@ export function generateAiToolingRules(cfg: GvKitConfig): FileEntry[] {
 		tree: 'root',
 		flags: {
 			auth: cfg.choices.auth.length > 0,
+			claude: cfg.choices.aiTooling.includes('claude'),
 			insideFrontendBaseline: cfg.choices.backend === 'inside-frontend',
 			insideFrontendCfBaseline:
 				cfg.choices.backend === 'inside-frontend' && cfg.choices.deploy === 'cf-workers',

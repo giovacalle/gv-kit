@@ -5,7 +5,7 @@
 .ai/rules/core-stack.md  81d875fff859a62e
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  27071cf2575ae277
-.ai/rules/core-workflow.md  92cd59dff3492c41
+.ai/rules/core-workflow.md  a308bd525a87075b
 .ai/rules/db-drizzle.md  0d4c0814445100c8
 .ai/rules/email-templates.md  42f8ee191e5bb372
 .ai/rules/hooks.md  6dd03126d2ec9420
@@ -17,7 +17,7 @@
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
 .ai/rules/web-ui.md  2d28c4ed82326988
 .claude/agents/implement.md  52a9b5c8a660f273
-.claude/agents/plan.md  f462aa3dff0bd792
+.claude/agents/plan.md  25ad8acc63198980
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
 .claude/agents/service-architect.md  9cac4ffdd8cc947e

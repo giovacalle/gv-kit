@@ -12,7 +12,7 @@ Before any non-trivial change: a new feature, a refactor, a tricky bug fix, or a
 
 ## Process
 
-1. **Read the rules.** Glob `.claude/rules/*.md` and read every rule whose name plausibly applies to the request. Default to reading: `core-*` (always), the matching `web-*` / `api-*` / `db-*` / `auth-*` / `deploy-*` / `email-*` rules.
+1. **Read the rules.** Glob `.ai/rules/*.md` and read every rule whose name plausibly applies to the request. Default to reading: `core-*` (always), the matching `web-*` / `api-*` / `db-*` / `auth-*` / `deploy-*` / `email-*` rules.
 2. **Read `.claude/stack.json`** to know which choices were made.
 3. **Read existing code.** Survey the files you'd touch. Don't guess at conventions — they're in the rules and the existing code.
 4. **Surface unknowns.** If the request leaves something ambiguous, list the open questions BEFORE proposing a plan. Do not invent defaults silently.

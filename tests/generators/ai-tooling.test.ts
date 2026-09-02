@@ -84,6 +84,42 @@ function agentGuidance(entries: ReturnType<typeof runGenerators>): string {
 		.join('\n')
 }
 
+function expectDocumentedToolingPathsToResolve(entries: ReturnType<typeof runGenerators>): void {
+	const planPaths = entries.map(({ path }) => path)
+	const references = [
+		...new Set(
+			[...agentGuidance(entries).matchAll(/`((?:\.ai|\.claude|\.codex|\.opencode)\/[^`]+)`/g)].map(
+				(match) => match[1]!
+			)
+		)
+	]
+
+	for (const reference of references) {
+		const prefix = reference.replace(/\*[^/]*$/, '').replace(/\/$/, '')
+		expect(
+			planPaths.some((path) => path === prefix || path.startsWith(`${prefix}/`)),
+			reference
+		).toBe(true)
+	}
+}
+
+function expectNamedAgentsToResolve(entries: ReturnType<typeof runGenerators>): void {
+	const descriptorNames = new Set(
+		entries
+			.filter(({ path }) => /\.(?:claude|codex|opencode)\/agents\//.test(path))
+			.map(({ path }) => path.split('/').at(-1)!.replace(/\.(?:md|toml)$/, ''))
+	)
+	const references = [
+		...new Set(
+			[...agentGuidance(entries).matchAll(/`(plan|implement|polish|review|service-architect|astro-marketer)`/g)].map(
+				(match) => match[1]!
+			)
+		)
+	]
+
+	for (const reference of references) expect(descriptorNames.has(reference), reference).toBe(true)
+}
+
 type CapabilityPathReference = {
 	reference: string
 	resolvedPath: string
@@ -206,6 +242,31 @@ describe('generateAiTooling — decision matrix', () => {
 		const rules = p.filter((x) => x === '.ai/rules/core-stack.md')
 		expect(rules).toHaveLength(1)
 	})
+})
+
+describe('generateAiTooling — specialist self-containment', () => {
+	for (const selected of AI_TOOLING_SELECTIONS) {
+		test(`${selected.join('+')} references only emitted Hono agents and tooling paths`, () => {
+			const entries = runGenerators(makeCfg([...selected]))
+			const planPaths = entries.map(({ path }) => path)
+			const workflow = content(entries, '.ai/rules/core-workflow.md')
+			const emitsServiceArchitect = planPaths.includes(
+				'.claude/agents/service-architect.md'
+			)
+
+			expect(workflow.includes('`service-architect`')).toBe(emitsServiceArchitect)
+			if (emitsServiceArchitect) {
+				expect(workflow).toContain('Claude Code only')
+				expect(workflow).toContain('`.claude/agents/service-architect.md`')
+			} else {
+				expect(workflow).not.toContain('.claude/')
+				expect(workflow).not.toMatch(/`(?:plan|implement|polish|review)`/)
+			}
+
+			expectNamedAgentsToResolve(entries)
+			expectDocumentedToolingPathsToResolve(entries)
+		})
+	}
 })
 
 describe('generateAiTooling — Astro marketing guidance', () => {

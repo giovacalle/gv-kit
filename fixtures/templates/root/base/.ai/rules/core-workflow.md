@@ -10,6 +10,7 @@ This project ships four Claude Code agents for the lifecycle of a change:
 | `polish` | After the feature works, before review | Edit + Write |
 | `review` | Before commit or merge | Read-only |
 
+<!--@gvkit:if hono-->
 A Hono specialist is available to Claude Code only:
 
 <!--@gvkit:if cfWorkers-->
@@ -20,7 +21,14 @@ A Hono specialist is available to Claude Code only:
 
 `apps/api/` remains the public gateway, and reusable application modules stay in `packages/backend/`. Other selected tooling follows the canonical rules directly and does not expose this specialist.
 <!--@gvkit:else-->
+The SvelteKit application is one deployment unit. It has no stack-specific backend specialist.
+<!--@gvkit:endif-->
+<!--@gvkit:else-->
+<!--@gvkit:if hono-->
 Follow the workflow below directly through the selected tooling. Before adding a private Hono service, read `.ai/rules/core-stack.md` and `.ai/rules/api-backend.md`. Keep `apps/api/` as the public gateway, private transport adapters under `services/<service>/`, and reusable application modules in `packages/backend/`.
+<!--@gvkit:else-->
+Follow the workflow below directly through the selected tooling. The SvelteKit application is one deployment unit and has no stack-specific backend specialist.
+<!--@gvkit:endif-->
 <!--@gvkit:endif-->
 
 ## Typical flow

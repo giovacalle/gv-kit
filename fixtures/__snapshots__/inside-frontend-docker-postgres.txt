@@ -4,7 +4,7 @@
 .ai/rules/core-stack.md  9e7e27dfe2e6137e
 .ai/rules/core-style.md  dcfcd0b0b62f54f6
 .ai/rules/core-testing.md  fe60b64681c2ba9a
-.ai/rules/core-workflow.md  c0b91360c88010c3
+.ai/rules/core-workflow.md  0c7b79c4981fc5b1
 .ai/rules/db-drizzle.md  fdebaf32e64960aa
 .ai/rules/hooks.md  6dd03126d2ec9420
 .ai/rules/web-forms.md  18d060e15c611273

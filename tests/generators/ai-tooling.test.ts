@@ -88,9 +88,11 @@ function expectDocumentedToolingPathsToResolve(entries: ReturnType<typeof runGen
 	const planPaths = entries.map(({ path }) => path)
 	const references = [
 		...new Set(
-			[...agentGuidance(entries).matchAll(/`((?:\.ai|\.claude|\.codex|\.opencode)\/[^`]+)`/g)].map(
-				(match) => match[1]!
-			)
+			[
+				...agentGuidance(entries).matchAll(
+					/`((?:(?:\.ai|\.claude|\.codex|\.opencode)\/[^`]+)|(?:AGENTS\.md|CLAUDE\.md|opencode\.json))`/g
+				)
+			].map((match) => match[1]!)
 		)
 	]
 
@@ -244,27 +246,49 @@ describe('generateAiTooling — decision matrix', () => {
 	})
 })
 
-describe('generateAiTooling — specialist self-containment', () => {
-	for (const selected of AI_TOOLING_SELECTIONS) {
-		test(`${selected.join('+')} references only emitted Hono agents and tooling paths`, () => {
-			const entries = runGenerators(makeCfg([...selected]))
-			const planPaths = entries.map(({ path }) => path)
-			const workflow = content(entries, '.ai/rules/core-workflow.md')
-			const emitsServiceArchitect = planPaths.includes(
-				'.claude/agents/service-architect.md'
-			)
+describe('generateAiTooling — workflow self-containment', () => {
+	for (const backend of ['hono', 'inside-frontend'] as const) {
+		for (const selected of AI_TOOLING_SELECTIONS) {
+			test(`${backend} + ${selected.join('+')} references only emitted agents and tooling paths`, () => {
+				const entries = runGenerators(
+					makeCfg([...selected], {
+						apiClient: backend === 'hono' ? 'hey-api' : 'skip',
+						backend
+					})
+				)
+				const planPaths = entries.map(({ path }) => path)
+				const workflow = content(entries, '.ai/rules/core-workflow.md')
+				const emitsClaude = (selected as readonly string[]).includes('claude')
+				const emitsServiceArchitect = planPaths.includes(
+					'.claude/agents/service-architect.md'
+				)
 
-			expect(workflow.includes('`service-architect`')).toBe(emitsServiceArchitect)
-			if (emitsServiceArchitect) {
-				expect(workflow).toContain('Claude Code only')
-				expect(workflow).toContain('`.claude/agents/service-architect.md`')
-			} else {
-				expect(workflow).not.toContain('.claude/')
-				expect(workflow).not.toMatch(/`(?:plan|implement|polish|review)`/)
-			}
+				expect(workflow.includes('`.claude/agents/`')).toBe(emitsClaude)
+				expect(workflow.includes('`.claude/stack.json`')).toBe(emitsClaude)
+				expect(workflow).not.toContain('`AGENTS.md`')
+				expect(workflow).not.toContain('`opencode.json`')
+				expect(workflow.includes('`service-architect`')).toBe(emitsServiceArchitect)
+				if (emitsServiceArchitect) {
+					expect(workflow).toContain('Claude Code only')
+					expect(workflow).toContain('`.claude/agents/service-architect.md`')
+				} else if (!emitsClaude) expect(workflow).not.toMatch(/`(?:plan|implement|polish|review)`/)
 
-			expectNamedAgentsToResolve(entries)
-			expectDocumentedToolingPathsToResolve(entries)
+				expectNamedAgentsToResolve(entries)
+				expectDocumentedToolingPathsToResolve(entries)
+			})
+		}
+	}
+
+	for (const backend of ['hono', 'inside-frontend'] as const) {
+		test(`${backend} with no AI tooling emits no tooling guidance`, () => {
+			expect(
+				generateAiTooling(
+					makeCfg([], {
+						apiClient: backend === 'hono' ? 'hey-api' : 'skip',
+						backend
+					})
+				)
+			).toEqual([])
 		})
 	}
 })

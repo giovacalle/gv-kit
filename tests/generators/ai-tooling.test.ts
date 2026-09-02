@@ -123,6 +123,18 @@ function expectCapabilityPathsToResolve(entries: ReturnType<typeof runGenerators
 	}
 }
 
+function documentedComposePaths(entries: ReturnType<typeof runGenerators>): string[] {
+	return [
+		...new Set(
+			entries
+				.filter(({ path }) => path.endsWith('.md'))
+				.flatMap(({ content }) =>
+					[...content.matchAll(/`((?:docker-)?compose\.ya?ml)`/g)].map((match) => match[1]!)
+				)
+		)
+	].sort()
+}
+
 describe('generateAiTooling — decision matrix', () => {
 	test('empty selection emits nothing', () => {
 		const entries = generateAiTooling(makeCfg([]))
@@ -321,6 +333,39 @@ describe('database ownership terminology contract', () => {
 })
 
 describe('generated Hono gateway guidance', () => {
+	test('Compose guidance resolves for authenticated Docker plans only', () => {
+		const authShapes = [
+			{ label: 'email OTP', auth: ['emailOTP'] as const, email: 'resend' as const },
+			{ label: 'Google', auth: ['google'] as const, email: 'skip' as const },
+			{
+				label: 'email OTP and Google',
+				auth: ['emailOTP', 'google'] as const,
+				email: 'notifuse' as const
+			}
+		]
+
+		for (const db of ['postgres', 'sqlite'] as const) {
+			for (const { label, auth, email } of authShapes) {
+				const entries = runGenerators(
+					makeCfg(['claude'], { auth: [...auth], db, deploy: 'docker', email })
+				)
+				const composePaths = documentedComposePaths(entries)
+				const planPaths = new Set(entries.map(({ path }) => path))
+				const shape = `${db}/${label}`
+
+				expect(composePaths, shape).toEqual(['docker-compose.yml'])
+				for (const path of composePaths) expect(planPaths.has(path), `${shape}: ${path}`).toBe(true)
+				expect(markdownGuidance(entries), shape).not.toContain('compose.yaml')
+			}
+		}
+
+		for (const deploy of ['cf-workers', 'skip'] as const) {
+			const entries = runGenerators(makeCfg(['claude'], { deploy }))
+			expect(documentedComposePaths(entries), deploy).toEqual([])
+			expect(markdownGuidance(entries), deploy).not.toMatch(/Docker Compose|docker compose/i)
+		}
+	})
+
 	test('web runtime and ingress guidance follows the deployment target', () => {
 		const expected = {
 			'cf-workers': {

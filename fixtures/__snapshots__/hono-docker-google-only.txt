@@ -19,7 +19,7 @@
 .claude/agents/plan.md  f462aa3dff0bd792
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814
-.claude/agents/service-architect.md  9d74a34a0df4602e
+.claude/agents/service-architect.md  9cac4ffdd8cc947e
 .claude/settings.json  6ca360fbc0149b7c
 .claude/stack.json  cc596a047d34fc84
 .commitlintrc.json  1a921be1aa693bb1

@@ -307,7 +307,7 @@ function renderServiceArchitectAgent(cfg: GvKitConfig): string {
 			: `4. If the service needs the current session, consume the shared auth boundary:
    - Use \`@repo/backend/middleware/auth\` for private session resolution.
    - Add \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: string\` to \`Env\` in \`env.d.ts\` (${isDocker ? `private Compose target \`${nodeAuthOrigin}\`` : `default \`${nodeAuthOrigin}\` in local development`}).
-${isDocker ? `   - Set \`services.<svc>.environment.${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: ${nodeAuthOrigin}\` in \`compose.yaml\`.` : ''}
+${isDocker ? `   - Set \`services.<svc>.environment.${AUTH_SERVICE.transport.node.targetEnvironmentVariable}: ${nodeAuthOrigin}\` in \`docker-compose.yml\`.` : ''}
    - Mount \`requireAuth\` from the shared middleware on protected routes. The middleware owns the deployment-aware private transport. Do not call the \`${AUTH_SERVICE.internalTarget}\` binding, \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\`, or \`/internal/session\` directly and do not create another session transport.`
 
 	const cloudflareConfig = isCfWorkers

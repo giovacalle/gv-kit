@@ -393,6 +393,7 @@ describe('Cloudflare gateway preview contracts', () => {
 			AUTH_CORS_ORIGINS:
 				'https://pr-123.app.example.com,https://pr-123.api.example.com,http://localhost:3000,http://localhost:5173,http://api.localhost:8786'
 		})
+		for (const config of [configs.users, configs.web]) expect(config.vars).toBeUndefined()
 		expect(result.githubOutput).toContain('api_origin=https://pr-123.api.example.com\n')
 		expect(result.githubOutput).toContain('web_origin=https://pr-123.app.example.com\n')
 		expect(JSON.parse(result.manifest ?? '')).toEqual({
@@ -456,9 +457,38 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(result.configs?.marketing?.routes).toEqual([
 			{ pattern: 'pr-123-marketing.app.example.com/*', zone_name: 'example.com' }
 		])
+		expect(result.configs?.marketing?.vars).toBeUndefined()
 		expect(result.githubOutput).toContain(
 			'marketing_origin=https://pr-123-marketing.app.example.com\n'
 		)
+	})
+
+	test('trusted publisher authenticates exact preview runtime variables before deployment', async () => {
+		const publisher = entry(generateDeploy(makeCfg({ marketing: 'astro' })), 'scripts/publish-cloudflare-preview.sh')
+		await shellSyntax(publisher)
+		for (const key of [
+			'API_PUBLIC_ORIGIN',
+			'GATEWAY_PUBLIC_ORIGINS',
+			'API_CORS_ORIGINS',
+			'GATEWAY_UPSTREAM_TIMEOUT_MS',
+			'BETTER_AUTH_ALLOWED_HOSTS',
+			'AUTH_CORS_ORIGINS'
+		]) expect(publisher).toContain(key)
+		expect(publisher).toContain('expected_preview_runtime_variables')
+		expect(publisher).toContain('services/users|apps/web|apps/marketing)')
+		expect(publisher).toContain('(.vars | type) == "object" and .vars == $expected')
+		expect(publisher).toContain('Preview runtime variables are unsafe for $directory.')
+		expect(publisher.indexOf('expected_vars=$(expected_preview_runtime_variables')).toBeLessThan(
+			publisher.indexOf('publish()')
+		)
+
+		const noAuthPublisher = entry(
+			generateDeploy(makeCfg({ auth: [], marketing: 'inside-web' })),
+			'scripts/publish-cloudflare-preview.sh'
+		)
+		await shellSyntax(noAuthPublisher)
+		expect(noAuthPublisher).toContain('services/auth|services/users|apps/web)')
+		expect(noAuthPublisher).not.toContain('BETTER_AUTH_ALLOWED_HOSTS')
 	})
 
 	test('database, private services, gateway, and web deploy in order for production and previews', () => {

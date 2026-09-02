@@ -370,6 +370,22 @@ function publishCloudflarePreviewScript(cfg: GvKitConfig): string {
 : "\${STAGING_D1_DATABASE_ID:?preview D1 database id is required}"
 `
 			: ''
+	const authRuntimeVariablePolicy =
+		cfg.choices.auth.length > 0
+			? `${AUTH_SERVICE.workspacePath})
+			jq -cn \\
+				--arg allowed_hosts "$preview_web_host,$preview_api_host,$local_hosts" \\
+				--arg cors_origins "$preview_web_origin,$preview_api_origin,$local_origins" \\
+				'{BETTER_AUTH_ALLOWED_HOSTS: $allowed_hosts, AUTH_CORS_ORIGINS: $cors_origins}'
+			;;
+		`
+			: ''
+	const targetsWithoutRuntimeVariables = [
+		...(cfg.choices.auth.length === 0 ? [AUTH_SERVICE.workspacePath] : []),
+		USERS_SERVICE.workspacePath,
+		'apps/web',
+		...(cfg.choices.marketing === 'astro' ? ['apps/marketing'] : [])
+	].join('|')
 	return `#!/bin/sh
 set -eu
 
@@ -381,6 +397,28 @@ ${d1Requirements}
 : "\${CLOUDFLARE_PREVIEW_ZONE_NAME:?preview zone name is required}"
 : "\${CLOUDFLARE_PREVIEW_WEB_DOMAIN:?preview web domain is required}"
 : "\${CLOUDFLARE_PREVIEW_API_DOMAIN:?preview API domain is required}"
+
+preview_api_host="$STAGING_ALIAS.$CLOUDFLARE_PREVIEW_API_DOMAIN"
+preview_web_host="$STAGING_ALIAS.$CLOUDFLARE_PREVIEW_WEB_DOMAIN"
+preview_api_origin="https://$preview_api_host"
+preview_web_origin="https://$preview_web_host"
+local_hosts='localhost:3000,localhost:5173,api.localhost:8786'
+local_origins='http://localhost:3000,http://localhost:5173,http://api.localhost:8786'
+
+expected_preview_runtime_variables() {
+	directory=$1
+	case "$directory" in
+		${HONO_GATEWAY.workspacePath})
+			jq -cn \\
+				--arg api_origin "$preview_api_origin" \\
+				--arg public_origins "$preview_web_origin,$preview_api_origin,$local_origins" \\
+				--arg cors_origins "$preview_web_origin,$local_origins" \\
+				'{API_PUBLIC_ORIGIN: $api_origin, GATEWAY_PUBLIC_ORIGINS: $public_origins, API_CORS_ORIGINS: $cors_origins, GATEWAY_UPSTREAM_TIMEOUT_MS: "10000"}'
+			;;
+		${authRuntimeVariablePolicy}${targetsWithoutRuntimeVariables}) printf '%s' '{}' ;;
+		*) echo "Trusted preview runtime variable policy is invalid for $directory." >&2; exit 1 ;;
+	esac
+}
 
 trusted_worker_name() {
 	directory=$1
@@ -429,6 +467,14 @@ prepare() {
 	node "$TRUSTED_SOURCE/scripts/cloudflare-preview-name.mjs" --validate-name "$worker_name" "$STAGING_ALIAS" >/dev/null
 	if ! jq -e '.workers_dev == false and .preview_urls == false' "$source_config" >/dev/null; then
 		echo "Preview public development URLs are unsafe for $directory." >&2
+		exit 1
+	fi
+	expected_vars=$(expected_preview_runtime_variables "$directory")
+	if ! jq -e --argjson expected "$expected_vars" '
+		((has("vars") | not) and $expected == {}) or
+		((.vars | type) == "object" and .vars == $expected)
+	' "$source_config" >/dev/null; then
+		echo "Preview runtime variables are unsafe for $directory." >&2
 		exit 1
 	fi
 	case "$route_policy" in

@@ -289,7 +289,7 @@ scripts/cleanup-cloudflare-preview-workers.sh  821472f1af1a2739
 scripts/cloudflare-preview-name.mjs  62928dbb81c69c1b
 scripts/local.mjs  42825d534dc30567
 scripts/prepare-cloudflare-preview.mjs  b73ae641d89bba5c
-scripts/publish-cloudflare-preview.sh  04e59b07fda29c0c
+scripts/publish-cloudflare-preview.sh  9531aebbff57e0e6
 scripts/resolve-cloudflare-deploy-range.sh  5a1efeaeeb11ebb8
 scripts/verify-cloudflare-preview-ingress.mjs  d679b9884fed1dc2
 scripts/write-cloudflare-preview-secrets.mjs  c538262dd3ffb716

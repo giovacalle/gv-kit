@@ -11,7 +11,22 @@ type WranglerConfig = {
 	routes?: Array<Record<string, unknown>>
 	services?: Array<{ binding: string; service: string }>
 	d1_databases?: Array<Record<string, string>>
+	vars?: Record<string, string>
 }
+
+type PublisherProbeMode =
+	| 'valid'
+	| 'reordered-vars'
+	| 'd1-binding'
+	| 'route'
+	| 'collision'
+	| 'gateway-api-origin'
+	| 'gateway-public-origins'
+	| 'gateway-cors-origins'
+	| 'auth-hosts'
+	| 'auth-cors-origins'
+	| 'extra-vars'
+	| 'missing-var'
 
 type PreviewSecurityOptions = {
 	project: string
@@ -795,7 +810,7 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 	)
 
 	async function probeTrustedPublisher(
-		mode: 'valid' | 'd1-binding' | 'route' | 'collision'
+		mode: PublisherProbeMode
 	): Promise<ProbeResult & { invocations: string[] }> {
 		await resetDirectory(artifact)
 		await writeFile(publishLog, '')
@@ -814,6 +829,52 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 				)
 			}
 			if (mode === 'route' && worker.directory === 'apps/web') config.routes = [{ pattern: 'production.example.com/*', zone_name: 'example.com' }]
+			if (worker.directory === 'apps/api') {
+				if (mode === 'gateway-api-origin') {
+					config.vars = {
+						...(config.vars ?? {}),
+						API_PUBLIC_ORIGIN: 'https://api.example.com'
+					}
+				}
+				if (mode === 'gateway-public-origins') {
+					config.vars = {
+						...(config.vars ?? {}),
+						GATEWAY_PUBLIC_ORIGINS: `${config.vars?.GATEWAY_PUBLIC_ORIGINS ?? ''},https://app.example.com`
+					}
+				}
+				if (mode === 'gateway-cors-origins') {
+					config.vars = {
+						...(config.vars ?? {}),
+						API_CORS_ORIGINS: `${config.vars?.API_CORS_ORIGINS ?? ''},https://unrelated.example.net`
+					}
+				}
+				if (mode === 'missing-var') delete config.vars?.API_PUBLIC_ORIGIN
+				if (mode === 'reordered-vars') {
+					config.vars = Object.fromEntries(
+						Object.entries(config.vars ?? {}).reverse()
+					)
+				}
+			}
+			if (worker.directory === 'services/auth') {
+				if (mode === 'auth-hosts') {
+					config.vars = {
+						...(config.vars ?? {}),
+						BETTER_AUTH_ALLOWED_HOSTS: `${config.vars?.BETTER_AUTH_ALLOWED_HOSTS ?? ''},app.example.com`
+					}
+				}
+				if (mode === 'auth-cors-origins') {
+					config.vars = {
+						...(config.vars ?? {}),
+						AUTH_CORS_ORIGINS: `${config.vars?.AUTH_CORS_ORIGINS ?? ''},https://unrelated.example.net`
+					}
+				}
+				if (mode === 'reordered-vars') {
+					config.vars = Object.fromEntries(
+						Object.entries(config.vars ?? {}).reverse()
+					)
+				}
+			}
+			if (mode === 'extra-vars' && worker.directory === 'services/users') config.vars = { INJECTED_VARIABLE: 'production-value' }
 			if (mode === 'd1-binding' && worker.directory === 'services/users') {
 				config.d1_databases = [
 					...(config.d1_databases ?? []),
@@ -860,6 +921,69 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 	requirePassed(valid, 'trusted preview publisher')
 	if (valid.invocations.length !== workers.length) throw new Error('trusted preview publisher did not invoke Wrangler once per Worker')
 
+	const reorderedVariables = await probeTrustedPublisher('reordered-vars')
+	requirePassed(reorderedVariables, 'reordered preview runtime variables')
+	if (reorderedVariables.invocations.length !== workers.length) throw new Error('semantically equivalent reordered runtime variables did not reach every Wrangler invocation')
+
+	const variableAttacks: Array<{
+		mode: PublisherProbeMode
+		name: string
+		target: string
+		result: string
+	}> = [
+		{
+			mode: 'gateway-api-origin',
+			name: 'production preview API origin',
+			target: 'apps/api',
+			result: 'publisher-unsafe-api-origin'
+		},
+		{
+			mode: 'gateway-public-origins',
+			name: 'production gateway public origin',
+			target: 'apps/api',
+			result: 'publisher-unsafe-gateway-public-origins'
+		},
+		{
+			mode: 'gateway-cors-origins',
+			name: 'unrelated gateway CORS origin',
+			target: 'apps/api',
+			result: 'publisher-unsafe-gateway-cors-origins'
+		},
+		{
+			mode: 'auth-hosts',
+			name: 'production auth host',
+			target: 'services/auth',
+			result: 'publisher-unsafe-auth-hosts'
+		},
+		{
+			mode: 'auth-cors-origins',
+			name: 'unrelated auth CORS origin',
+			target: 'services/auth',
+			result: 'publisher-unsafe-auth-cors-origins'
+		},
+		{
+			mode: 'extra-vars',
+			name: 'extra users runtime variable',
+			target: 'services/users',
+			result: 'publisher-extra-runtime-variable'
+		},
+		{
+			mode: 'missing-var',
+			name: 'missing gateway runtime variable',
+			target: 'apps/api',
+			result: 'publisher-missing-runtime-variable'
+		}
+	]
+	for (const attack of variableAttacks) {
+		const rejected = await probeTrustedPublisher(attack.mode)
+		requireRejected({
+			result: rejected,
+			name: attack.name,
+			message: `Preview runtime variables are unsafe for ${attack.target}.`
+		})
+		if (rejected.invocations.length !== 0) throw new Error(`${attack.name} reached Wrangler`)
+	}
+
 	const binding = await probeTrustedPublisher('d1-binding')
 	requireRejected({
 		result: binding,
@@ -887,7 +1011,14 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 	})
 	if (collision.invocations.length !== 0) throw new Error('Worker identity collision reached Wrangler')
 
-	return ['publisher-valid', 'publisher-unsafe-d1-binding', 'publisher-unsafe-route', 'publisher-worker-collision']
+	return [
+		'publisher-valid',
+		'publisher-reordered-runtime-variables',
+		...variableAttacks.map(({ result }) => result),
+		'publisher-unsafe-d1-binding',
+		'publisher-unsafe-route',
+		'publisher-worker-collision'
+	]
 }
 
 export async function verifyPreviewSecurityContracts({

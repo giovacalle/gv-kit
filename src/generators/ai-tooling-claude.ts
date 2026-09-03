@@ -28,6 +28,7 @@ export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 		tree: 'root',
 		flags: {
 			auth: cfg.choices.auth.length > 0,
+			email: cfg.choices.email !== 'skip',
 			insideFrontendBaseline: cfg.choices.backend === 'inside-frontend',
 			cfWorkers: cfg.choices.deploy === 'cf-workers',
 			hono: cfg.choices.backend === 'hono',

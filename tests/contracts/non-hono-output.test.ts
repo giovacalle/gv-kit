@@ -8,7 +8,7 @@ import { GvKitConfig } from '../../src/schema/config.js'
 
 const fixtureBaselines = {
 	'inside-frontend-docker-postgres.jsonc':
-		'995ad5ba6bded7fb4b7dcebd6886258bf4f1225ec17544d448731fe272f36d09',
+		'e698d51191e80d7e5f3e510d5c7d3fbf74083ede8b235174eca598264178722f',
 	'inside-frontend-docker-sqlite.jsonc':
 		'350bb4b1d020df2fc3c6841f09914cd40f004c67c8a309f0cdae26f4e980258e'
 } as const

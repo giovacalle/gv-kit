@@ -15,7 +15,7 @@
 .ai/rules/web-svelte.md  5cb4e7ef650132b5
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
 .ai/rules/web-ui.md  2d28c4ed82326988
-.claude/agents/implement.md  52a9b5c8a660f273
+.claude/agents/implement.md  c65049b6931cbfc6
 .claude/agents/plan.md  25ad8acc63198980
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814

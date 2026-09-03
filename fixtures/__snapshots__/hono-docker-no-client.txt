@@ -15,7 +15,7 @@
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
 .ai/rules/web-ui.md  2d28c4ed82326988
 .claude/agents/astro-marketer.md  4b096c7c544d2a9c
-.claude/agents/implement.md  52a9b5c8a660f273
+.claude/agents/implement.md  f32bc7ae9f1345e1
 .claude/agents/plan.md  25ad8acc63198980
 .claude/agents/polish.md  7b7bd38cb4423a95
 .claude/agents/review.md  8ffbb12737339814

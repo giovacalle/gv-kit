@@ -3,13 +3,13 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { generateAiTooling } from '../../src/generators/ai-tooling.js'
 import { runGenerators } from '../../src/generators/index.js'
-import type { GvKitConfig } from '../../src/schema/config.js'
+import { GvKitConfig } from '../../src/schema/config.js'
 
 function makeCfg(
 	aiTooling: ('claude' | 'codex' | 'opencode')[],
 	overrides: Partial<GvKitConfig['choices']> = {}
 ): GvKitConfig {
-	return {
+	return GvKitConfig.parse({
 		configVersion: 2,
 		choices: {
 			name: 'demo-app',
@@ -26,7 +26,7 @@ function makeCfg(
 			deploy: 'cf-workers',
 			...overrides
 		}
-	}
+	})
 }
 
 function paths(entries: ReturnType<typeof generateAiTooling>): string[] {
@@ -46,6 +46,13 @@ const AI_TOOLING_SELECTIONS = [
 	['claude', 'codex'],
 	['claude', 'opencode'],
 	['codex', 'opencode'],
+	['claude', 'codex', 'opencode']
+] as const
+
+const CLAUDE_TOOLING_SELECTIONS = [
+	['claude'],
+	['claude', 'codex'],
+	['claude', 'opencode'],
 	['claude', 'codex', 'opencode']
 ] as const
 
@@ -84,20 +91,32 @@ function agentGuidance(entries: ReturnType<typeof runGenerators>): string {
 		.join('\n')
 }
 
+function documentedToolingPathReferences(
+	entries: ReturnType<typeof runGenerators>
+): Map<string, string> {
+	const guidance = agentGuidance(entries)
+	const references = new Map<string, string>()
+	for (const match of guidance.matchAll(
+		/`((?:(?:\.ai|\.claude|\.codex|\.opencode)\/[^`]+)|(?:AGENTS\.md|CLAUDE\.md|opencode\.json))`/g
+	)) {
+		const reference = match[1]!
+		references.set(reference, reference)
+	}
+	for (const match of guidance.matchAll(/@(\.ai\/rules\/[a-z0-9-]+\.md)/g)) {
+		const reference = match[1]!
+		references.set(`@${reference}`, reference)
+	}
+	for (const match of guidance.matchAll(/`([a-z][a-z0-9-]+\.md)`/g)) {
+		const reference = match[1]!
+		references.set(reference, `.ai/rules/${reference}`)
+	}
+	return references
+}
+
 function expectDocumentedToolingPathsToResolve(entries: ReturnType<typeof runGenerators>): void {
 	const planPaths = entries.map(({ path }) => path)
-	const references = [
-		...new Set(
-			[
-				...agentGuidance(entries).matchAll(
-					/`((?:(?:\.ai|\.claude|\.codex|\.opencode)\/[^`]+)|(?:AGENTS\.md|CLAUDE\.md|opencode\.json))`/g
-				)
-			].map((match) => match[1]!)
-		)
-	]
-
-	for (const reference of references) {
-		const prefix = reference.replace(/\*[^/]*$/, '').replace(/\/$/, '')
+	for (const [reference, resolvedPath] of documentedToolingPathReferences(entries)) {
+		const prefix = resolvedPath.replace(/\*[^/]*$/, '').replace(/\/$/, '')
 		expect(
 			planPaths.some((path) => path === prefix || path.startsWith(`${prefix}/`)),
 			reference
@@ -253,7 +272,9 @@ describe('generateAiTooling — workflow self-containment', () => {
 				const entries = runGenerators(
 					makeCfg([...selected], {
 						apiClient: backend === 'hono' ? 'hey-api' : 'skip',
-						backend
+						auth: backend === 'hono' ? ['emailOTP'] : [],
+						backend,
+						email: backend === 'hono' ? 'resend' : 'skip'
 					})
 				)
 				const planPaths = entries.map(({ path }) => path)
@@ -285,11 +306,56 @@ describe('generateAiTooling — workflow self-containment', () => {
 				generateAiTooling(
 					makeCfg([], {
 						apiClient: backend === 'hono' ? 'hey-api' : 'skip',
-						backend
+						auth: backend === 'hono' ? ['emailOTP'] : [],
+						backend,
+						email: backend === 'hono' ? 'resend' : 'skip'
 					})
 				)
 			).toEqual([])
 		})
+	}
+
+	for (const backend of ['hono', 'inside-frontend'] as const) {
+		for (const deploy of ['skip', 'docker', 'cf-workers'] as const) {
+			const capabilityCases = [
+				{ label: 'no-auth/no-email', auth: [] as const, email: 'skip' as const },
+				{ label: 'no-auth/email', auth: [] as const, email: 'resend' as const },
+				...(backend === 'hono'
+					? [
+							{ label: 'auth/no-email', auth: ['google'] as const, email: 'skip' as const },
+							{
+								label: 'auth/email',
+								auth: ['emailOTP'] as const,
+								email: 'notifuse' as const
+							}
+						]
+					: [])
+			]
+
+			for (const { label, auth, email } of capabilityCases) {
+				for (const selected of CLAUDE_TOOLING_SELECTIONS) {
+					test(`${backend}/${deploy}/${label}/${selected.join('+')} gates implement rules by generated capability`, () => {
+						const entries = runGenerators(
+							makeCfg([...selected], {
+								apiClient: backend === 'hono' ? 'hey-api' : 'skip',
+								auth: [...auth],
+								backend,
+								deploy,
+								email
+							})
+						)
+						const implement = content(entries, '.claude/agents/implement.md')
+
+						expect(implement.includes('`auth-flow.md`')).toBe(auth.length > 0)
+						expect(implement.includes('`email-templates.md`')).toBe(email !== 'skip')
+						expect(implement.includes('`deploy-cf-workers.md`')).toBe(
+							deploy === 'cf-workers'
+						)
+						expectDocumentedToolingPathsToResolve(entries)
+					})
+				}
+			}
+		}
 	}
 })
 
@@ -521,7 +587,7 @@ describe('generated Hono gateway guidance', () => {
 	test('Node targets contain no Cloudflare runtime residue across the complete guidance inventory', () => {
 		for (const deploy of ['docker', 'skip'] as const) {
 			for (const backend of ['hono', 'inside-frontend'] as const) {
-				for (const auth of [true, false]) {
+				for (const auth of backend === 'hono' ? [true, false] : [false]) {
 					const entries = runGenerators(
 						makeCfg(['claude', 'codex', 'opencode'], {
 							apiClient: backend === 'hono' ? 'hey-api' : 'skip',
@@ -811,7 +877,12 @@ describe('generated Hono gateway guidance', () => {
 describe('generated integrated-backend guidance', () => {
 	test('describes packages/backend as the shared application layer', () => {
 		const entries = runGenerators(
-			makeCfg(['claude', 'codex', 'opencode'], { backend: 'inside-frontend' })
+			makeCfg(['claude', 'codex', 'opencode'], {
+				apiClient: 'skip',
+				auth: [],
+				backend: 'inside-frontend',
+				email: 'skip'
+			})
 		)
 		const guidance = markdownGuidance(entries)
 		const backendPackage = JSON.parse(content(entries, 'packages/backend/package.json')) as {

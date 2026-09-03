@@ -26,9 +26,9 @@
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
 CLAUDE.md  2865ee4e2ae28a29
-Dockerfile  ce1a020779ea90f2
+Dockerfile  664a441c9cf08274
 LICENSE  508a77d2e7b51d98
-README.md  4d1a3ccd5417ffb8
+README.md  713e0bb2d4bff76a
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
 apps/web/CLAUDE.md  dfff9112e44d58b6

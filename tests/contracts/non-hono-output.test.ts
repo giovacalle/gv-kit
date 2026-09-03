@@ -8,9 +8,9 @@ import { GvKitConfig } from '../../src/schema/config.js'
 
 const fixtureBaselines = {
 	'inside-frontend-docker-postgres.jsonc':
-		'e698d51191e80d7e5f3e510d5c7d3fbf74083ede8b235174eca598264178722f',
+		'8bb69fcce70daa68d3e91238dff217905cae0a783141b8c48e34017d9396e627',
 	'inside-frontend-docker-sqlite.jsonc':
-		'350bb4b1d020df2fc3c6841f09914cd40f004c67c8a309f0cdae26f4e980258e'
+		'a95da4e5e771c4369db5c5209c8283a774cf5b367afaed3b0b8a6e34a2318495'
 } as const
 
 function loadPlan(fixtureName: string): FileEntry[] {
@@ -19,10 +19,10 @@ function loadPlan(fixtureName: string): FileEntry[] {
 	return buildScaffoldPlan(config)
 }
 
-function dockerfileFrom(entries: FileEntry[]): string {
-	const dockerfile = entries.find(({ path }) => path === 'Dockerfile')
-	if (!dockerfile) throw new Error('Integrated Docker output requires a Dockerfile')
-	return dockerfile.content
+function contentFrom(entries: FileEntry[], path: string): string {
+	const entry = entries.find((candidate) => candidate.path === path)
+	if (!entry) throw new Error(`Integrated Docker output requires ${path}`)
+	return entry.content
 }
 
 function packageNamesFrom(entries: FileEntry[]): Set<string> {
@@ -33,8 +33,8 @@ function packageNamesFrom(entries: FileEntry[]): Set<string> {
 	)
 }
 
-function documentedBuildCommands(dockerfile: string): string[] {
-	return [...dockerfile.matchAll(/^# {3}(docker build .+)$/gm)].map((match) => match[1]!)
+function documentedBuildCommands(readme: string): string[] {
+	return [...readme.matchAll(/^docker build .+$/gm)].map((match) => match[0])
 }
 
 function buildArgument(command: string, name: string): string | undefined {
@@ -67,10 +67,11 @@ describe('non-Hono integrated Docker output', () => {
 	for (const [fixtureName, baselineHash] of Object.entries(fixtureBaselines)) {
 		test(`${fixtureName} documents only generated targets, paths, and packages`, () => {
 			const entries = loadPlan(fixtureName)
-			const dockerfile = dockerfileFrom(entries)
+			const dockerfile = contentFrom(entries, 'Dockerfile')
+			const readme = contentFrom(entries, 'README.md')
 			const paths = new Set(entries.map(({ path }) => path))
 			const packageNames = packageNamesFrom(entries)
-			const commands = documentedBuildCommands(dockerfile)
+			const commands = documentedBuildCommands(readme)
 
 			expect(commands).toHaveLength(2)
 			expect(dockerfile).not.toContain('apps/api/auth')

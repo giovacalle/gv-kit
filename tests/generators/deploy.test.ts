@@ -444,8 +444,8 @@ describe('generateDeploy — cf-workers workflows', () => {
 		]
 
 		for (const key of monitoringKeys) {
-			expect(production.split('\n').filter((line) => line.includes(key))).toHaveLength(3)
-			expect(staging.split('\n').filter((line) => line.includes(key))).toHaveLength(2)
+			expect(production.split('\n').filter((line) => line.includes(key))).toHaveLength(2)
+			expect(staging.split('\n').filter((line) => line.includes(key))).toHaveLength(1)
 			expect(productionMarketing.run).toContain(`test -n "$${key}"`)
 			expect(productionMarketing.env?.[key]).toBe(`\${{ vars.${key} }}`)
 			expect(stagingBuild.env?.[key]).toBe(`\${{ vars.${key} }}`)
@@ -455,12 +455,17 @@ describe('generateDeploy — cf-workers workflows', () => {
 	})
 
 	test('Hono production and previews require and forward Turnstile without a public auth URL', () => {
-		const entries = generateDeploy(
-			makeCfg({ deploy: 'cf-workers', marketing: 'inside-web', auth: ['emailOTP'] })
-		)
+		const cfg = makeCfg({
+			deploy: 'cf-workers',
+			marketing: 'inside-web',
+			auth: ['emailOTP']
+		})
+		const entries = generateDeploy(cfg)
+		const readme = findEntry(runGenerators(cfg), 'README.md')!.content
 		const production = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
 		expect(production).not.toContain('PUBLIC_AUTH_URL')
-		expect(production).toContain('#   - PUBLIC_TURNSTILE_SITE_KEY')
+		expect(production).not.toContain('#   - PUBLIC_TURNSTILE_SITE_KEY')
+		expect(readme).toContain('- `PUBLIC_TURNSTILE_SITE_KEY`')
 		expect(production).toContain('PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}')
 		expect(production).toContain('test -n "$PUBLIC_TURNSTILE_SITE_KEY"')
 		const productionWorkflow = Bun.YAML.parse(production) as {
@@ -475,7 +480,7 @@ describe('generateDeploy — cf-workers workflows', () => {
 
 		const staging = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		expect(staging).not.toContain('PUBLIC_AUTH_URL')
-		expect(staging).toContain('#   - PUBLIC_TURNSTILE_SITE_KEY')
+		expect(staging).not.toContain('#   - PUBLIC_TURNSTILE_SITE_KEY')
 		expect(staging).toContain('test -n "$PUBLIC_TURNSTILE_SITE_KEY"')
 		const stagingWorkflow = Bun.YAML.parse(staging) as {
 			jobs: Record<string, { steps: Array<{ name?: string; env?: Record<string, string> }> }>
@@ -492,6 +497,88 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(previewBuild?.env?.PUBLIC_TURNSTILE_SITE_KEY).toBe(
 			'${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}'
 		)
+	})
+
+	test('generated README retains deployment setup and safety guidance', () => {
+		const postgresReadme = findEntry(
+			runGenerators(
+				makeCfg({
+					deploy: 'cf-workers',
+					marketing: 'astro',
+					monitoring: ['umami'],
+					auth: ['emailOTP', 'google']
+				})
+			),
+			'README.md'
+		)!.content
+		for (const setting of [
+			'CLOUDFLARE_API_TOKEN',
+			'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
+			'NEON_PROJECT_ID',
+			'BETTER_AUTH_SECRET',
+			'PUBLIC_UMAMI_HOST'
+		]) expect(postgresReadme).toContain(`- \`${setting}\``)
+		expect(postgresReadme).toContain(
+			'The Cloudflare API token must cover generated Worker operations.'
+		)
+		expect(postgresReadme).toContain(
+			'`NEON_API_KEY` authorizes PostgreSQL preview branch creation and cleanup.'
+		)
+		expect(postgresReadme).toContain('Production migrations connect with `DATABASE_URL`.')
+		expect(postgresReadme).not.toContain('API token must cover generated Worker and D1 database operations')
+		expect(postgresReadme).toContain('The workflows do not copy production Worker secret values.')
+		expect(postgresReadme).toContain('Install them separately with `wrangler secret put <NAME>`.')
+		expect(postgresReadme).toContain(
+			'Trusted Hono preview jobs copy required private Worker application secrets through temporary'
+		)
+		expect(postgresReadme).toContain('secret files and remove those files after publication.')
+		expect(postgresReadme).toContain(
+			"PostgreSQL previews inject the generated preview branch URL under each private Worker's"
+		)
+		expect(postgresReadme).toContain(
+			'`DATABASE_URL` key without copying the production `DATABASE_URL` secret.'
+		)
+		expect(postgresReadme).toContain('Preview builds run without provider credentials.')
+		expect(postgresReadme).toContain('preserves production resources and shared wildcard DNS records')
+
+		const sqliteReadme = findEntry(
+			runGenerators(
+				makeCfg({
+					deploy: 'cf-workers',
+					db: 'sqlite'
+				})
+			),
+			'README.md'
+		)!.content
+		expect(sqliteReadme).toContain(
+			'The Cloudflare API token must cover generated Worker and D1 database operations.'
+		)
+		expect(sqliteReadme).not.toContain('`NEON_API_KEY` authorizes PostgreSQL preview branch creation')
+		expect(sqliteReadme).not.toContain('without copying the production `DATABASE_URL` secret')
+
+		const integratedReadme = findEntry(
+			runGenerators(
+				makeCfg({
+					backend: 'inside-frontend',
+					apiClient: 'skip',
+					deploy: 'cf-workers'
+				})
+			),
+			'README.md'
+		)!.content
+		expect(integratedReadme).toContain('Cleanup removes the preview Workers and database resources')
+		expect(integratedReadme).toContain('deletes the PR branch')
+
+		const dockerReadme = findEntry(
+			runGenerators(makeCfg({ deploy: 'docker' })),
+			'README.md'
+		)!.content
+		expect(dockerReadme).toContain('docker compose up --build')
+		expect(dockerReadme).toContain(
+			'docker build --target auth-runtime --build-arg TURBO_FILTER=@demo/auth-worker -t auth .'
+		)
+		expect(dockerReadme).toContain('docker build --target migrate-runtime')
+		expect(dockerReadme).toContain('waits for the one-shot migration container')
 	})
 
 	test('generated workflows do not contain YAML tab indentation', () => {

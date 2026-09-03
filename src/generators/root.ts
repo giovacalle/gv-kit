@@ -444,7 +444,7 @@ ${quickstart}
 
 ${environmentGuidance}
 ${renderPublicOrigins(cfg)}
-${renderCloudflareDatabaseSetup(cfg)}
+${renderCloudflareDatabaseSetup(cfg)}${renderDeploymentGuidance(cfg)}
 
 ## Stack
 
@@ -466,6 +466,115 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages 
 
 Every runtime and type-only import must be declared explicitly in the importing package's \`package.json\` (including ambient types from \`@repo/tooling-typescript\` such as ${ambientTypeExample}). ESLint's \`import/no-extraneous-dependencies\` rule catches anything that slips through (\`pnpm lint\`).
 `
+}
+
+function cloudflareWorkflowSecretKeys(cfg: GvKitConfig): string[] {
+	const keys = ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID']
+	if (cfg.choices.db === 'postgres') keys.push('DATABASE_URL', 'NEON_API_KEY')
+	if (cfg.choices.backend !== 'hono' || cfg.choices.auth.length === 0) return keys
+	keys.push('BETTER_AUTH_SECRET')
+	if (cfg.choices.auth.includes('google')) keys.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
+	if (cfg.choices.auth.includes('emailOTP')) {
+		keys.push('TURNSTILE_SECRET_KEY')
+		if (cfg.choices.email === 'resend') keys.push('RESEND_API_KEY', 'FROM_EMAIL')
+		if (cfg.choices.email === 'notifuse') keys.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
+	}
+	return keys
+}
+
+function cloudflareWorkflowVariableKeys(cfg: GvKitConfig): string[] {
+	const keys: string[] = []
+	if (cfg.choices.db === 'postgres') keys.push('NEON_PROJECT_ID')
+	if (cfg.choices.backend === 'hono') {
+		keys.push(
+			'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
+			'CLOUDFLARE_PREVIEW_API_DOMAIN',
+			'CLOUDFLARE_PREVIEW_ZONE_NAME'
+		)
+	} else {
+		if (cfg.choices.marketing === 'astro') keys.push('CLOUDFLARE_WORKERS_SUBDOMAIN')
+		if (cfg.choices.auth.length > 0) keys.push('PUBLIC_AUTH_URL')
+	}
+	if (cfg.choices.marketing === 'astro') {
+		keys.push('PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL')
+		if (cfg.choices.monitoring.includes('umami')) keys.push('PUBLIC_UMAMI_HOST', 'PUBLIC_UMAMI_WEBSITE_ID')
+		if (cfg.choices.monitoring.includes('posthog')) keys.push('PUBLIC_POSTHOG_KEY', 'PUBLIC_POSTHOG_HOST')
+	}
+	if (cfg.choices.auth.includes('emailOTP')) keys.push('PUBLIC_TURNSTILE_SITE_KEY')
+	return keys
+}
+
+function markdownList(values: string[]): string {
+	return values.map((value) => `- \`${value}\``).join('\n')
+}
+
+function renderDeploymentGuidance(cfg: GvKitConfig): string {
+	if (cfg.choices.deploy === 'skip') return ''
+	if (cfg.choices.deploy === 'docker') {
+		return `
+
+## Docker deployment
+
+Compose builds the named Dockerfile targets and waits for the one-shot migration container before
+starting application services. Start the generated stack with \`docker compose up --build\`.
+To build individual images from the repository root, select the same targets explicitly:
+
+\`\`\`bash
+docker build --target web-runtime --build-arg TURBO_FILTER=${cfg.choices.name}-web -t web .
+${cfg.choices.backend === 'hono' ? `docker build --target auth-runtime --build-arg TURBO_FILTER=${honoPackageIdentity(cfg.choices.name, AUTH_SERVICE)} -t ${AUTH_SERVICE.identity} .\n` : ''}docker build --target migrate-runtime --build-arg TURBO_FILTER=@repo/db -t migrate .
+\`\`\``
+	}
+
+	const secrets = cloudflareWorkflowSecretKeys(cfg)
+	const variables = cloudflareWorkflowVariableKeys(cfg)
+	const credentialScope =
+		cfg.choices.db === 'sqlite'
+			? 'The Cloudflare API token must cover generated Worker and D1 database operations.'
+			: [
+					'The Cloudflare API token must cover generated Worker operations.',
+					'`NEON_API_KEY` authorizes PostgreSQL preview branch creation and cleanup.',
+					'Production migrations connect with `DATABASE_URL`.'
+				].join('\n')
+	const previewDatabaseSecretGuidance =
+		cfg.choices.backend === 'hono' && cfg.choices.db === 'postgres'
+			? [
+					" PostgreSQL previews inject the generated preview branch URL under each private Worker's",
+					'`DATABASE_URL` key without copying the production `DATABASE_URL` secret.'
+				].join('\n')
+			: ''
+	const previewSecretGuidance =
+		cfg.choices.backend === 'hono' && (cfg.choices.auth.length > 0 || cfg.choices.db === 'postgres')
+			? ` Trusted Hono preview jobs copy required private Worker application secrets through temporary
+secret files and remove those files after publication.${previewDatabaseSecretGuidance}`
+			: ''
+	const previewSafety =
+		cfg.choices.backend === 'hono'
+			? `Preview builds run without provider credentials. Trusted jobs apply migrations and publish
+passive bundles with pinned tools. Cleanup inventories only validated preview resources from the
+trusted default branch and preserves production resources and shared wildcard DNS records.`
+			: `Preview deployments use PR-scoped database resources and temporary Wrangler configurations.
+Cleanup removes the preview Workers and database resources, then deletes the PR branch.`
+	return `
+
+## Cloudflare deployment
+
+Configure these GitHub Actions repository settings before enabling the generated deployment workflows.
+${credentialScope}${
+		cfg.choices.backend === 'hono'
+			? ' It also needs Zone Read and DNS Read for managed preview ingress validation.'
+			: ''
+	}
+
+### Secrets
+
+${markdownList(secrets)}
+
+### Variables
+
+${variables.length > 0 ? markdownList(variables) : 'No repository variables are required.'}
+
+The workflows do not copy production Worker secret values.
+Install them separately with \`wrangler secret put <NAME>\`.${previewSecretGuidance} ${previewSafety}`
 }
 
 function renderPublicOrigins(cfg: GvKitConfig): string {

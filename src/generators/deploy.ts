@@ -867,11 +867,6 @@ function marketingPublicEnvKeys(cfg: GvKitConfig): string[] {
 	return keys
 }
 
-function workflowVariableRequirements(keys: string[]): string {
-	if (keys.length === 0) return ''
-	return `# Required GitHub Variables:\n${keys.map((key) => `#   - ${key}`).join('\n')}\n#\n`
-}
-
 function workflowVariableEnv(keys: string[]): string {
 	if (keys.length === 0) return ''
 	return `\n${keys.map((key) => `          ${key}: \${{ vars.${key} }}`).join('\n')}`
@@ -941,7 +936,6 @@ function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
 	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
 	const publicKeys = marketingPublicEnvKeys(cfg)
 	const nonMonitoringPublicKeys = publicKeys.filter((key) => !monitoringKeys.includes(key))
-	const publicOriginRequirements = workflowVariableRequirements(publicKeys)
 	const publicOriginEnv = workflowVariableEnv(nonMonitoringPublicKeys)
 	const monitoringEnv = workflowVariableEnv(monitoringKeys)
 	const publicVariableChecks = nonMonitoringPublicKeys
@@ -969,17 +963,7 @@ function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
 ${publicVariableChecks ? `${publicVariableChecks}\n` : ''}          pnpm turbo run deploy:production --affected
         env:
 ${deployEnv}`
-	return `# Deploy ${project} to production on push to main.
-#
-# Required GitHub Secrets:
-#   - CLOUDFLARE_API_TOKEN
-#   - CLOUDFLARE_ACCOUNT_ID
-#
-${publicOriginRequirements}
-# Add per-Worker secrets ahead of time via \`wrangler secret put\` — this
-# workflow does not push secrets, only code.
-
-name: deploy-production
+	return `name: deploy-production
 
 on:
   push:
@@ -1080,18 +1064,6 @@ function deployStagingWorkflow({
 		'  preview-db:\n    needs: preview-ingress\n'
 	)
 	const stagingConfigStep = writeStagingWranglerConfigStep({ db })
-	const requiredVariables = [
-		'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
-		'CLOUDFLARE_PREVIEW_API_DOMAIN',
-		'CLOUDFLARE_PREVIEW_ZONE_NAME',
-		...monitoringKeys,
-		...previewPublicKeys
-	]
-	const publicOriginRequirement = workflowVariableRequirements(requiredVariables)
-	const authSecretRequirements =
-		previewAuthSecretKeys(cfg)
-			.map((key) => `#   - ${key}`)
-			.join('\n') + '\n'
 	const buildTargets = [
 		{
 			packageName: honoPackageIdentity(project, AUTH_SERVICE),
@@ -1164,15 +1136,7 @@ ${privateSecretEnv}
           STAGING_D1_DATABASE_NAME: \${{ needs.preview-db.outputs.d1_database_name }}
           STAGING_D1_DATABASE_ID: \${{ needs.preview-db.outputs.d1_database_id }}`
 			: ''
-	return `# Per-PR staging deploy for ${project}.
-# The pull_request_target workflow definition is trusted. PR code is built without provider
-# credentials, then a separate job uploads only prebuilt bundles with pinned provider tools.
-# Tear-down lives in cleanup-staging.yml.
-#
-# Required GitHub Secrets:
-#   - CLOUDFLARE_API_TOKEN (including Zone Read and DNS Read for preview ingress validation)
-#   - CLOUDFLARE_ACCOUNT_ID
-${authSecretRequirements}${db === 'postgres' ? '#   - NEON_API_KEY\n# Required GitHub Variables:\n#   - NEON_PROJECT_ID\n' : ''}${publicOriginRequirement}
+	return `# Provider credentials are isolated from untrusted preview builds.
 
 name: deploy-staging
 
@@ -1494,10 +1458,7 @@ function neonPreviewDbJob(): string {
 function cleanupStagingWorkflow(db: GvKitConfig['choices']['db']): string {
 	const previewDbCleanupStep =
 		db === 'sqlite' ? d1PreviewDbCleanupStep() : neonPreviewDbCleanupStep()
-	return `# Tear down a PR preview when it closes or a manual preview by canonical alias.
-# Cleanup always inventories preview resources from the trusted default branch. Source
-# branches, production resources, and shared wildcard DNS records are unchanged.
-${db === 'postgres' ? '# Neon preview branch cleanup uses NEON_API_KEY and NEON_PROJECT_ID.\n' : ''}
+	return `# Cleanup preserves production resources and shared wildcard DNS records.
 
 name: cleanup-staging
 
@@ -2015,12 +1976,6 @@ ENTRYPOINT ["nginx", "-g", "daemon off;"]
 		: ''
 
 	return `# syntax=docker/dockerfile:1.7
-#
-# Build any service from the repo root:
-#   docker build --target web-runtime --build-arg TURBO_FILTER=<project>-web -t web .
-#   docker build --target auth-runtime --build-arg TURBO_FILTER=${honoPackageIdentity('<project>', AUTH_SERVICE)} -t ${AUTH_SERVICE.identity} .
-#
-# Compose orchestrates these via \`target:\` and \`args:\`.
 
 ARG NODE_VERSION=24
 ARG PNPM_VERSION=11.1.1
@@ -2035,8 +1990,6 @@ RUN apk add --no-cache tini
 ARG PNPM_VERSION
 RUN corepack enable && corepack prepare pnpm@\${PNPM_VERSION} --activate
 
-# Copy only package.json files into /pruned/ so the install layer is reused
-# whenever source changes but manifests do not.
 FROM base AS pruner
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml turbo.json ./
 COPY apps apps
@@ -2095,8 +2048,7 @@ ENTRYPOINT ["/sbin/tini", "--"]
 CMD ["node", "dist/index.js"]
 
 ${nodeRuntimeTargets}
-# One-shot. Compose runs it with \`condition: service_completed_successfully\`
-# so application services wait for migrations before starting.
+# Compose gates application startup on successful migrations.
 FROM deps AS migrate-runtime
 RUN addgroup -S app && adduser -S app -G app
 COPY --from=builder /repo/packages/db ./packages/db

@@ -24,7 +24,7 @@
 .claude/stack.json  cc596a047d34fc84
 .commitlintrc.json  1a921be1aa693bb1
 .dockerignore  c719c73f953f61e8
-.env.example  29086af351f5f9ec
+.env.example  5635beb0a5ef8e54
 .gitignore  6ebdabe6e1116615
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -32,7 +32,7 @@
 CLAUDE.md  8dd6a67b3271a423
 Dockerfile  a686f15a4ff29fff
 LICENSE  508a77d2e7b51d98
-README.md  87a57fa0b8da4de1
+README.md  e82f2d19be12ad18
 apps/api/README.md  75ec2f93c8f0fe33
 apps/api/openapi.json  3e1525b5a7a0719c
 apps/api/package.json  6a0f52b9b59b6c8b

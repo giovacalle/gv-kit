@@ -5,6 +5,7 @@ import ts from 'typescript'
 import { generateDeploy } from '../../src/generators/deploy.js'
 import { generateGateway } from '../../src/generators/gateway.js'
 import { generateIntegratedDeploy } from '../../src/generators/integrated-deploy.js'
+import { generateRoot } from '../../src/generators/root.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
 import { GvKitConfig, type Choices } from '../../src/schema/config.js'
 
@@ -139,6 +140,29 @@ function generatedDeploymentArtifacts() {
 	)
 }
 
+function environmentSetupNarrationFindings(path: string, source: string): string[] {
+	return source.split('\n').flatMap((line, index) => {
+		const comment = line.trimStart()
+		if (!comment.startsWith('#') || !/\b(?:copy|fill|replace|configure|set[ -]?up)\b/i.test(comment)) return []
+		return [`${path}:${index + 1} ${comment}`]
+	})
+}
+
+function generatedRootEnvironmentExamples() {
+	const configs = [
+		{ label: 'gateway-cloudflare', choices: deploymentChoices },
+		{
+			label: 'gateway-docker',
+			choices: { ...deploymentChoices, deploy: 'docker' as const }
+		}
+	]
+	return configs.flatMap(({ label, choices }) =>
+		generateRoot({ configVersion: 2, choices })
+			.filter(({ path }) => path.startsWith('.env'))
+			.map(({ path, content }) => ({ path: `${label}:${path}`, content }))
+	)
+}
+
 describe('gateway source standards', () => {
 	test('preview workflow tests do not import filesystem mutation APIs', () => {
 		const source = readFileSync(previewWorkflowTestPath, 'utf8')
@@ -208,6 +232,25 @@ describe('gateway source standards', () => {
 			'sample.ts:5 multi-line block comment',
 			'sample.ts:3 consecutive explanatory comments'
 		])
+		expect(
+			deploymentCommentRunFindings(
+				'.env.example',
+				['# first environment explanation', '# second environment explanation', 'VALUE=1'].join(
+					'\n'
+				)
+			)
+		).toEqual(['.env.example:1 consecutive explanatory comments'])
+	})
+
+	test('deployment-related root environment examples keep comments concise', () => {
+		expect(
+			environmentSetupNarrationFindings('.env.example', '# Copy to .env and fill required values.')
+		).toEqual(['.env.example:1 # Copy to .env and fill required values.'])
+		const findings = generatedRootEnvironmentExamples().flatMap(({ path, content }) => [
+			...deploymentCommentRunFindings(path, content),
+			...environmentSetupNarrationFindings(path, content)
+		])
+		expect(findings).toEqual([])
 	})
 
 	test('gateway and integrated deployment artifacts keep comments concise', () => {

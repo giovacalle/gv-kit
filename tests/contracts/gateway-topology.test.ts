@@ -1316,10 +1316,12 @@ describe('local private-service gateway topology', () => {
 	test('environment examples separate ingress, private transports, and allowlists', () => {
 		const entries = planFixture('hono-docker-full')
 		const env = entries.find((entry) => entry.path === '.env.example')?.content ?? ''
+		const readme = entries.find((entry) => entry.path === 'README.md')?.content ?? ''
 
-		expect(env).toContain('# Canonical API origin advertised by the gateway OpenAPI endpoint')
-		expect(env).toContain('# Browser API alias: http://localhost:3000/api/*')
-		expect(env).toContain('# Private gateway and service targets')
+		expect(env).toContain('# Local gateway')
+		expect(env).toContain('# Private local transport targets')
+		expect(readme).toContain('canonical local API origin advertised by `/api/openapi.json`')
+		expect(readme).toContain('same-origin `http://localhost:3000/api/*` alias')
 		expect(env).toContain('GATEWAY_URL=http://127.0.0.1:8786')
 		expect(env).toContain('AUTH_URL=http://127.0.0.1:8787')
 		expect(env).toContain('USERS_URL=http://127.0.0.1:8788')

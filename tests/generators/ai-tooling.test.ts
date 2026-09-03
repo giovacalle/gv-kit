@@ -859,10 +859,14 @@ describe('generated Hono gateway guidance', () => {
 					email: 'skip'
 				})
 			)
-			const guidance = markdownGuidance(entries)
+			const guidance = markdownGuidance(entries.filter(({ path }) => path !== 'README.md'))
+			const rootReadme = content(entries, 'README.md')
 			const authReadme = content(entries, 'services/auth/README.md')
 			const usersReadme = content(entries, 'services/users/README.md')
 
+			expect(rootReadme).toContain(
+				'`GATEWAY_URL`, `AUTH_URL`, and `USERS_URL` are private local transport targets.'
+			)
 			expect(guidance).not.toContain('`@repo/backend/middleware/auth`')
 			expect(guidance).not.toContain('`/internal/session`')
 			expect(guidance).not.toContain('`AUTH_URL`')

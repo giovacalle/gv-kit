@@ -136,12 +136,8 @@ describe('generateRoot — Astro project shape', () => {
 		const env = content(entries, '.env.example')
 		expect(env).not.toContain('PUBLIC_AUTH_URL')
 		expect(env).toContain('API_PUBLIC_ORIGIN=http://api.localhost:8786')
-		expect(env).toContain(
-			'BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,api.localhost:8786'
-		)
-		expect(env).toContain(
-			'AUTH_CORS_ORIGINS=http://localhost:5173,http://api.localhost:8786'
-		)
+		expect(env).toContain('BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,api.localhost:8786')
+		expect(env).toContain('AUTH_CORS_ORIGINS=http://localhost:5173,http://api.localhost:8786')
 		expect(env).not.toContain('<preview-web-host>')
 		expect(env).toContain('PUBLIC_TURNSTILE_SITE_KEY=')
 		expect(env).toContain('FROM_EMAIL=')
@@ -193,6 +189,99 @@ pnpm dev
 		expect(readme).not.toContain('cp .env.example .env')
 	})
 
+	test('no-auth Hono README documents every required private local transport target', () => {
+		const entries = generateRoot(makeCfg({ marketing: 'inside-web', deploy: 'skip' }))
+		const local = content(entries, 'scripts/local.mjs')
+		const readme = content(entries, 'README.md')
+
+		for (const setting of ['GATEWAY_URL', 'AUTH_URL', 'USERS_URL']) {
+			expect(local).toContain(`"${setting}"`)
+			expect(readme).toContain(`\`${setting}\``)
+		}
+	})
+
+	test('Hono README documents local, provider, and Cloudflare environment settings', () => {
+		const entries = generateRoot(
+			makeCfg({
+				db: 'postgres',
+				auth: ['emailOTP', 'google'],
+				email: 'resend',
+				monitoring: ['umami', 'posthog']
+			})
+		)
+		const readme = content(entries, 'README.md')
+
+		for (const setting of [
+			'API_PUBLIC_ORIGIN',
+			'GATEWAY_PUBLIC_ORIGINS',
+			'API_CORS_ORIGINS',
+			'GATEWAY_UPSTREAM_TIMEOUT_MS',
+			'GATEWAY_URL',
+			'AUTH_URL',
+			'USERS_URL',
+			'BETTER_AUTH_SECRET',
+			'BETTER_AUTH_ALLOWED_HOSTS',
+			'AUTH_CORS_ORIGINS',
+			'DATABASE_URL',
+			'GOOGLE_CLIENT_ID',
+			'GOOGLE_CLIENT_SECRET',
+			'RESEND_API_KEY',
+			'FROM_EMAIL',
+			'TURNSTILE_SECRET_KEY',
+			'PUBLIC_TURNSTILE_SITE_KEY',
+			'PUBLIC_MARKETING_URL',
+			'PUBLIC_APP_URL',
+			'PUBLIC_UMAMI_WEBSITE_ID',
+			'PUBLIC_UMAMI_HOST',
+			'PUBLIC_POSTHOG_KEY',
+			'PUBLIC_POSTHOG_HOST',
+			'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
+			'CLOUDFLARE_PREVIEW_API_DOMAIN',
+			'CLOUDFLARE_PREVIEW_ZONE_NAME'
+		]) expect(readme).toContain(`\`${setting}\``)
+		expect(readme).toContain(
+			'`.env.cloudflare.example` is a reference for non-secret production values'
+		)
+		expect(readme).toMatch(/Preview\s+workflows derive PR-specific origins/)
+		expect(readme).toContain('host and optional port without a scheme')
+		expect(readme).toContain('complete browser origins')
+		expect(readme).toContain('Private services use Service Bindings in Cloudflare')
+	})
+
+	test('no-auth Cloudflare README distinguishes active values from retained auth examples', () => {
+		const readme = content(generateRoot(makeCfg()), 'README.md')
+
+		expect(readme).toContain(
+			'`GATEWAY_UPSTREAM_TIMEOUT_MS` in `apps/api/wrangler.jsonc`. These are gateway Worker variables.'
+		)
+		expect(readme).toContain(
+			'`PUBLIC_APP_URL` as a GitHub Actions repository variable. The production workflow passes it to the Astro deployment/build; it is not a Wrangler runtime variable.'
+		)
+		expect(readme).toContain(
+			'`BETTER_AUTH_ALLOWED_HOSTS` and `AUTH_CORS_ORIGINS` are retained for a stable production example but are inactive without a selected auth provider.'
+		)
+		expect(readme).not.toContain(
+			'copy these values into the matching production Wrangler configurations'
+		)
+	})
+
+	test('inside-web Cloudflare README distinguishes auth Wrangler values from inactive PUBLIC_APP_URL', () => {
+		const readme = content(
+			generateRoot(makeCfg({ marketing: 'inside-web', auth: ['emailOTP'], email: 'resend' })),
+			'README.md'
+		)
+
+		expect(readme).toContain(
+			'`PUBLIC_APP_URL` is retained for a stable production example but is inactive when marketing stays inside the web app.'
+		)
+		expect(readme).toContain(
+			'`BETTER_AUTH_ALLOWED_HOSTS` and `AUTH_CORS_ORIGINS` in `services/auth/wrangler.jsonc`.'
+		)
+		expect(readme).toContain(
+			'The first contains hosts without schemes; the second contains complete origins.'
+		)
+	})
+
 	test('non-Cloudflare Hono auth uses gateway ingress allowlists', () => {
 		const cfg = makeCfg({ deploy: 'docker', auth: ['emailOTP'], email: 'resend' })
 		const env = content(generateRoot(cfg), '.env.example')
@@ -224,7 +313,6 @@ pnpm dev
 		const entries = generateRoot(makeCfg({ deploy: 'docker' }))
 		const env = content(entries, '.env.example')
 		expect(env).toContain('PUBLIC_APP_URL=http://localhost:3000')
-		expect(env).toContain('# Browser API alias: http://localhost:3000/api/*')
 		expect(env).toContain('API_PUBLIC_ORIGIN=http://api.localhost:3000')
 		expect(env).toContain(
 			'GATEWAY_PUBLIC_ORIGINS=http://localhost:3000,http://api.localhost:3000,http://localhost:8786,http://127.0.0.1:8786'
@@ -234,7 +322,9 @@ pnpm dev
 		expect(env).toContain('AUTH_URL=http://127.0.0.1:8787')
 		expect(env).toContain('USERS_URL=http://127.0.0.1:8788')
 		expect(env).not.toMatch(/^PUBLIC_(?:API|AUTH|USERS)_URL=/m)
-		expect(content(entries, 'README.md')).toContain('PUBLIC_APP_URL=http://localhost:3000')
+		const readme = content(entries, 'README.md')
+		expect(readme).toContain('PUBLIC_APP_URL=http://localhost:3000')
+		expect(readme).toContain('`http://localhost:3000/api/*` alias')
 	})
 
 	test('inside-web does not invent a marketing app or public-origin pair', () => {

@@ -24,14 +24,14 @@
 .claude/settings.json  6ca360fbc0149b7c
 .claude/stack.json  ae9c20a329df8d7b
 .commitlintrc.json  1a921be1aa693bb1
-.env.example  e7b372f829e4c60c
+.env.example  ead39a5c55edf6f5
 .gitignore  a836122283bb33eb
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
 CLAUDE.md  a659cf83b8102ff0
 LICENSE  508a77d2e7b51d98
-README.md  db23ac846e5d1f98
+README.md  856d2508f609c66a
 apps/api/README.md  75ec2f93c8f0fe33
 apps/api/openapi.json  d29ca48d95cd3c11
 apps/api/package.json  e26edcaba418ff1a

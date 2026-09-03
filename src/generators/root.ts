@@ -5,12 +5,12 @@ import {
 	developmentOrigin,
 	hasLegacyHonoPublicRouteTable,
 	HONO_GATEWAY,
+	HONO_SERVICES,
 	honoPackageIdentity,
 	honoPublicRoutes,
-	HONO_SERVICES,
-	type HonoServiceTopology,
 	nodeDevelopmentOrigin,
-	USERS_SERVICE
+	USERS_SERVICE,
+	type HonoServiceTopology
 } from './hono-topology.js'
 
 const CLOUDFLARE_INCLUDE_PROCESS_ENV = 'CLOUDFLARE_INCLUDE_PROCESS_ENV'
@@ -190,7 +190,8 @@ function renderTurboJson(cfg: GvKitConfig): string {
 
 function renderHonoDevTasks(cfg: GvKitConfig) {
 	const task = (env: string[]) => ({ dependsOn: ['^build'], cache: false, persistent: true, env })
-	const cloudflareDevEnv = cfg.choices.deploy === 'cf-workers' ? [CLOUDFLARE_INCLUDE_PROCESS_ENV] : []
+	const cloudflareDevEnv =
+		cfg.choices.deploy === 'cf-workers' ? [CLOUDFLARE_INCLUDE_PROCESS_ENV] : []
 	const databaseEnv = cfg.choices.db === 'postgres' ? 'DATABASE_URL' : 'SQLITE_PATH'
 	const authEnv = [databaseEnv]
 	if (cfg.choices.auth.length > 0) authEnv.push('BETTER_AUTH_SECRET', 'BETTER_AUTH_ALLOWED_HOSTS', 'AUTH_CORS_ORIGINS')
@@ -442,7 +443,7 @@ ${quickstart}
 
 ## Environment
 
-${environmentGuidance}
+${environmentGuidance}${renderEnvironmentSettingsGuidance(cfg)}
 ${renderPublicOrigins(cfg)}
 ${renderCloudflareDatabaseSetup(cfg)}${renderDeploymentGuidance(cfg)}
 
@@ -466,6 +467,67 @@ ${cfg.choices.i18n === 'paraglide' ? '- `packages/i18n/` — Paraglide messages 
 
 Every runtime and type-only import must be declared explicitly in the importing package's \`package.json\` (including ambient types from \`@repo/tooling-typescript\` such as ${ambientTypeExample}). ESLint's \`import/no-extraneous-dependencies\` rule catches anything that slips through (\`pnpm lint\`).
 `
+}
+
+function renderEnvironmentSettingsGuidance(cfg: GvKitConfig): string {
+	if (cfg.choices.backend !== 'hono') return ''
+
+	const localWebAliasPort = cfg.choices.deploy === 'docker' ? 3000 : 5173
+	const privateTransportSettings = '`GATEWAY_URL`, `AUTH_URL`, and `USERS_URL`'
+	const localSettings = [
+		`\`API_PUBLIC_ORIGIN\` sets the canonical local API origin advertised by \`/api/openapi.json\`.${cfg.choices.deploy === 'docker' ? '' : ' The `api.localhost` hostname resolves to loopback in browsers without a hosts-file entry.'}`,
+		'`GATEWAY_PUBLIC_ORIGINS` lists the complete local origins accepted by the gateway boundary.',
+		`\`API_CORS_ORIGINS\` lists the complete browser origins allowed to call the canonical API with credentials. Browser calls use the same-origin \`http://localhost:${localWebAliasPort}/api/*\` alias.`,
+		'`GATEWAY_UPSTREAM_TIMEOUT_MS` bounds private-service requests in milliseconds.',
+		`${privateTransportSettings} are private local transport targets. They are not public service origins.`
+	]
+	if (cfg.choices.deploy !== 'cf-workers') localSettings.push('`GATEWAY_TRUSTED_INGRESS_SECRET` is shared only by the private Node SSR transport and gateway.')
+	if (cfg.choices.marketing === 'astro') localSettings.push('`PUBLIC_MARKETING_URL` and `PUBLIC_APP_URL` set the local build-time frontend origins.')
+	if (cfg.choices.auth.length > 0) localSettings.push('`BETTER_AUTH_SECRET` is private. Each `BETTER_AUTH_ALLOWED_HOSTS` entry is a host and optional port without a scheme. `AUTH_CORS_ORIGINS` uses complete browser origins.')
+	if (cfg.choices.db === 'postgres') localSettings.push('`DATABASE_URL` connects local services to PostgreSQL.')
+	else if (cfg.choices.deploy !== 'cf-workers') localSettings.push('`SQLITE_PATH` points every local service at the same root-relative database.')
+	if (cfg.choices.auth.includes('google')) localSettings.push('`GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` configure Google OAuth.')
+	if (cfg.choices.email === 'resend') localSettings.push('`RESEND_API_KEY` and `FROM_EMAIL` configure Resend delivery.')
+	else if (cfg.choices.email === 'notifuse') localSettings.push('`NOTIFUSE_API_KEY`, `NOTIFUSE_WORKSPACE_ID`, and `NOTIFUSE_BASE_URL` configure Notifuse delivery.')
+	if (cfg.choices.auth.includes('emailOTP')) localSettings.push('`TURNSTILE_SECRET_KEY` stays in the auth service. `PUBLIC_TURNSTILE_SITE_KEY` is safe for the web app.')
+	if (cfg.choices.monitoring.includes('umami')) localSettings.push('`PUBLIC_UMAMI_WEBSITE_ID` and `PUBLIC_UMAMI_HOST` configure the Umami browser client.')
+	if (cfg.choices.monitoring.includes('posthog')) localSettings.push('`PUBLIC_POSTHOG_KEY` and `PUBLIC_POSTHOG_HOST` configure the PostHog browser client.')
+
+	const cloudflareSettings =
+		cfg.choices.deploy === 'cf-workers'
+			? `
+
+### Cloudflare production and preview settings
+
+\`.env.cloudflare.example\` is a reference for non-secret production values. Replace every
+\`<domain>\` placeholder, then apply each active value to its destination:
+
+- Update \`API_PUBLIC_ORIGIN\`, \`GATEWAY_PUBLIC_ORIGINS\`, \`API_CORS_ORIGINS\`, and
+  \`GATEWAY_UPSTREAM_TIMEOUT_MS\` in \`apps/api/wrangler.jsonc\`. These are gateway Worker variables.
+${
+	cfg.choices.marketing === 'astro'
+		? '- Set `PUBLIC_APP_URL` as a GitHub Actions repository variable. The production workflow passes it to the Astro deployment/build; it is not a Wrangler runtime variable.\n'
+		: '- `PUBLIC_APP_URL` is retained for a stable production example but is inactive when marketing stays inside the web app. Do not copy it to a Wrangler configuration.\n'
+}${
+					cfg.choices.auth.length > 0
+						? '- Update `BETTER_AUTH_ALLOWED_HOSTS` and `AUTH_CORS_ORIGINS` in `services/auth/wrangler.jsonc`. The first contains hosts without schemes; the second contains complete origins.\n'
+						: '- `BETTER_AUTH_ALLOWED_HOSTS` and `AUTH_CORS_ORIGINS` are retained for a stable production example but are inactive without a selected auth provider. Do not copy them to a Wrangler configuration.\n'
+				}
+Private services use Service Bindings in Cloudflare and have no public service URLs. Preview
+workflows derive PR-specific origins from \`CLOUDFLARE_PREVIEW_WEB_DOMAIN\` and
+\`CLOUDFLARE_PREVIEW_API_DOMAIN\`. \`CLOUDFLARE_PREVIEW_ZONE_NAME\` identifies the active zone and
+bounds both domains. Configure all three as the GitHub Actions variables listed below. The provider
+credentials and application secrets used by production and trusted preview jobs are listed in the
+Cloudflare deployment section.`
+			: ''
+
+	return `
+
+### Local runtime settings
+
+\`.env.example\` contains local development values. Keep \`.env\` out of version control.
+
+${localSettings.map((setting) => `- ${setting}`).join('\n')}${cloudflareSettings}`
 }
 
 function cloudflareWorkflowSecretKeys(cfg: GvKitConfig): string[] {
@@ -694,7 +756,7 @@ Cloudflare Postgres uses Neon. Configure GitHub Actions before enabling staging 
 Production deploys use \`DATABASE_URL\`. Preview deploys create Neon branches and inject their
 temporary connection strings into generated staging Wrangler configs.${
 			cfg.choices.backend === 'hono'
-				? ' Copy the non-secret\nproduction origins and auth allowlists from `.env.cloudflare.example` into the corresponding\nWrangler configurations before deployment.'
+				? ' Apply non-secret production values only to the capability-specific destinations listed\nin the Cloudflare production and preview settings section.'
 				: ''
 		}`
 	}
@@ -703,30 +765,24 @@ temporary connection strings into generated staging Wrangler configs.${
 Cloudflare SQLite uses D1. Configure \`CLOUDFLARE_API_TOKEN\` and
 \`CLOUDFLARE_ACCOUNT_ID\` in GitHub Actions so staging can create preview D1 databases.${
 		cfg.choices.backend === 'hono'
-			? ' Copy the\nnon-secret production origins and auth allowlists from `.env.cloudflare.example` into the\ncorresponding Wrangler configurations before deployment.'
+			? ' Apply non-secret production values only to the capability-specific destinations listed\nin the Cloudflare production and preview settings section.'
 			: ''
 	}`
 }
 
 function renderCloudflareEnvExample(cfg: GvKitConfig): string {
 	const webHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
-	return `# Cloudflare production settings. Replace <domain> before deployment.
-# Canonical API origin advertised by /api/openapi.json.
+	return `# Production gateway
 API_PUBLIC_ORIGIN=https://api.<domain>
 ${
 	cfg.choices.backend === 'hono'
-		? `# Public origins accepted by the gateway boundary.
-GATEWAY_PUBLIC_ORIGINS=https://${webHost},https://api.<domain>
-# Browser origins allowed to call the canonical API origin with credentials.
+		? `GATEWAY_PUBLIC_ORIGINS=https://${webHost},https://api.<domain>
 API_CORS_ORIGINS=https://${webHost}
-# Explicit bounded private-service timeout in milliseconds.
 GATEWAY_UPSTREAM_TIMEOUT_MS=10000
 `
 		: ''
-}# Web application origin. Browser API calls use ${webHost}/api/* as the same-origin alias.
+}# Production web and host policy
 PUBLIC_APP_URL=https://${webHost}
-# Private services have no public URLs. Cloudflare callers use Service Bindings.
-# Allowed request hosts omit the scheme; CORS entries are complete origins.
 BETTER_AUTH_ALLOWED_HOSTS=${webHost},api.<domain>
 AUTH_CORS_ORIGINS=https://${webHost}
 `
@@ -734,10 +790,9 @@ AUTH_CORS_ORIGINS=https://${webHost}
 
 function renderEnvExample(cfg: GvKitConfig): string {
 	const lines: string[] = []
-	lines.push('# Copy to .env and fill in. NEVER commit .env.')
-
 	const isHono = cfg.choices.backend === 'hono'
 	const isCf = cfg.choices.deploy === 'cf-workers'
+	if (!isHono) lines.push('# Copy to .env and fill in. NEVER commit .env.')
 
 	if (cfg.choices.marketing === 'astro') {
 		lines.push('')
@@ -801,7 +856,7 @@ function renderEnvExample(cfg: GvKitConfig): string {
 
 	if (cfg.choices.auth.includes('emailOTP')) {
 		lines.push('')
-		lines.push('# Cloudflare Turnstile (auth Worker only — apps/web holds the public site key)')
+		lines.push('# Cloudflare Turnstile (auth service only; apps/web holds the public site key)')
 		lines.push('TURNSTILE_SECRET_KEY=')
 		lines.push('PUBLIC_TURNSTILE_SITE_KEY=1x00000000000000000000AA')
 	}
@@ -822,29 +877,22 @@ function renderEnvExample(cfg: GvKitConfig): string {
 	if (isHono) {
 		const webAliasPort = cfg.choices.deploy === 'docker' ? 3000 : 5173
 		lines.push('')
-		lines.push('# Public gateway ingress')
-		lines.push('# Canonical API origin advertised by the gateway OpenAPI endpoint')
-		if (cfg.choices.deploy !== 'docker') lines.push('# api.localhost resolves to loopback without a hosts-file entry in browsers')
+		lines.push('# Local gateway')
 		lines.push(
 			cfg.choices.deploy === 'docker'
 				? 'API_PUBLIC_ORIGIN=http://api.localhost:3000'
 				: 'API_PUBLIC_ORIGIN=http://api.localhost:8786'
 		)
-		lines.push('# Public origins accepted by the gateway boundary')
 		lines.push(
 			cfg.choices.deploy === 'docker'
 				? 'GATEWAY_PUBLIC_ORIGINS=http://localhost:3000,http://api.localhost:3000,http://localhost:8786,http://127.0.0.1:8786'
 				: `GATEWAY_PUBLIC_ORIGINS=http://localhost:${webAliasPort},http://api.localhost:8786`
 		)
-		if (!isCf) {
-			lines.push('# Shared only by the private Node SSR transport and gateway')
-			lines.push('GATEWAY_TRUSTED_INGRESS_SECRET=')
-		}
-		lines.push(`# Browser API alias: http://localhost:${webAliasPort}/api/*`)
+		if (!isCf) lines.push('GATEWAY_TRUSTED_INGRESS_SECRET=')
 		lines.push(`API_CORS_ORIGINS=http://localhost:${webAliasPort}`)
 		lines.push('GATEWAY_UPSTREAM_TIMEOUT_MS=10000')
 		lines.push('')
-		lines.push('# Private gateway and service targets')
+		lines.push('# Private local transport targets')
 		lines.push(
 			`${HONO_GATEWAY.transport.node.targetEnvironmentVariable}=${nodeDevelopmentOrigin(HONO_GATEWAY)}`
 		)
@@ -856,6 +904,7 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		)
 	}
 
+	if (lines[0] === '') lines.shift()
 	return lines.join('\n') + '\n'
 }
 

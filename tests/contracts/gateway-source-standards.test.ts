@@ -11,6 +11,7 @@ import { GvKitConfig, type Choices } from '../../src/schema/config.js'
 
 const repositoryRoot = join(import.meta.dir, '..', '..')
 const gatewayGeneratorPath = join(repositoryRoot, 'src/generators/gateway.ts')
+const integratedDeployGeneratorPath = join(repositoryRoot, 'src/generators/integrated-deploy.ts')
 const previewWorkflowTestPath = join(repositoryRoot, 'tests/contracts/gateway-preview-workflows.test.ts')
 const expectedGatewayRenderers = [
 	'renderGatewayPackageJson',
@@ -22,15 +23,31 @@ const expectedGatewayRenderers = [
 	'renderGatewayOpenApiMainSource',
 	'renderGatewayReadme'
 ]
+const expectedIntegratedDeployRenderers = [
+	'renderWorkflowVariableEnvironment',
+	'renderProductionDeployWorkflow',
+	'renderStagingDeployWorkflow',
+	'renderStagingWranglerConfigStep',
+	'renderPreviewMigrationCommand',
+	'renderPreviewMigrationEnvironment',
+	'renderD1PreviewDatabaseJob',
+	'renderNeonPreviewDatabaseJob',
+	'renderStagingCleanupWorkflow',
+	'renderD1PreviewDatabaseCleanupStep',
+	'renderNeonPreviewDatabaseCleanupStep',
+	'renderDockerignore',
+	'renderDockerfile',
+	'renderDockerCompose',
+	'renderPostgresService',
+	'renderMigrateService',
+	'renderAuthService',
+	'renderUsersService',
+	'renderWebService',
+	'renderMarketingService'
+]
 
-function stringRendererNames(source: string): string[] {
-	const sourceFile = ts.createSourceFile(
-		gatewayGeneratorPath,
-		source,
-		ts.ScriptTarget.Latest,
-		true,
-		ts.ScriptKind.TS
-	)
+function stringRendererNames(path: string, source: string): string[] {
+	const sourceFile = ts.createSourceFile(path, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
 	return sourceFile.statements.flatMap((statement) => {
 		if (!ts.isFunctionDeclaration(statement) || !statement.name) return []
 		if (statement.type?.getText(sourceFile) !== 'string') return []
@@ -193,7 +210,14 @@ describe('gateway source standards', () => {
 
 	test('gateway string renderers use outcome-oriented render names', () => {
 		const source = readFileSync(gatewayGeneratorPath, 'utf8')
-		expect(stringRendererNames(source)).toEqual(expectedGatewayRenderers)
+		expect(stringRendererNames(gatewayGeneratorPath, source)).toEqual(expectedGatewayRenderers)
+	})
+
+	test('integrated deployment string renderers use outcome-oriented render names', () => {
+		const source = readFileSync(integratedDeployGeneratorPath, 'utf8')
+		expect(stringRendererNames(integratedDeployGeneratorPath, source)).toEqual(
+			expectedIntegratedDeployRenderers
+		)
 	})
 
 	test('setup narration detector finds instructions only in comments', () => {

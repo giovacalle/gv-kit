@@ -23,13 +23,13 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 	return [
 		{
 			path: '.github/workflows/deploy-production.yml',
-			content: deployProductionWorkflow(project, cfg)
+			content: renderProductionDeployWorkflow(project, cfg)
 		},
 		{
 			path: '.github/workflows/deploy-staging.yml',
-			content: deployStagingWorkflow({ project, db, cfg })
+			content: renderStagingDeployWorkflow({ project, db, cfg })
 		},
-		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(cfg, db) }
+		{ path: '.github/workflows/cleanup-staging.yml', content: renderStagingCleanupWorkflow(cfg, db) }
 	]
 }
 
@@ -51,14 +51,14 @@ function marketingPublicEnvKeys(cfg: GvKitConfig): string[] {
 	return keys
 }
 
-function workflowVariableEnv(keys: string[]): string {
+function renderWorkflowVariableEnvironment(keys: string[]): string {
 	if (keys.length === 0) return ''
 	return `\n${keys.map((key) => `          ${key}: \${{ vars.${key} }}`).join('\n')}`
 }
 
-function deployProductionWorkflow(project: string, cfg: GvKitConfig): string {
+function renderProductionDeployWorkflow(project: string, cfg: GvKitConfig): string {
 	const publicKeys = marketingPublicEnvKeys(cfg)
-	const publicOriginEnv = workflowVariableEnv(publicKeys)
+	const publicOriginEnv = renderWorkflowVariableEnvironment(publicKeys)
 	const publicVariableChecks = publicKeys.map((key) => `          test -n "$${key}"`).join('\n')
 	return `name: deploy-production
 
@@ -129,7 +129,7 @@ ${publicVariableChecks ? `${publicVariableChecks}\n` : ''}          pnpm turbo r
 `
 }
 
-function deployStagingWorkflow({
+function renderStagingDeployWorkflow({
 	project,
 	db,
 	cfg
@@ -139,10 +139,13 @@ function deployStagingWorkflow({
 	cfg: GvKitConfig
 }): string {
 	const hasMarketing = cfg.choices.marketing === 'astro'
-	const previewDbJob = db === 'sqlite' ? d1PreviewDbJob(project) : neonPreviewDbJob(project)
-	const stagingConfigStep = writeStagingWranglerConfigStep(db)
+	const previewDbJob =
+		db === 'sqlite'
+			? renderD1PreviewDatabaseJob(project)
+			: renderNeonPreviewDatabaseJob(project)
+	const stagingConfigStep = renderStagingWranglerConfigStep(db)
 	const monitoringKeys = marketingMonitoringEnvKeys(cfg)
-	const monitoringEnv = workflowVariableEnv(monitoringKeys)
+	const monitoringEnv = renderWorkflowVariableEnvironment(monitoringKeys)
 	const publicOriginEnv = hasMarketing
 		? `
           PUBLIC_MARKETING_URL: https://${project}-marketing-\${{ needs.preview-db.outputs.alias }}.\${{ vars.CLOUDFLARE_WORKERS_SUBDOMAIN }}.workers.dev
@@ -194,9 +197,9 @@ ${previewDbJob}
 ${stagingConfigStep}
 
       - name: Run preview database migrations
-        run: ${previewMigrationCommand(db)}
+        run: ${renderPreviewMigrationCommand(db)}
         env:
-${previewMigrationEnv(db)}
+${renderPreviewMigrationEnvironment(db)}
 
       - name: Deploy affected Workers (staging)
         run: pnpm turbo run deploy:staging --affected
@@ -223,7 +226,7 @@ ${previewMigrationEnv(db)}
 `
 }
 
-function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): string {
+function renderStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): string {
 	const envLines =
 		db === 'sqlite'
 			? `          PREVIEW_DB_KIND: d1
@@ -338,13 +341,13 @@ function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): strin
 ${envLines}`
 }
 
-function previewMigrationCommand(db: GvKitConfig['choices']['db']): string {
+function renderPreviewMigrationCommand(db: GvKitConfig['choices']['db']): string {
 	return db === 'sqlite'
 		? 'pnpm --filter @repo/db exec wrangler d1 migrations apply "${{ needs.preview-db.outputs.d1_database_name }}" --remote'
 		: 'pnpm --filter @repo/db db:migrate:production'
 }
 
-function previewMigrationEnv(db: GvKitConfig['choices']['db']): string {
+function renderPreviewMigrationEnvironment(db: GvKitConfig['choices']['db']): string {
 	return db === 'sqlite'
 		? `          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
@@ -358,7 +361,7 @@ const PREVIEW_ALIAS_SCRIPT = `raw="\${{ github.event.pull_request.head.ref }}"
           fi
           echo "alias=$alias" >> "$GITHUB_OUTPUT"`
 
-function d1PreviewDbJob(project: string): string {
+function renderD1PreviewDatabaseJob(project: string): string {
 	return `  preview-db:
     runs-on: ubuntu-latest
     outputs:
@@ -395,7 +398,7 @@ function d1PreviewDbJob(project: string): string {
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
 }
 
-function neonPreviewDbJob(project: string): string {
+function renderNeonPreviewDatabaseJob(project: string): string {
 	return `  preview-db:
     runs-on: ubuntu-latest
     outputs:
@@ -422,10 +425,12 @@ function neonPreviewDbJob(project: string): string {
           expires_at: \${{ steps.expiration.outputs.expires_at }}`
 }
 
-function cleanupStagingWorkflow(cfg: GvKitConfig, db: GvKitConfig['choices']['db']): string {
+function renderStagingCleanupWorkflow(cfg: GvKitConfig, db: GvKitConfig['choices']['db']): string {
 	const project = cfg.choices.name
 	const previewDbCleanupStep =
-		db === 'sqlite' ? d1PreviewDbCleanupStep(project) : neonPreviewDbCleanupStep(project)
+		db === 'sqlite'
+			? renderD1PreviewDatabaseCleanupStep(project)
+			: renderNeonPreviewDatabaseCleanupStep(project)
 	const productionNameAliases = ['web', ...(cfg.choices.marketing === 'astro' ? ['marketing'] : [])]
 		.map((service) => {
 			const legacyName = `${project}-${service}`
@@ -525,7 +530,7 @@ ${previewDbCleanupStep}
 `
 }
 
-function d1PreviewDbCleanupStep(project: string): string {
+function renderD1PreviewDatabaseCleanupStep(project: string): string {
 	return `      - name: Delete preview D1 database
         run: |
           set -uo pipefail
@@ -545,7 +550,7 @@ function d1PreviewDbCleanupStep(project: string): string {
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
 }
 
-function neonPreviewDbCleanupStep(project: string): string {
+function renderNeonPreviewDatabaseCleanupStep(project: string): string {
 	return `      - name: Delete preview Neon branch
         run: |
           set -uo pipefail
@@ -613,13 +618,13 @@ function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
 	}
 
 	return [
-		{ path: '.dockerignore', content: dockerignore() },
-		{ path: 'Dockerfile', content: dockerfile(opts) },
-		{ path: 'docker-compose.yml', content: dockerCompose(opts) }
+		{ path: '.dockerignore', content: renderDockerignore() },
+		{ path: 'Dockerfile', content: renderDockerfile(opts) },
+		{ path: 'docker-compose.yml', content: renderDockerCompose(opts) }
 	]
 }
 
-function dockerignore(): string {
+function renderDockerignore(): string {
 	return `*
 
 !apps/
@@ -652,7 +657,7 @@ function dockerignore(): string {
 `
 }
 
-function dockerfile(opts: DockerOpts): string {
+function renderDockerfile(opts: DockerOpts): string {
 	const marketingRuntime = opts.hasMarketing
 		? `
 FROM nginxinc/nginx-unprivileged:1.28.0-alpine@sha256:c97ff0bf7cbae369953c6da1232ec14ad9f971d66360c5698db0856a4cd657a0 AS marketing-runtime
@@ -758,16 +763,16 @@ ${marketingRuntime}
 `
 }
 
-function dockerCompose(opts: DockerOpts): string {
+function renderDockerCompose(opts: DockerOpts): string {
 	const services: string[] = []
-	if (opts.isPostgres) services.push(postgresService())
-	services.push(migrateService(opts))
+	if (opts.isPostgres) services.push(renderPostgresService())
+	services.push(renderMigrateService(opts))
 	if (opts.isHono) {
-		services.push(authService(opts))
-		services.push(usersService(opts))
+		services.push(renderAuthService(opts))
+		services.push(renderUsersService(opts))
 	}
-	services.push(webService(opts))
-	if (opts.hasMarketing) services.push(marketingService(opts))
+	services.push(renderWebService(opts))
+	if (opts.hasMarketing) services.push(renderMarketingService(opts))
 
 	return (
 		[
@@ -779,7 +784,7 @@ function dockerCompose(opts: DockerOpts): string {
 	)
 }
 
-function postgresService(): string {
+function renderPostgresService(): string {
 	return `  postgres:
     image: postgres:16-alpine
     restart: unless-stopped
@@ -799,7 +804,7 @@ function postgresService(): string {
       start_period: 5s`
 }
 
-function migrateService(opts: DockerOpts): string {
+function renderMigrateService(opts: DockerOpts): string {
 	const lines = [
 		'  migrate:',
 		'    build:',
@@ -817,7 +822,7 @@ function migrateService(opts: DockerOpts): string {
 	return lines.join('\n')
 }
 
-function authService(opts: DockerOpts): string {
+function renderAuthService(opts: DockerOpts): string {
 	const env = ['      PORT: "8787"', ...dbEnvLines(opts, '      ')]
 	if (opts.hasAuth) {
 		env.push('      BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET:?set BETTER_AUTH_SECRET in .env}')
@@ -862,7 +867,7 @@ function authService(opts: DockerOpts): string {
 	return lines.join('\n')
 }
 
-function usersService(opts: DockerOpts): string {
+function renderUsersService(opts: DockerOpts): string {
 	const env = [
 		'      PORT: "8788"',
 		...dbEnvLines(opts, '      '),
@@ -894,7 +899,7 @@ function usersService(opts: DockerOpts): string {
 	return lines.join('\n')
 }
 
-function webService(opts: DockerOpts): string {
+function renderWebService(opts: DockerOpts): string {
 	const env: string[] = ['      ORIGIN: ${ORIGIN:-http://localhost:3000}']
 	const buildArgs = [`        TURBO_FILTER: "${opts.project}-web"`]
 	if (opts.hasMarketing) buildArgs.push('        PUBLIC_APP_URL: ${PUBLIC_APP_URL:-http://localhost:3000}')
@@ -964,7 +969,7 @@ function webService(opts: DockerOpts): string {
 	return lines.join('\n')
 }
 
-function marketingService(opts: DockerOpts): string {
+function renderMarketingService(opts: DockerOpts): string {
 	const monitoringArgs: string[] = []
 	if (opts.wantsUmami) {
 		monitoringArgs.push(

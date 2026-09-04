@@ -23,7 +23,7 @@
 .claude/stack.json  8db95726826cc88a
 .commitlintrc.json  1a921be1aa693bb1
 .dockerignore  c719c73f953f61e8
-.env.example  c5ea4d0a49e0f34c
+.env.example  dd3a49e9d4b06750
 .gitignore  a836122283bb33eb
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4

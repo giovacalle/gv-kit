@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import ts from 'typescript'
@@ -10,6 +10,7 @@ import { parseJsonc } from '../../src/lib/jsonc.js'
 import { GvKitConfig, type Choices } from '../../src/schema/config.js'
 
 const repositoryRoot = join(import.meta.dir, '..', '..')
+const fixturesDirectory = join(repositoryRoot, 'fixtures')
 const gatewayGeneratorPath = join(repositoryRoot, 'src/generators/gateway.ts')
 const integratedDeployGeneratorPath = join(repositoryRoot, 'src/generators/integrated-deploy.ts')
 const previewWorkflowTestPath = join(repositoryRoot, 'tests/contracts/gateway-preview-workflows.test.ts')
@@ -157,27 +158,33 @@ function generatedDeploymentArtifacts() {
 	)
 }
 
-function environmentSetupNarrationFindings(path: string, source: string): string[] {
+const approvedEnvironmentComments = new Set([
+	'# Public build-time origins (complete URLs)',
+	'# SQLite (one root-relative database shared by local services)',
+	'# Cloudflare Turnstile (auth service only; apps/web holds the public site key)'
+])
+
+function environmentCommentFindings(path: string, source: string): string[] {
 	return source.split('\n').flatMap((line, index) => {
 		const comment = line.trimStart()
-		if (!comment.startsWith('#') || !/\b(?:copy|fill|replace|configure|set[ -]?up)\b/i.test(comment)) return []
+		if (!comment.startsWith('#') || approvedEnvironmentComments.has(comment)) return []
 		return [`${path}:${index + 1} ${comment}`]
 	})
 }
 
-function generatedRootEnvironmentExamples() {
-	const configs = [
-		{ label: 'gateway-cloudflare', choices: deploymentChoices },
-		{
-			label: 'gateway-docker',
-			choices: { ...deploymentChoices, deploy: 'docker' as const }
-		}
-	]
-	return configs.flatMap(({ label, choices }) =>
-		generateRoot({ configVersion: 2, choices })
-			.filter(({ path }) => path.startsWith('.env'))
-			.map(({ path, content }) => ({ path: `${label}:${path}`, content }))
-	)
+function generatedHonoRootEnvironmentExamples() {
+	return readdirSync(fixturesDirectory)
+		.filter((name) => name.endsWith('.jsonc'))
+		.sort()
+		.flatMap((fixtureName) => {
+			const config = GvKitConfig.parse(
+				parseJsonc(readFileSync(join(fixturesDirectory, fixtureName), 'utf8'))
+			)
+			if (config.choices.backend !== 'hono') return []
+			return generateRoot(config)
+				.filter(({ path }) => path.startsWith('.env'))
+				.map(({ path, content }) => ({ path: `${fixtureName}:${path}`, content }))
+		})
 }
 
 describe('gateway source standards', () => {
@@ -266,13 +273,25 @@ describe('gateway source standards', () => {
 		).toEqual(['.env.example:1 consecutive explanatory comments'])
 	})
 
-	test('deployment-related root environment examples keep comments concise', () => {
+	test('Hono root environment examples reject label-only comments', () => {
 		expect(
-			environmentSetupNarrationFindings('.env.example', '# Copy to .env and fill required values.')
-		).toEqual(['.env.example:1 # Copy to .env and fill required values.'])
-		const findings = generatedRootEnvironmentExamples().flatMap(({ path, content }) => [
+			environmentCommentFindings(
+				'.env.example',
+				['# Production gateway', 'API_PUBLIC_ORIGIN=https://api.example.com'].join('\n')
+			)
+		).toEqual(['.env.example:1 # Production gateway'])
+		expect(
+			environmentCommentFindings(
+				'.env.example',
+				[
+					'# SQLite (one root-relative database shared by local services)',
+					'SQLITE_PATH=file:./.data/local.db'
+				].join('\n')
+			)
+		).toEqual([])
+		const findings = generatedHonoRootEnvironmentExamples().flatMap(({ path, content }) => [
 			...deploymentCommentRunFindings(path, content),
-			...environmentSetupNarrationFindings(path, content)
+			...environmentCommentFindings(path, content)
 		])
 		expect(findings).toEqual([])
 	})

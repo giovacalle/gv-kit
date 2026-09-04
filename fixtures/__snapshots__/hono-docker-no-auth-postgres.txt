@@ -1,6 +1,6 @@
 .commitlintrc.json  1a921be1aa693bb1
 .dockerignore  c719c73f953f61e8
-.env.example  11145f0bb34f631e
+.env.example  37ff030e781eded6
 .gitignore  6ebdabe6e1116615
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4

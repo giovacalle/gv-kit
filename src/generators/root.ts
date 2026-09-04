@@ -772,17 +772,17 @@ Cloudflare SQLite uses D1. Configure \`CLOUDFLARE_API_TOKEN\` and
 
 function renderCloudflareEnvExample(cfg: GvKitConfig): string {
 	const webHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
-	return `# Production gateway
-API_PUBLIC_ORIGIN=https://api.<domain>
+	const isHono = cfg.choices.backend === 'hono'
+	return `${isHono ? '' : '# Production gateway\n'}API_PUBLIC_ORIGIN=https://api.<domain>
 ${
-	cfg.choices.backend === 'hono'
+	isHono
 		? `GATEWAY_PUBLIC_ORIGINS=https://${webHost},https://api.<domain>
 API_CORS_ORIGINS=https://${webHost}
 GATEWAY_UPSTREAM_TIMEOUT_MS=10000
 `
 		: ''
-}# Production web and host policy
-PUBLIC_APP_URL=https://${webHost}
+}
+${isHono ? '' : '# Production web and host policy\n'}PUBLIC_APP_URL=https://${webHost}
 BETTER_AUTH_ALLOWED_HOSTS=${webHost},api.<domain>
 AUTH_CORS_ORIGINS=https://${webHost}
 `
@@ -805,7 +805,7 @@ function renderEnvExample(cfg: GvKitConfig): string {
 
 	if (cfg.choices.auth.length > 0) {
 		lines.push('')
-		lines.push('# Auth (better-auth)')
+		if (!isHono) lines.push('# Auth (better-auth)')
 		lines.push('BETTER_AUTH_SECRET=')
 		if (isHono) {
 			if (cfg.choices.deploy === 'docker') {
@@ -826,14 +826,14 @@ function renderEnvExample(cfg: GvKitConfig): string {
 
 	if (cfg.choices.auth.includes('google')) {
 		lines.push('')
-		lines.push('# Google OAuth')
+		if (!isHono) lines.push('# Google OAuth')
 		lines.push('GOOGLE_CLIENT_ID=')
 		lines.push('GOOGLE_CLIENT_SECRET=')
 	}
 
 	if (cfg.choices.db === 'postgres') {
 		lines.push('')
-		lines.push('# PostgreSQL')
+		if (!isHono) lines.push('# PostgreSQL')
 		lines.push('DATABASE_URL=postgres://user:pass@localhost:5432/' + cfg.choices.name)
 	} else if (cfg.choices.db === 'sqlite' && isHono && !isCf) {
 		lines.push('')
@@ -843,12 +843,12 @@ function renderEnvExample(cfg: GvKitConfig): string {
 
 	if (cfg.choices.email === 'resend') {
 		lines.push('')
-		lines.push('# Resend')
+		if (!isHono) lines.push('# Resend')
 		lines.push('RESEND_API_KEY=')
 		lines.push('FROM_EMAIL=')
 	} else if (cfg.choices.email === 'notifuse') {
 		lines.push('')
-		lines.push('# Notifuse (self-hosted instance)')
+		if (!isHono) lines.push('# Notifuse (self-hosted instance)')
 		lines.push('NOTIFUSE_API_KEY=')
 		lines.push('NOTIFUSE_WORKSPACE_ID=')
 		lines.push('NOTIFUSE_BASE_URL=https://notifuse.example.com')
@@ -863,13 +863,13 @@ function renderEnvExample(cfg: GvKitConfig): string {
 
 	if (cfg.choices.monitoring.includes('umami')) {
 		lines.push('')
-		lines.push('# Umami')
+		if (!isHono) lines.push('# Umami')
 		lines.push('PUBLIC_UMAMI_WEBSITE_ID=')
 		lines.push('PUBLIC_UMAMI_HOST=')
 	}
 	if (cfg.choices.monitoring.includes('posthog')) {
 		lines.push('')
-		lines.push('# PostHog')
+		if (!isHono) lines.push('# PostHog')
 		lines.push('PUBLIC_POSTHOG_KEY=')
 		lines.push('PUBLIC_POSTHOG_HOST=https://eu.i.posthog.com')
 	}
@@ -877,7 +877,6 @@ function renderEnvExample(cfg: GvKitConfig): string {
 	if (isHono) {
 		const webAliasPort = cfg.choices.deploy === 'docker' ? 3000 : 5173
 		lines.push('')
-		lines.push('# Local gateway')
 		lines.push(
 			cfg.choices.deploy === 'docker'
 				? 'API_PUBLIC_ORIGIN=http://api.localhost:3000'
@@ -892,7 +891,6 @@ function renderEnvExample(cfg: GvKitConfig): string {
 		lines.push(`API_CORS_ORIGINS=http://localhost:${webAliasPort}`)
 		lines.push('GATEWAY_UPSTREAM_TIMEOUT_MS=10000')
 		lines.push('')
-		lines.push('# Private local transport targets')
 		lines.push(
 			`${HONO_GATEWAY.transport.node.targetEnvironmentVariable}=${nodeDevelopmentOrigin(HONO_GATEWAY)}`
 		)

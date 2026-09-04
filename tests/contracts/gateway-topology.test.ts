@@ -1318,8 +1318,8 @@ describe('local private-service gateway topology', () => {
 		const env = entries.find((entry) => entry.path === '.env.example')?.content ?? ''
 		const readme = entries.find((entry) => entry.path === 'README.md')?.content ?? ''
 
-		expect(env).toContain('# Local gateway')
-		expect(env).toContain('# Private local transport targets')
+		expect(env).not.toContain('# Local gateway')
+		expect(env).not.toContain('# Private local transport targets')
 		expect(readme).toContain('canonical local API origin advertised by `/api/openapi.json`')
 		expect(readme).toContain('same-origin `http://localhost:3000/api/*` alias')
 		expect(env).toContain('GATEWAY_URL=http://127.0.0.1:8786')

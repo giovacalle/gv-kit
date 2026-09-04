@@ -24,7 +24,7 @@
 .claude/settings.json  6ca360fbc0149b7c
 .claude/stack.json  ae9c20a329df8d7b
 .commitlintrc.json  1a921be1aa693bb1
-.env.example  ead39a5c55edf6f5
+.env.example  9ef4c4e47bc97c00
 .gitignore  a836122283bb33eb
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4

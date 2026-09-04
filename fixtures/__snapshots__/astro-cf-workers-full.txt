@@ -28,8 +28,8 @@
 .claude/stack.json  cf9fd4fecd6cdf74
 .codex/agents/astro-marketer.toml  540288f21e6b25fd
 .commitlintrc.json  1a921be1aa693bb1
-.env.cloudflare.example  061442fa0201eaba
-.env.example  2ab948baa8097e7a
+.env.cloudflare.example  848a173f2636ee4b
+.env.example  59e69878e6cb64fa
 .github/workflows/cleanup-staging.yml  5bf150ae28aa70fc
 .github/workflows/deploy-production.yml  1740fbeb25547af3
 .github/workflows/deploy-staging.yml  8c95fef8e0956f25

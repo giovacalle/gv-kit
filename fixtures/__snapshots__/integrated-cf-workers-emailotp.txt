@@ -18,8 +18,8 @@
 .ai/rules/web-tailwind.md  8b78435ac29d2fbc
 .ai/rules/web-ui.md  2d28c4ed82326988
 .commitlintrc.json  1a921be1aa693bb1
-.env.cloudflare.example  428424c0e65825a2
-.env.example  2e26c8b9be4d8bd8
+.env.cloudflare.example  a4d418ae7f6e5791
+.env.example  eaa57c188418ac97
 .github/workflows/cleanup-staging.yml  2afbb33ef380965b
 .github/workflows/deploy-production.yml  80d5e7e462e420d6
 .github/workflows/deploy-staging.yml  b66b240cf4151ca1

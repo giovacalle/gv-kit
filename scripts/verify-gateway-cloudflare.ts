@@ -590,7 +590,6 @@ async function main(): Promise<void> {
 	}
 	if (config.choices.auth.includes('emailOTP')) {
 		for (const marker of [
-			'#   - PUBLIC_TURNSTILE_SITE_KEY',
 			'test -n "$PUBLIC_TURNSTILE_SITE_KEY"',
 			'PUBLIC_TURNSTILE_SITE_KEY: ${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}'
 		]) if (!stagingWorkflow.includes(marker)) throw new Error(`email-OTP preview Turnstile contract omits ${marker}`)

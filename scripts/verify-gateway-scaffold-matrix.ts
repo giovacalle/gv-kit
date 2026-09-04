@@ -887,12 +887,65 @@ async function dockerChecks({
 type WorkflowStep = {
 	id?: string
 	name?: string
+	uses?: string
 	run?: string
+	with?: Record<string, unknown>
 	env?: Record<string, string>
 }
 
+type WorkflowRunDefaults = {
+	run?: Record<string, unknown>
+}
+
+type WorkflowJob = {
+	defaults?: WorkflowRunDefaults
+	env?: Record<string, string>
+	needs?: string | string[]
+	steps?: WorkflowStep[]
+}
+
 type Workflow = {
-	jobs?: Record<string, { needs?: string; steps?: WorkflowStep[] }>
+	defaults?: WorkflowRunDefaults
+	env?: Record<string, string>
+	jobs?: Record<string, WorkflowJob>
+	on?: Record<string, unknown>
+}
+
+export type CloudflareWorkflowSources = {
+	production: string
+	staging: string
+}
+
+type CloudflareWorkflowStructure = {
+	productionSteps: string[]
+	stagingSteps: string[]
+	stagingNeeds: string[]
+}
+
+const TRUSTED_PREVIEW_REF =
+	'${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}'
+const CREDENTIAL_REFERENCE =
+	/\$\{\{(?:(?!\}\})[\s\S])*\bsecrets\b(?:(?!\}\})[\s\S])*\}\}|\bneeds\s*(?:\.|\[)[^}]*\bdatabase_url\b/
+const TRUSTED_PREVIEW_BUILD_HASHES = new Set([
+	'68dd1c0ebf22ccfde1384b944dace657672a3c65a07e97a2a8b44e655186b6aa',
+	'2346d7df60877bab7bf7876faf3662eed696eaed0fbd8dbcc4dcdf3748620f8b',
+	'8186ca72b2213506d91c9f02b1d3cf3c8a115bf5dfc8ab35cd6ffca8f156fa3d'
+])
+const TRUSTED_CREDENTIAL_STEP_HASHES: Record<string, string[]> = {
+	'Verify managed preview ingress': ['124c50cdddcfc16422308f95d49de00958720fbb6607e91f4d076b6d7baedf5e'],
+	'Create or reuse Neon preview branch': ['ae00d992be77dd4bc616b66bfd0689fdecfd5590bb5e2954884ca26b1a3e9725'],
+	'Create or reuse D1 preview database': ['7fb92cb9e04ec7c618382a9c7fbb3b299c80b0c9b23320ab3780fd04a2cac5b2'],
+	'Apply preview Neon migrations with a trusted pinned tool': ['97131c2f2e1a9ba00fb6368da22b37f1471d87733031c3fca6d82a8d96f86417'],
+	'Apply preview D1 migrations with a trusted pinned tool': ['db0f90f9f13347ed6b8bca229915abcc884bd45c4086e393beffa75bf676d9d3'],
+	'Write private Worker preview secret files from trusted code': [
+		'a90cfd3115298aca2981225685c4d8b733ed54f54dd2e17e38899a4471f71015',
+		'445114b3d91476f2316409a2150c942a57c08299cf09fc51213e339a9932e49f',
+		'090ecb7d9b5b7f772eb7a24d25a86c835aa41b79af8f53cc8a4741d49ab4908c'
+	],
+	'Publish prebuilt preview Workers from trusted code': [
+		'19efdb1e7a9c2b3ce5e742664b017cef2be335ccc36495a1bf94d1ad6106743e',
+		'20c28796fbfaa6c83432ecb2d81d3d0e17312e4bd739dd145e3b7f3dfcb23c78'
+	]
 }
 
 function orderedStepNames(steps: WorkflowStep[], expected: string[]): void {
@@ -904,17 +957,76 @@ function orderedStepNames(steps: WorkflowStep[], expected: string[]): void {
 	}
 }
 
+function workflowSteps(workflow: Workflow, jobName: string): WorkflowStep[] {
+	const steps = workflow.jobs?.[jobName]?.steps
+	if (!Array.isArray(steps)) throw new Error(`${jobName} workflow steps are missing`)
+	return steps
+}
+
+function normalizedNeeds(needs: WorkflowJob['needs']): string[] {
+	if (typeof needs === 'string') return [needs]
+	return needs ?? []
+}
+
+async function loadCloudflareWorkflowSources(
+	input: string | CloudflareWorkflowSources
+): Promise<CloudflareWorkflowSources> {
+	if (typeof input !== 'string') return input
+	const workflowDirectory = join(input, '.github/workflows')
+	return {
+		production: await readFile(join(workflowDirectory, 'deploy-production.yml'), 'utf8'),
+		staging: await readFile(join(workflowDirectory, 'deploy-staging.yml'), 'utf8')
+	}
+}
+
+function workflowValueHash(value: unknown): string {
+	return createHash('sha256').update(JSON.stringify(value)).digest('hex')
+}
+
+function hasExactTrustedCredentialStep(step: WorkflowStep): boolean {
+	const expected = TRUSTED_CREDENTIAL_STEP_HASHES[step.name ?? ''] ?? []
+	return expected.includes(workflowValueHash(step))
+}
+
+function isTrustedCredentialStep(jobName: string, step: WorkflowStep): boolean {
+	if (jobName === 'preview-ingress') return step.name === 'Verify managed preview ingress' && hasExactTrustedCredentialStep(step)
+	if (jobName === 'preview-db') return ['Create or reuse Neon preview branch', 'Create or reuse D1 preview database'].includes(step.name ?? '') && hasExactTrustedCredentialStep(step)
+	if (jobName !== 'deploy') return false
+	return hasExactTrustedCredentialStep(step)
+}
+
+function assertTrustedCredentialBoundary(staging: Workflow): void {
+	if (CREDENTIAL_REFERENCE.test(JSON.stringify(staging.env))) throw new Error('preview workflow exposes provider credentials at workflow scope')
+	if (staging.defaults?.run) throw new Error('preview workflow overrides execution for credentialed steps')
+	for (const [jobName, job] of Object.entries(staging.jobs ?? {})) {
+		const { steps = [], ...jobConfiguration } = job
+		if (CREDENTIAL_REFERENCE.test(JSON.stringify(jobConfiguration))) throw new Error(`${jobName} exposes provider credentials at job scope`)
+		const credentialStepIndexes = steps.flatMap((step, index) =>
+			CREDENTIAL_REFERENCE.test(JSON.stringify(step)) ? [index] : []
+		)
+		if (jobName === 'build-preview' && credentialStepIndexes.length > 0) throw new Error('PR-controlled preview build receives provider credentials')
+		if (credentialStepIndexes.length > 0 && job.defaults?.run) throw new Error(`${jobName} overrides execution for credentialed steps`)
+		for (const index of credentialStepIndexes) if (!isTrustedCredentialStep(jobName, steps[index]!)) throw new Error(`${jobName} exposes provider credentials to an untrusted step`)
+		if (!['preview-ingress', 'deploy'].includes(jobName) || credentialStepIndexes.length === 0) continue
+		const checkoutIndex = steps.findIndex(
+			(step) =>
+				step.uses === 'actions/checkout@v4' && step.with?.ref === TRUSTED_PREVIEW_REF
+		)
+		if (checkoutIndex < 0 || credentialStepIndexes.some((index) => index <= checkoutIndex)) throw new Error(`${jobName} uses provider credentials without an earlier trusted checkout`)
+	}
+	if (!TRUSTED_PREVIEW_BUILD_HASHES.has(workflowValueHash(staging.jobs?.['build-preview']))) throw new Error('preview build job does not match trusted passive structure')
+}
+
 export async function validateCloudflareWorkflowStructure(
-	project: string,
+	input: string | CloudflareWorkflowSources,
 	entry: GatewayMatrixEntry
-): Promise<{ productionSteps: string[]; stagingSteps: string[] }> {
-	const parse = async (file: string) =>
-		Bun.YAML.parse(await readFile(join(project, '.github/workflows', file), 'utf8')) as Workflow
-	const production = await parse('deploy-production.yml')
-	const staging = await parse('deploy-staging.yml')
-	const productionSteps = production.jobs?.deploy?.steps
-	const stagingSteps = staging.jobs?.deploy?.steps
-	if (!Array.isArray(productionSteps) || !Array.isArray(stagingSteps)) throw new Error('deploy workflow steps are missing')
+): Promise<CloudflareWorkflowStructure> {
+	const sources = await loadCloudflareWorkflowSources(input)
+	const production = Bun.YAML.parse(sources.production) as Workflow
+	const staging = Bun.YAML.parse(sources.staging) as Workflow
+	const productionSteps = workflowSteps(production, 'deploy')
+	const buildSteps = workflowSteps(staging, 'build-preview')
+	const stagingSteps = workflowSteps(staging, 'deploy')
 	orderedStepNames(productionSteps, [
 		'Run production database migrations',
 		...(productionSteps.some((step) => step.name === 'Validate public deployment variables')
@@ -925,21 +1037,109 @@ export async function validateCloudflareWorkflowStructure(
 		'Deploy gateway Worker',
 		'Deploy web Worker'
 	])
-	if (staging.jobs?.deploy?.needs !== 'preview-db') throw new Error('staging deploy does not depend on preview-db')
-	orderedStepNames(stagingSteps, [
-		'Write temporary staging Wrangler configs',
-		'Run preview database migrations',
-		'Write private Worker preview secret files',
-		'Deploy auth Worker',
-		'Deploy users Worker',
-		'Remove private Worker preview secret files',
-		'Deploy gateway Worker',
-		'Deploy web Worker'
-	])
-	const productionDeploySteps = productionSteps.filter(
+	const stagingNeeds = normalizedNeeds(staging.jobs?.deploy?.needs)
+	if (JSON.stringify(stagingNeeds) !== JSON.stringify(['preview-db', 'build-preview'])) throw new Error('staging deploy must depend on preview-db and build-preview')
+	if (JSON.stringify(normalizedNeeds(staging.jobs?.['build-preview']?.needs)) !== '["preview-db"]') throw new Error('preview build does not wait for preview-db')
+	const usesTrustedWorkflowDefinition = staging.on && Object.hasOwn(staging.on, 'pull_request_target') && !Object.hasOwn(staging.on, 'pull_request')
+	if (!usesTrustedWorkflowDefinition) throw new Error('preview deployment does not use a trusted workflow definition')
+
+	const allStagingSteps = Object.values(staging.jobs ?? {}).flatMap((job) => job.steps ?? [])
+	const obsoleteDeployStep = allStagingSteps.find(
 		(step) => step.name?.startsWith('Deploy ') && step.name.endsWith(' Worker')
 	)
-	const stagingDeploySteps = stagingSteps.filter(
+	if (obsoleteDeployStep) throw new Error(`obsolete individual preview Worker deployment step: ${obsoleteDeployStep.name}`)
+	for (const step of allStagingSteps) if (/\bpnpm\b[^\n]*\bdeploy:staging\b/.test(step.run ?? '')) throw new Error('obsolete individual preview package deployment command')
+
+	orderedStepNames(buildSteps, [
+		'Checkout untrusted preview source without provider credentials',
+		'Write temporary staging Wrangler configs',
+		'Build untrusted preview source and package passive Worker bundles',
+		'Upload passive preview bundle'
+	])
+	const untrustedCheckout = buildSteps.find(
+		(step) => step.name === 'Checkout untrusted preview source without provider credentials'
+	)
+	if (untrustedCheckout?.with?.ref !== '${{ github.event.pull_request.head.sha || github.sha }}') throw new Error('preview build does not check out the requested untrusted head')
+	const bundleStep = buildSteps.find(
+		(step) => step.name === 'Build untrusted preview source and package passive Worker bundles'
+	)
+	const passiveTargets = [
+		'services/auth',
+		'services/users',
+		'apps/api',
+		...(entry.marketing === 'astro' ? ['apps/marketing'] : []),
+		'apps/web'
+	]
+	const bundleLines = (bundleStep?.run ?? '').split('\n').filter(Boolean)
+	const buildCommandPattern = /^pnpm turbo run build(?: --filter=[@a-z0-9-/]+)+$/
+	const passiveBundleCommandPattern = /^pnpm --filter [@a-z0-9-/]+ exec wrangler deploy --config wrangler\.staging\.jsonc --dry-run --outdir=\.preview-bundle$/
+	const buildsOnlyPassiveBundles = bundleLines.length === 1 + passiveTargets.length * 2 && buildCommandPattern.test(bundleLines[0] ?? '') && passiveTargets.every((target, index) => passiveBundleCommandPattern.test(bundleLines[index * 2 + 1] ?? '') && bundleLines[index * 2 + 2] === `test -d ${target}/.preview-bundle`)
+	if (!buildsOnlyPassiveBundles) throw new Error('untrusted preview build does not produce only passive Worker bundles')
+	const unexpectedWorkerDeploy = allStagingSteps.find(
+		(step) => step !== bundleStep && /\bwrangler deploy\b/.test(step.run ?? '')
+	)
+	if (unexpectedWorkerDeploy) throw new Error('staging workflow contains an untrusted Worker deploy')
+	const expectedArtifactPaths = [
+		'cloudflare-preview-manifest.json',
+		...passiveTargets.flatMap((directory) => [
+			`${directory}/wrangler.staging.jsonc`,
+			`${directory}/.preview-bundle`
+		]),
+		'apps/web/.svelte-kit/cloudflare',
+		...(entry.marketing === 'astro' ? ['apps/marketing/dist'] : [])
+	]
+	const expectedArtifactName =
+		'cloudflare-preview-build-${{ needs.preview-db.outputs.alias }}-${{ github.run_id }}'
+	const upload = buildSteps.find((step) => step.name === 'Upload passive preview bundle')
+	const artifactPaths = String(upload?.with?.path ?? '')
+		.trim()
+		.split('\n')
+	const uploadsOnlyPassiveOutput = upload?.uses === 'actions/upload-artifact@v4' && upload.with?.name === expectedArtifactName && JSON.stringify(artifactPaths) === JSON.stringify(expectedArtifactPaths)
+	if (!uploadsOnlyPassiveOutput) throw new Error('untrusted preview artifact is not limited to passive build output')
+
+	const migrationName =
+		entry.db === 'sqlite'
+			? 'Apply preview D1 migrations with a trusted pinned tool'
+			: 'Apply preview Neon migrations with a trusted pinned tool'
+	orderedStepNames(stagingSteps, [
+		'Checkout trusted deployment code',
+		'Download passive preview bundle',
+		migrationName,
+		'Publish prebuilt preview Workers from trusted code',
+		'Remove private Worker preview secret files'
+	])
+	const trustedCheckout = stagingSteps.find(
+		(step) => step.name === 'Checkout trusted deployment code'
+	)
+	const checksOutTrustedDeploymentCode = trustedCheckout?.uses === 'actions/checkout@v4' && trustedCheckout.with?.ref === TRUSTED_PREVIEW_REF && trustedCheckout.with.path === 'trusted-source'
+	if (!checksOutTrustedDeploymentCode) throw new Error('trusted publisher does not use trusted deployment code')
+	const download = stagingSteps.find((step) => step.name === 'Download passive preview bundle')
+	const downloadsPassivePreviewArtifact = download?.uses === 'actions/download-artifact@v4' && download.with?.name === expectedArtifactName && download.with.path === 'preview-artifact'
+	if (!downloadsPassivePreviewArtifact) throw new Error('trusted publisher does not download the passive preview artifact')
+	const migration = stagingSteps.find((step) => step.name === migrationName)
+	const usesTrustedMigrationInput = JSON.stringify(migration).includes('trusted-source/packages/db/') && !JSON.stringify(migration).includes('preview-artifact/packages/db/')
+	if (!usesTrustedMigrationInput) throw new Error('preview database migration does not use trusted migration input')
+	const publisherSteps = allStagingSteps.filter((step) =>
+		(step.run ?? '').includes('trusted-source/scripts/publish-cloudflare-preview.sh')
+	)
+	if (publisherSteps.length !== 1) throw new Error('staging workflow must have one trusted publisher')
+	const publisher = publisherSteps[0]!
+	const executesTrustedPublicationCode = publisher.name === 'Publish prebuilt preview Workers from trusted code' && publisher.run === 'sh trusted-source/scripts/publish-cloudflare-preview.sh'
+	if (!executesTrustedPublicationCode) throw new Error('trusted publisher does not execute trusted publication code')
+	const requiredPublisherEnv = {
+		PREVIEW_ARTIFACT: '${{ github.workspace }}/preview-artifact',
+		PREVIEW_SECRETS_DIR: '${{ steps.preview_secrets.outputs.directory }}',
+		TRUSTED_SOURCE: '${{ github.workspace }}/trusted-source',
+		STAGING_ALIAS: '${{ needs.preview-db.outputs.alias }}',
+		CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
+		CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID }}'
+	}
+	for (const [name, value] of Object.entries(requiredPublisherEnv)) if (publisher.env?.[name] !== value) throw new Error(`trusted publisher does not map ${name}`)
+	const mapsPreviewD1Identity = publisher.env?.STAGING_D1_DATABASE_NAME === '${{ needs.preview-db.outputs.d1_database_name }}' && publisher.env.STAGING_D1_DATABASE_ID === '${{ needs.preview-db.outputs.d1_database_id }}'
+	if (entry.db === 'sqlite' && !mapsPreviewD1Identity) throw new Error('trusted publisher does not map the preview D1 identity')
+	assertTrustedCredentialBoundary(staging)
+
+	const productionDeploySteps = productionSteps.filter(
 		(step) => step.name?.startsWith('Deploy ') && step.name.endsWith(' Worker')
 	)
 	const requiredProductionEnv = {
@@ -950,19 +1150,7 @@ export async function validateCloudflareWorkflowStructure(
 		TURBO_SCM_BASE: '${{ steps.scm.outputs.base }}',
 		TURBO_SCM_HEAD: '${{ steps.scm.outputs.head }}'
 	}
-	const requiredStagingEnv = {
-		DEPLOY_ALL: "${{ github.event.action != 'synchronize' }}",
-		CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
-		CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID }}',
-		STAGING_ALIAS: '${{ needs.preview-db.outputs.alias }}',
-		STAGING_WRANGLER_CONFIG: 'wrangler.staging.jsonc',
-		TURBO_SCM_BASE: '${{ github.event.pull_request.base.sha }}',
-		TURBO_SCM_HEAD: '${{ github.event.pull_request.head.sha }}'
-	}
-	for (const [stage, steps, expected] of [
-		['production', productionDeploySteps, requiredProductionEnv],
-		['staging', stagingDeploySteps, requiredStagingEnv]
-	] as const) for (const step of steps) for (const [name, value] of Object.entries(expected)) if (step.env?.[name] !== value) throw new Error(`${stage} ${step.name} does not map ${name}`)
+	for (const step of productionDeploySteps) for (const [name, value] of Object.entries(requiredProductionEnv)) if (step.env?.[name] !== value) throw new Error(`production ${step.name} does not map ${name}`)
 	const publicKeys = [
 		...new Set(
 			productionDeploySteps.flatMap((step) =>
@@ -983,30 +1171,17 @@ export async function validateCloudflareWorkflowStructure(
 		)
 		if (!validatedBeforeDeploy && !validatedByDeploy) throw new Error(`production deployment does not validate ${name} from GitHub variables`)
 	}
-	const previewConfig = stagingSteps.find((step) => step.id === 'preview_config')
+
+	const previewConfig = buildSteps.find((step) => step.id === 'preview_config')
 	if (previewConfig?.env?.STAGING_ALIAS !== '${{ needs.preview-db.outputs.alias }}') throw new Error('preview config does not use the preview-db alias')
-	if (entry.db === 'sqlite') {
-		if (
-			previewConfig.env?.PREVIEW_DB_KIND !== 'd1' ||
-			previewConfig.env?.STAGING_D1_DATABASE_NAME !==
-				'${{ needs.preview-db.outputs.d1_database_name }}' ||
-			previewConfig.env?.STAGING_D1_DATABASE_ID !== '${{ needs.preview-db.outputs.d1_database_id }}'
-		) {
-			throw new Error(
-				'D1 preview config environment is incomplete'
-			)
-		}
-	} else if (
-		previewConfig?.env?.PREVIEW_DB_KIND !== 'neon' ||
-		previewConfig.env?.STAGING_DATABASE_URL !== '${{ needs.preview-db.outputs.database_url }}'
-	) {
-		throw new Error(
-			'Neon preview config environment is incomplete'
-		)
-	}
+	const hasD1PreviewConfig = previewConfig?.env?.PREVIEW_DB_KIND === 'd1' && previewConfig.env.STAGING_D1_DATABASE_NAME === '${{ needs.preview-db.outputs.d1_database_name }}' && previewConfig.env.STAGING_D1_DATABASE_ID === '${{ needs.preview-db.outputs.d1_database_id }}'
+	if (entry.db === 'sqlite' && !hasD1PreviewConfig) throw new Error('D1 preview config environment is incomplete')
+	const hasNeonPreviewConfig = previewConfig?.env?.PREVIEW_DB_KIND === 'neon' && previewConfig.env.STAGING_NEON_BRANCH_NAME === '${{ needs.preview-db.outputs.neon_branch_name }}' && previewConfig.env.STAGING_NEON_BRANCH_ID === '${{ needs.preview-db.outputs.neon_branch_id }}'
+	if (entry.db === 'postgres' && !hasNeonPreviewConfig) throw new Error('Neon preview config environment is incomplete')
 	return {
 		productionSteps: productionSteps.flatMap(({ name }) => (name ? [name] : [])),
-		stagingSteps: stagingSteps.flatMap(({ name }) => (name ? [name] : []))
+		stagingSteps: stagingSteps.flatMap(({ name }) => (name ? [name] : [])),
+		stagingNeeds
 	}
 }
 

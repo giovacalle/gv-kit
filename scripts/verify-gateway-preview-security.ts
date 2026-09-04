@@ -765,6 +765,12 @@ async function verifyTrustedPublisher({
 			])
 		)
 	) as Record<string, WranglerConfig>
+	const publishAuthSecret = (await readOptional(join(previewSecretDirectory, 'auth.json')))
+		? 'auth.json'
+		: ''
+	const publishUsersSecret = (await readOptional(join(previewSecretDirectory, 'users.json')))
+		? 'users.json'
+		: ''
 	const bundles: Record<string, string> = {
 		'services/auth': 'index.js',
 		'services/users': 'index.js',
@@ -778,7 +784,7 @@ async function verifyTrustedPublisher({
 		`#!/bin/sh
 set -eu
 case "$PWD" in
-	"$PREVIEW_ARTIFACT/services/auth") bundle=index.js; secret=auth.json; assets=none ;;
+	"$PREVIEW_ARTIFACT/services/auth") bundle=index.js; secret="$PUBLISH_AUTH_SECRET"; assets=none ;;
 	"$PREVIEW_ARTIFACT/services/users") bundle=index.js; secret="$PUBLISH_USERS_SECRET"; assets=none ;;
 	"$PREVIEW_ARTIFACT/apps/api") bundle=index.js; secret=; assets=none ;;
 	"$PREVIEW_ARTIFACT/apps/web") bundle=_worker.js; secret=; assets=web ;;
@@ -902,7 +908,8 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 				CLOUDFLARE_PREVIEW_WEB_DOMAIN: previewWebDomain,
 				CLOUDFLARE_PREVIEW_API_DOMAIN: previewApiDomain,
 				PUBLISH_LOG: publishLog,
-				PUBLISH_USERS_SECRET: provider === 'neon' ? 'users.json' : '',
+				PUBLISH_AUTH_SECRET: publishAuthSecret,
+				PUBLISH_USERS_SECRET: publishUsersSecret,
 				...(provider === 'd1'
 					? {
 							STAGING_D1_DATABASE_NAME: previewDatabaseName,

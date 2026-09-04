@@ -43,6 +43,7 @@
 		"test:watch": "bun test --watch",
 		"verify:astro-matrix": "bun run scripts/verify-astro-scaffold-matrix.ts",
 		"verify:gateway-matrix": "bun run scripts/verify-gateway-scaffold-matrix.ts",
+		"verify:gateway-scaffold-matrix": "bun run scripts/verify-gateway-scaffold-matrix.ts",
 		"verify:gateway-local": "bun run scripts/verify-gateway-local.ts",
 		"verify:gateway-cloudflare": "bun run scripts/verify-gateway-cloudflare.ts",
 		"verify:gateway-docker": "bun run scripts/verify-gateway-docker.ts",

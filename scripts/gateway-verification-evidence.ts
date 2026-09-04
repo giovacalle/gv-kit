@@ -1,6 +1,11 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, relative } from 'node:path'
 
+const GENERATED_EMAIL_OTP_PATTERN = /(\[auth\] OTP for [^\r\n]*?:[ \t]*)\d{6}\b/g
+const OTP_FIELD_PATTERN = /(["']?\botp\b["']?\s*[:=]\s*["']?)\d{6}\b/gi
+const UNSAFE_GENERATED_EMAIL_OTP_PATTERN = /\[auth\] OTP for [^\r\n]*?:[ \t]*\d{6}\b/
+const UNSAFE_OTP_FIELD_PATTERN = /["']?\botp\b["']?\s*[:=]\s*["']?\d{6}\b/i
+
 export type VerificationCommandEvidence = {
 	name: string
 	command: string
@@ -14,6 +19,8 @@ export function redactArtifactText(input: string, roots: string[] = []): string 
 	let output = input
 	for (const root of [...roots].sort((left, right) => right.length - left.length)) if (root) output = output.replaceAll(root, '$WORKSPACE')
 	return output
+		.replace(GENERATED_EMAIL_OTP_PATTERN, '$1[REDACTED]')
+		.replace(OTP_FIELD_PATTERN, '$1[REDACTED]')
 		.replace(/\/Users\/[^/\s"'`]+/g, '/Users/[REDACTED]')
 		.replace(/\/home\/[^/\s"'`]+/g, '/home/[REDACTED]')
 		.replace(/[A-Z]:\\Users\\[^\\\s"'`]+/g, 'C:\\Users\\[REDACTED]')
@@ -42,6 +49,8 @@ export function redactArtifactText(input: string, roots: string[] = []): string 
 
 export function unsafeArtifactFindings(input: string): string[] {
 	const checks = [
+		['generated email OTP', UNSAFE_GENERATED_EMAIL_OTP_PATTERN],
+		['OTP field', UNSAFE_OTP_FIELD_PATTERN],
 		[
 			'absolute machine path',
 			/(?:\/Users\/(?!\[REDACTED\])|\/home\/(?!\[REDACTED\])|[A-Z]:\\Users\\(?!\[REDACTED\]))/

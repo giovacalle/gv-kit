@@ -1,6 +1,14 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
+import {
+	redactArtifactText,
+	unsafeArtifactFindings
+} from '../../scripts/gateway-verification-evidence.js'
+import {
+	extractGeneratedEmailOtp,
+	otpSignInFailureDiagnostic
+} from '../../scripts/verify-gateway-local.js'
 import type { FileEntry } from '../../src/lib/files.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../../src/pipeline/plan.js'
@@ -24,6 +32,36 @@ function entry(entries: FileEntry[], path: string): string {
 	if (!found) throw new Error(`Missing generated file: ${path}`)
 	return found.content
 }
+
+describe('local gateway verifier evidence', () => {
+	test('uses generated email OTPs transiently without retaining their values', () => {
+		const email = 'local-verifier@example.test'
+		const output = `auth: [auth] OTP for ${email}: 123456\n`
+		expect(extractGeneratedEmailOtp(output, email)).toBe('123456')
+		const retained = redactArtifactText(output)
+		expect(retained).toBe(`auth: [auth] OTP for ${email}: [REDACTED]\n`)
+		expect(unsafeArtifactFindings(retained)).toEqual([])
+	})
+
+	test('redacts OTP-bearing post-extraction failure diagnostics', () => {
+		const otp = '123456'
+		const body = `{"error":"OTP ${otp} rejected","otp":"${otp}"}`
+		expect(unsafeArtifactFindings(body)).toContain('OTP field')
+
+		const diagnostic = otpSignInFailureDiagnostic({
+			origin: 'http://localhost:3000',
+			status: 401,
+			body,
+			otp
+		})
+		expect(diagnostic).toBe(
+			'OTP sign-in failed for http://localhost:3000: 401 {"error":"OTP [REDACTED] rejected","otp":"[REDACTED]"}'
+		)
+		expect(diagnostic).not.toContain(otp)
+		expect(unsafeArtifactFindings(diagnostic)).toEqual([])
+		expect(unsafeArtifactFindings(redactArtifactText(diagnostic))).toEqual([])
+	})
+})
 
 describe('Cloudflare gateway local environment', () => {
 	test('root dev enables Wrangler process environment forwarding for each Worker task', () => {

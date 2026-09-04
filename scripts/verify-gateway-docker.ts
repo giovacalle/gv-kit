@@ -359,7 +359,7 @@ async function waitForOtp({
 			)
 			await writeSanitizedArtifact({
 				path: logPath,
-				content: result.output.replace(/(\[auth\] OTP for [^:]+: )\d{6}/g, '$1[REDACTED]'),
+				content: result.output,
 				roots: [project]
 			})
 			await appendCommandEvidence(project, {
@@ -939,7 +939,7 @@ async function main(): Promise<void> {
 		const runtimeLogPath = join(generated.project, 'runtime.log')
 		await writeSanitizedArtifact({
 			path: runtimeLogPath,
-			content: runtimeLogs.output.replace(/(\[auth\] OTP for [^:]+: )\d{6}/g, '$1[REDACTED]'),
+			content: runtimeLogs.output,
 			roots: [generated.project]
 		})
 		await appendCommandEvidence(generated.project, {

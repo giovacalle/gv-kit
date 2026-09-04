@@ -5,7 +5,11 @@ import { join, resolve } from 'node:path'
 import { parseJsonc } from '../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../src/pipeline/plan.js'
 import { GvKitConfig, type GvKitConfig as Config } from '../src/schema/config.js'
-import { appendCommandEvidence, writeSanitizedArtifact } from './gateway-verification-evidence.js'
+import {
+	appendCommandEvidence,
+	redactArtifactText,
+	writeSanitizedArtifact
+} from './gateway-verification-evidence.js'
 
 const PNPM_VERSION = '11.1.1'
 const LOCAL_API_ORIGIN = 'http://api.localhost:8786'
@@ -480,12 +484,31 @@ async function postJson({
 	})
 }
 
+export function extractGeneratedEmailOtp(output: string, email: string): string | undefined {
+	const escapedEmail = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+	return output.match(new RegExp(`\\[auth\\] OTP for ${escapedEmail}: (\\d{6})\\b`))?.[1]
+}
+
+export function otpSignInFailureDiagnostic({
+	origin,
+	status,
+	body,
+	otp
+}: {
+	origin: string
+	status: number
+	body: string
+	otp: string
+}): string {
+	return redactArtifactText(
+		`OTP sign-in failed for ${origin}: ${status} ${body}`.replaceAll(otp, '[REDACTED]')
+	)
+}
+
 async function waitForOtp(command: RunningCommand, email: string): Promise<string> {
 	const deadline = Date.now() + 10_000
-	const escapedEmail = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-	const pattern = new RegExp(`\\[auth\\] OTP for ${escapedEmail}: (\\d{6})`)
 	while (Date.now() < deadline) {
-		const otp = command.output().match(pattern)?.[1]
+		const otp = extractGeneratedEmailOtp(command.output(), email)
 		if (otp) return otp
 		await Bun.sleep(100)
 	}
@@ -610,7 +633,10 @@ async function signInWithOtp({
 		body: { email, otp },
 		headers: { origin }
 	})
-	if (!signIn.ok) throw new Error(`OTP sign-in failed for ${origin}: ${signIn.status} ${await signIn.text()}`)
+	if (!signIn.ok) {
+		const body = await signIn.text()
+		throw new Error(otpSignInFailureDiagnostic({ origin, status: signIn.status, body, otp }))
+	}
 	const setCookies = responseCookiesIntoStore({ store, response: signIn, origin })
 	if (setCookies.length === 0 || !browserCookieHeader(store, origin)) throw new Error(`OTP sign-in for ${origin} did not set an applicable browser cookie`)
 	return setCookies
@@ -1155,7 +1181,7 @@ async function verifyOpenApiContract(project: string) {
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2))
 	const generated = await materialize(args.fixture, args.output)
-	console.log(`[gateway-local] generated project: ${generated.project}`)
+	console.log(redactArtifactText(`[gateway-local] generated project: ${generated.project}`, [resolve('.')]))
 	const webHooks = await readFile(join(generated.project, 'apps/web/src/hooks.server.ts'), 'utf8')
 	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)')) throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
 	if (!webHooks.includes('export const handleFetch') || !webHooks.includes('env.GATEWAY_URL')) throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
@@ -1193,7 +1219,7 @@ async function main(): Promise<void> {
 	if (args.contract) {
 		if (generated.config.choices.apiClient !== 'hey-api') throw new Error('--contract requires a fixture with apiClient: hey-api')
 		const contractEvidence = await verifyOpenApiContract(generated.project)
-		console.log(JSON.stringify(contractEvidence, null, 2))
+		console.log(redactArtifactText(JSON.stringify(contractEvidence, null, 2), [resolve('.')]))
 	}
 	const recorder = hasAuth ? undefined : startAuthRecorder()
 	const authUrl = recorder ? `http://127.0.0.1:${recorder.target.port}` : 'http://127.0.0.1:8787'
@@ -1222,7 +1248,7 @@ async function main(): Promise<void> {
 							authUrl,
 							deploy: generated.config.choices.deploy
 						})
-		console.log(JSON.stringify(evidence, null, 2))
+		console.log(redactArtifactText(JSON.stringify(evidence, null, 2), [resolve('.')]))
 		runtimePassed = true
 	} finally {
 		await writeSanitizedArtifact({
@@ -1245,7 +1271,8 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
 	main().catch((error: unknown) => {
-		console.error(error instanceof Error ? error.message : String(error))
+		const diagnostic = error instanceof Error ? error.message : String(error)
+		console.error(redactArtifactText(diagnostic, [resolve('.')]))
 		process.exitCode = 1
 	})
 }

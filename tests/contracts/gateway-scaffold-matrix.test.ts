@@ -492,11 +492,13 @@ describe('gateway generated-workspace verification matrix', () => {
 			'/Users/alice/project/file.ts',
 			'Authorization: Bearer secret-token-value',
 			'DATABASE_URL=postgres://user:password@example.test/db',
-			'API_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz'
+			'API_TOKEN=ghp_abcdefghijklmnopqrstuvwxyz',
+			'auth: [auth] OTP for person+local@example.test: 123456'
 		].join('\n')
+		expect(unsafeArtifactFindings(unsafe)).toContain('generated email OTP')
 		const redacted = redactArtifactText(unsafe)
 		expect(unsafeArtifactFindings(redacted)).toEqual([])
-		expect(redacted).toContain('[REDACTED]')
+		expect(redacted).toContain('[auth] OTP for person+local@example.test: [REDACTED]')
 	})
 
 	test('specialized verification preserves generated Cloudflare inputs and fills missing gates', () => {

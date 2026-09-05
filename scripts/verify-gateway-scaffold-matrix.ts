@@ -292,12 +292,22 @@ type RunOptions = {
 	expectedExitCode?: number
 	expectedOutput?: RegExp
 	env?: Record<string, string>
+	omittedEnvironment?: readonly string[]
 }
 type PnpmArgumentsOptions = {
 	pnpmCommand: string
 	pnpmCommandArguments?: string[]
 	workspaceDirectory?: string
 }
+
+export const DOCKER_RUNTIME_OWNED_ENVIRONMENT_KEYS = [
+	'ORIGIN',
+	'BETTER_AUTH_ALLOWED_HOSTS',
+	'AUTH_CORS_ORIGINS',
+	'API_CORS_ORIGINS',
+	'API_PUBLIC_ORIGIN',
+	'GATEWAY_PUBLIC_ORIGINS'
+] as const
 
 const verificationEnvironment = {
 	CI: '1',
@@ -324,6 +334,29 @@ const verificationEnvironment = {
 	TURNSTILE_SECRET_KEY: '1x0000000000000000000000000000000AA'
 } satisfies Record<string, string>
 
+type VerificationCommandEnvironmentOptions = {
+	inheritedEnvironment: NodeJS.ProcessEnv
+	cwd: string
+	environment?: Record<string, string>
+	omittedEnvironment?: readonly string[]
+}
+
+export function createVerificationCommandEnvironment({
+	inheritedEnvironment,
+	cwd,
+	environment,
+	omittedEnvironment = []
+}: VerificationCommandEnvironmentOptions): NodeJS.ProcessEnv {
+	const commandEnvironment: NodeJS.ProcessEnv = {
+		...inheritedEnvironment,
+		...verificationEnvironment,
+		PATH: `${join(cwd, '.verify-bin')}:${inheritedEnvironment.PATH ?? ''}`,
+		...environment
+	}
+	for (const key of omittedEnvironment) delete commandEnvironment[key]
+	return commandEnvironment
+}
+
 async function runCommand(options: RunOptions): Promise<CommandEvidence> {
 	const started = performance.now()
 	await mkdir(dirname(options.logPath), { recursive: true })
@@ -334,12 +367,14 @@ async function runCommand(options: RunOptions): Promise<CommandEvidence> {
 		exitCode = await new Promise<number>((done, reject) => {
 			const child = spawn(options.program, options.args, {
 				cwd: options.cwd,
-				env: {
-					...process.env,
-					...verificationEnvironment,
-					PATH: `${join(options.cwd, '.verify-bin')}:${process.env.PATH ?? ''}`,
-					...options.env
-				},
+				env: createVerificationCommandEnvironment({
+					inheritedEnvironment: process.env,
+					cwd: options.cwd,
+					...(options.env ? { environment: options.env } : {}),
+					...(options.omittedEnvironment
+						? { omittedEnvironment: options.omittedEnvironment }
+						: {})
+				}),
 				stdio: ['ignore', 'pipe', 'pipe']
 			})
 			child.stdout.on('data', (chunk) => (output += chunk.toString()))
@@ -463,7 +498,10 @@ async function runSpecializedSeam({
 		args: ['run', script, ...common],
 		cwd: resolve('.'),
 		logPath,
-		displayCommand: `bun run ${script} ${common.join(' ')}`
+		displayCommand: `bun run ${script} ${common.join(' ')}`,
+		...(entry.highestSeam === 'docker-runtime'
+			? { omittedEnvironment: DOCKER_RUNTIME_OWNED_ENVIRONMENT_KEYS }
+			: {})
 	})
 	const project = join(entryRoot, entry.fixture)
 	const nestedCommands = await readCommandEvidence(project).catch(() => [])

@@ -6,9 +6,12 @@ import {
 	redactArtifactText,
 	unsafeArtifactFindings
 } from '../../scripts/gateway-verification-evidence.js'
+import { createDockerRuntimeEnvironment } from '../../scripts/verify-gateway-docker.js'
 import {
 	buildRunMetadata,
 	COVERAGE_RATIONALE,
+	createVerificationCommandEnvironment,
+	DOCKER_RUNTIME_OWNED_ENVIRONMENT_KEYS,
 	GATEWAY_SCAFFOLD_MATRIX,
 	uncoveredMaterialInteractions,
 	uncoveredMaterialValues,
@@ -48,6 +51,54 @@ function generatedCloudflareWorkflows(entry: GatewayMatrixEntry): CloudflareWork
 }
 
 describe('gateway generated-workspace verification matrix', () => {
+	test('isolates Docker runtime origins from conflicting matrix settings at every ingress port', () => {
+		const conflictingParent = {
+			PATH: '/usr/bin',
+			DOCKER_CONFIG: '/tmp/docker-config',
+			ORIGIN: 'https://parent-web.example.test',
+			BETTER_AUTH_ALLOWED_HOSTS: 'parent-web.example.test,parent-api.example.test',
+			AUTH_CORS_ORIGINS: 'https://parent-web.example.test',
+			API_CORS_ORIGINS: 'https://parent-web.example.test',
+			API_PUBLIC_ORIGIN: 'https://parent-api.example.test',
+			GATEWAY_PUBLIC_ORIGINS:
+				'https://parent-web.example.test,https://parent-api.example.test'
+		}
+		const specializedParent = createVerificationCommandEnvironment({
+			inheritedEnvironment: conflictingParent,
+			cwd: root,
+			omittedEnvironment: DOCKER_RUNTIME_OWNED_ENVIRONMENT_KEYS
+		})
+
+		for (const key of DOCKER_RUNTIME_OWNED_ENVIRONMENT_KEYS) expect(specializedParent[key], key).toBeUndefined()
+		expect(specializedParent.DOCKER_CONFIG).toBe('/tmp/docker-config')
+
+		for (const webPort of [3000, 13_000]) {
+			const webOrigin = `http://localhost:${webPort}`
+			const apiOrigin = `http://api.localhost:${webPort}`
+			const runtimeEnvironment = createDockerRuntimeEnvironment({
+				inheritedEnvironment: conflictingParent,
+				binPath: '/verify-bin',
+				projectName: 'gvkit-runtime-test',
+				webOrigin,
+				apiOrigin
+			})
+
+			expect(runtimeEnvironment.ORIGIN, String(webPort)).toBe(webOrigin)
+			expect(runtimeEnvironment.BETTER_AUTH_ALLOWED_HOSTS, String(webPort)).toBe(
+				`localhost:${webPort},api.localhost:${webPort},localhost:8786,127.0.0.1:8786`
+			)
+			expect(runtimeEnvironment.AUTH_CORS_ORIGINS, String(webPort)).toBe(
+				`${webOrigin},${apiOrigin}`
+			)
+			expect(runtimeEnvironment.API_CORS_ORIGINS, String(webPort)).toBe(webOrigin)
+			expect(runtimeEnvironment.API_PUBLIC_ORIGIN, String(webPort)).toBe(apiOrigin)
+			expect(runtimeEnvironment.GATEWAY_PUBLIC_ORIGINS, String(webPort)).toBe(
+				`${webOrigin},${apiOrigin},http://localhost:8786,http://127.0.0.1:8786`
+			)
+			expect(runtimeEnvironment.DOCKER_CONFIG, String(webPort)).toBe('/tmp/docker-config')
+		}
+	})
+
 	test('uses stable identifiers and covers every material axis value', () => {
 		expect(GATEWAY_SCAFFOLD_MATRIX).toHaveLength(9)
 		expect(uncoveredMaterialValues()).toEqual([])

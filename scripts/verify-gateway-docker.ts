@@ -38,6 +38,46 @@ type ComposeArgumentsOptions =
 	| { composeCommand: 'config'; format?: 'json' }
 	| { composeCommand: 'up'; build?: boolean; detached?: boolean }
 
+type DockerRuntimeEnvironmentOptions = {
+	inheritedEnvironment: NodeJS.ProcessEnv
+	binPath: string
+	projectName: string
+	composeFile?: string
+	webOrigin: string
+	apiOrigin: string
+}
+
+export function createDockerRuntimeEnvironment({
+	inheritedEnvironment,
+	binPath,
+	projectName,
+	composeFile,
+	webOrigin,
+	apiOrigin
+}: DockerRuntimeEnvironmentOptions): NodeJS.ProcessEnv {
+	const webHost = new URL(webOrigin).host
+	const apiHost = new URL(apiOrigin).host
+	return {
+		...inheritedEnvironment,
+		CI: '1',
+		PATH: `${binPath}:${inheritedEnvironment.PATH ?? ''}`,
+		COMPOSE_PROJECT_NAME: projectName,
+		...(composeFile ? { COMPOSE_FILE: composeFile } : {}),
+		POSTGRES_USER: 'gvkit',
+		POSTGRES_PASSWORD: 'gvkit-local-password',
+		POSTGRES_DB: 'gvkit',
+		DATABASE_URL: 'postgres://gvkit:gvkit-local-password@postgres:5432/gvkit',
+		ORIGIN: webOrigin,
+		BETTER_AUTH_ALLOWED_HOSTS: `${webHost},${apiHost},localhost:8786,127.0.0.1:8786`,
+		AUTH_CORS_ORIGINS: `${webOrigin},${apiOrigin}`,
+		API_CORS_ORIGINS: webOrigin,
+		API_PUBLIC_ORIGIN: apiOrigin,
+		GATEWAY_PUBLIC_ORIGINS: `${webOrigin},${apiOrigin},http://localhost:8786,http://127.0.0.1:8786`,
+		GATEWAY_TRUSTED_INGRESS_SECRET: 'docker-only-gateway-ingress-secret',
+		GATEWAY_UPSTREAM_TIMEOUT_MS: '10000'
+	}
+}
+
 function parseArgs(argv: string[]): { contract: boolean; fixture: string; output: string } {
 	let contract = false
 	let fixture = 'hono-docker-emailotp-only'
@@ -118,7 +158,7 @@ async function captureCommandResult({
 }: DockerCommandOptions): Promise<CommandResult> {
 	const child = spawn(program, args, {
 		cwd,
-		env: { ...process.env, ...env },
+		env,
 		stdio: ['ignore', 'pipe', 'pipe']
 	})
 	let output = ''
@@ -761,32 +801,18 @@ async function main(): Promise<void> {
 	const composeOverride = `${composeOverrides.join('\n')}\n`
 	if (composeOverrides.length > 1) await writeFile(composeOverridePath, composeOverride)
 	const projectName = `gvkit-${generated.config.choices.name}`.replace(/[^a-z0-9_-]/g, '-')
-	const env: NodeJS.ProcessEnv = {
-		CI: '1',
-		PATH: `${generated.binPath}:${process.env.PATH ?? ''}`,
-		COMPOSE_PROJECT_NAME: projectName,
+	const env = createDockerRuntimeEnvironment({
+		inheritedEnvironment: process.env,
+		binPath: generated.binPath,
+		projectName,
 		...(composeOverrides.length === 1
 			? {}
 			: {
-					COMPOSE_FILE: `docker-compose.yml${process.platform === 'win32' ? ';' : ':'}compose.verify.yml`
+					composeFile: `docker-compose.yml${process.platform === 'win32' ? ';' : ':'}compose.verify.yml`
 				}),
-		POSTGRES_USER: 'gvkit',
-		POSTGRES_PASSWORD: 'gvkit-local-password',
-		POSTGRES_DB: 'gvkit',
-		DATABASE_URL: 'postgres://gvkit:gvkit-local-password@postgres:5432/gvkit',
-		...(webPort === 3000
-			? {}
-			: {
-					ORIGIN: webOrigin,
-					BETTER_AUTH_ALLOWED_HOSTS: `localhost:${webPort},api.localhost:${webPort},localhost:8786,127.0.0.1:8786`,
-					AUTH_CORS_ORIGINS: `${webOrigin},${apiOrigin}`,
-					API_CORS_ORIGINS: webOrigin,
-					API_PUBLIC_ORIGIN: apiOrigin,
-					GATEWAY_PUBLIC_ORIGINS: `${webOrigin},${apiOrigin},http://localhost:8786,http://127.0.0.1:8786`
-				}),
-		GATEWAY_TRUSTED_INGRESS_SECRET: 'docker-only-gateway-ingress-secret',
-		GATEWAY_UPSTREAM_TIMEOUT_MS: '10000'
-	}
+		webOrigin,
+		apiOrigin
+	})
 	if (hasAuth) {
 		Object.assign(env, {
 			BETTER_AUTH_SECRET: 'docker-only-better-auth-secret-at-least-32-characters',

@@ -549,13 +549,11 @@ exit 92
 	}
 
 	async function probeDatabaseCleanup({
-		name,
 		records,
 		manifestGeneration = 'pull_request',
 		failureId = '',
 		pageTwoRecords = []
 	}: {
-		name: string
 		records: Array<Record<string, unknown>>
 		manifestGeneration?: 'pull_request' | 'pull_request_target' | 'none'
 		failureId?: string
@@ -606,7 +604,7 @@ exit 92
 	}
 
 	const successRecords = [...stableRecords, legacyRecord, unrelatedRecord]
-	const success = await probeDatabaseCleanup({ name: 'success', records: successRecords })
+	const success = await probeDatabaseCleanup({ records: successRecords })
 	requirePassed(success, `${provider} preview database cleanup`)
 	const expectedSuccess = [previewId, driftedId, legacyId].sort()
 	if (JSON.stringify(success.deletions.sort()) !== JSON.stringify(expectedSuccess)) throw new Error(`${provider} cleanup did not delete the exact bounded inventory`)
@@ -620,7 +618,6 @@ exit 92
 				]
 			: [{ name: previewName, id: sharedId, default: false, protected: false }]
 	const duplicate = await probeDatabaseCleanup({
-		name: 'duplicate',
 		records: duplicateRecords,
 		pageTwoRecords:
 			provider === 'neon'
@@ -648,7 +645,7 @@ exit 92
 						protected: false
 					}
 				]
-	const malformed = await probeDatabaseCleanup({ name: 'malformed', records: malformedRecords })
+	const malformed = await probeDatabaseCleanup({ records: malformedRecords })
 	requireRejected({
 		result: malformed,
 		name: `${provider} malformed provider identity`,
@@ -662,7 +659,6 @@ exit 92
 	if (provider === 'neon') {
 		for (const ownership of ['default', 'protected'] as const) {
 			const unsafe = await probeDatabaseCleanup({
-				name: ownership,
 				records: [
 					{
 						name: previewName,
@@ -682,7 +678,6 @@ exit 92
 	}
 
 	const wrongGeneration = await probeDatabaseCleanup({
-		name: 'wrong-generation',
 		records: successRecords,
 		manifestGeneration: 'pull_request_target'
 	})
@@ -693,12 +688,11 @@ exit 92
 	})
 	if (wrongGeneration.deletions.length !== 0) throw new Error(`${provider} wrong manifest generation reached deletion`)
 
-	const missing = await probeDatabaseCleanup({ name: 'missing', records: [] })
+	const missing = await probeDatabaseCleanup({ records: [] })
 	requirePassed(missing, `${provider} missing preview database cleanup`)
 	if (missing.deletions.length !== 0) throw new Error(`${provider} missing inventory reached deletion`)
 
 	const partial = await probeDatabaseCleanup({
-		name: 'partial',
 		records: successRecords,
 		failureId: previewId
 	})
@@ -710,7 +704,6 @@ exit 92
 	if (JSON.stringify(partial.deletions.sort()) !== JSON.stringify(expectedSuccess)) throw new Error(`${provider} partial cleanup did not attempt every bounded candidate`)
 
 	const noManifest = await probeDatabaseCleanup({
-		name: 'no-manifest',
 		records: successRecords,
 		manifestGeneration: 'none'
 	})

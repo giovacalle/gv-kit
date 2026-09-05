@@ -305,7 +305,8 @@ function requireAdvertisedApiOrigin(
 }
 
 function processInventory(command: RunningCommand, deploy: Config['choices']['deploy']) {
-	const output = command.output().replaceAll(/\u001b\[[0-9;]*m/g, '')
+	const ansiEscape = String.fromCharCode(27)
+	const output = command.output().replaceAll(new RegExp(`${ansiEscape}\\[[0-9;]*m`, 'g'), '')
 	const loopbackEndpoint = (port: number) =>
 		new RegExp(`https?://(?:localhost|127\\.0\\.0\\.1):${port}(?:/|\\b)`).test(output)
 	const inventory = {
@@ -779,7 +780,7 @@ async function waitForStructuredTrace(command: RunningCommand, requestId: string
 			.output()
 			.split('\n')
 			.flatMap((line) => {
-				const start = line.indexOf('{\"event\"')
+				const start = line.indexOf('{"event"')
 				if (start < 0) return []
 				try {
 					return [JSON.parse(line.slice(start)) as Record<string, unknown>]

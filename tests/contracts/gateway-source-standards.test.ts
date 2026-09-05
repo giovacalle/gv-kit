@@ -13,6 +13,7 @@ const repositoryRoot = join(import.meta.dir, '..', '..')
 const fixturesDirectory = join(repositoryRoot, 'fixtures')
 const gatewayGeneratorPath = join(repositoryRoot, 'src/generators/gateway.ts')
 const integratedDeployGeneratorPath = join(repositoryRoot, 'src/generators/integrated-deploy.ts')
+const dockerVerifierPath = join(repositoryRoot, 'scripts/verify-gateway-docker.ts')
 const previewWorkflowTestPath = join(repositoryRoot, 'tests/contracts/gateway-preview-workflows.test.ts')
 const expectedGatewayRenderers = [
 	'renderGatewayPackageJson',
@@ -188,6 +189,20 @@ function generatedHonoRootEnvironmentExamples() {
 }
 
 describe('gateway source standards', () => {
+	test('Docker verifier cleans up before propagating verification failures', () => {
+		const source = readFileSync(dockerVerifierPath, 'utf8')
+		const capturedFailure = source.indexOf('verificationError = error')
+		const cleanup = source.indexOf('cleanup = await performCleanup()')
+		const propagatedFailure = source.indexOf('if (verificationFailed) throw verificationError')
+
+		expect(source).not.toMatch(/finally\s*\{[\s\S]*?throw/u)
+		expect(source).toContain("composeCommand: 'down'")
+		expect(source).toContain('return assertCleanup(generated.project, env)')
+		expect(capturedFailure).toBeGreaterThan(-1)
+		expect(cleanup).toBeGreaterThan(capturedFailure)
+		expect(propagatedFailure).toBeGreaterThan(cleanup)
+	})
+
 	test('preview workflow tests do not import filesystem mutation APIs', () => {
 		const source = readFileSync(previewWorkflowTestPath, 'utf8')
 		const sourceFile = ts.createSourceFile(

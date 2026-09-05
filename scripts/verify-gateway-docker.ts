@@ -823,7 +823,8 @@ async function main(): Promise<void> {
 	}
 
 	let evidence: unknown
-	let cleanup: unknown
+	let verificationError: unknown
+	let verificationFailed = false
 	try {
 		await recordCommandEvidence({
 			name: 'install',
@@ -928,7 +929,11 @@ async function main(): Promise<void> {
 			content: `${JSON.stringify(evidence, null, 2)}\n`,
 			roots: [generated.project]
 		})
-	} finally {
+	} catch (error) {
+		verificationFailed = true
+		verificationError = error
+	}
+	const performCleanup = async () => {
 		const runtimeLogsStarted = performance.now()
 		const runtimeLogs = await captureCommandResult({
 			program: 'docker',
@@ -977,8 +982,10 @@ async function main(): Promise<void> {
 			exitCode: down.code
 		})
 		if (down.code !== 0) throw new Error('Docker Compose cleanup failed; see cleanup.log')
-		cleanup = await assertCleanup(generated.project, env)
+		return assertCleanup(generated.project, env)
 	}
+	const cleanup = await performCleanup()
+	if (verificationFailed) throw verificationError
 	console.log(JSON.stringify({ ...((evidence ?? {}) as object), cleanup }, null, 2))
 }
 

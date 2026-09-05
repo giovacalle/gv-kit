@@ -49,7 +49,7 @@
 		"verify:gateway-docker": "bun run scripts/verify-gateway-docker.ts",
 		"snap": "bun run bundle:templates && UPDATE_SNAPSHOTS=1 bun test tests/pipeline.test.ts",
 		"typecheck": "tsc --noEmit",
-		"lint": "eslint src tests",
+		"lint": "eslint src tests scripts",
 		"format": "prettier --write \"src/**/*.{ts,json,md}\" \"tests/**/*.ts\"",
 		"release": "bun run build && changeset publish"
 	},

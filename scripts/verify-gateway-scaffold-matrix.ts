@@ -607,6 +607,10 @@ async function verifyOpenApi({
 		'OpenAPI composition, specific drift rejection, codegen, and typed consumers',
 		async () => {
 			await recordOpenApiCommand({
+				name: 'format-before-openapi-check',
+				pnpmCommand: 'format'
+			})
+			await recordOpenApiCommand({
 				name: 'openapi-check-baseline',
 				pnpmCommand: 'openapi:check',
 				expectedExitCode: 0,
@@ -637,6 +641,41 @@ async function verifyOpenApi({
 				name: 'openapi-compose-restore',
 				pnpmCommand: 'openapi:compose'
 			})
+
+			const fragmentPath = join(project, 'services/users/openapi.json')
+			const originalFragment = await readFile(fragmentPath, 'utf8')
+			const changedFragment = JSON.parse(originalFragment) as {
+				paths?: Record<string, unknown>
+			}
+			if (!changedFragment.paths) throw new Error('users OpenAPI fragment has no paths')
+			changedFragment.paths['/api/v1/ticket-71-drift-probe'] = {
+				get: {
+					operationId: 'usersTicket71DriftProbe',
+					responses: { '204': { description: 'Ticket 71 drift probe' } }
+				}
+			}
+			await writeFile(fragmentPath, `${JSON.stringify(changedFragment, null, 2)}\n`)
+			await recordOpenApiCommand({
+				name: 'openapi-contract-drift-rejection',
+				pnpmCommand: 'openapi:check',
+				expectedExitCode: 1,
+				expectedOutput: driftDiagnostic
+			})
+			await recordOpenApiCommand({
+				name: 'openapi-contract-regeneration',
+				pnpmCommand: 'openapi:compose'
+			})
+			await recordOpenApiCommand({
+				name: 'openapi-contract-regeneration-check',
+				pnpmCommand: 'openapi:check',
+				expectedExitCode: 0,
+				expectedOutput: cleanDiagnostic
+			})
+			await writeFile(fragmentPath, originalFragment)
+			await recordOpenApiCommand({
+				name: 'openapi-contract-cleanup',
+				pnpmCommand: 'openapi:compose'
+			})
 			await recordOpenApiCommand({
 				name: 'openapi-check-final',
 				pnpmCommand: 'openapi:check',
@@ -654,7 +693,13 @@ async function verifyOpenApi({
 			if (JSON.stringify(packageJson.exports) !== JSON.stringify({ '.': './src/index.ts' })) throw new Error('OpenAPI client is not flat')
 			if (!browser.includes("from '@repo/openapi-client'")) throw new Error('browser typed consumer missing')
 			if ( !ssr.includes("from '@repo/openapi-client'") || !ssr.includes('usersGetMe({ baseUrl: url.origin, fetch })') ) throw new Error('SSR request-scoped typed consumer missing')
-			return { firstHash, secondHash, driftRejected: true, clientExports: packageJson.exports }
+			return {
+				firstHash,
+				secondHash,
+				driftRejected: true,
+				contractDriftRejected: true,
+				clientExports: packageJson.exports
+			}
 		}
 	)
 }

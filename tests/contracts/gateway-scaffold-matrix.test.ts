@@ -557,6 +557,9 @@ describe('gateway generated-workspace verification matrix', () => {
 		const cloudflare = readFileSync(join(root, 'scripts/verify-gateway-cloudflare.ts'), 'utf8')
 		expect(matrix).toContain('normal install, lint, typecheck, test, and build gates')
 		expect(matrix).toContain('runStandardCommands({ project, logs, commands })')
+		expect(matrix).toContain("name: 'format-before-openapi-check'")
+		expect(matrix).toContain("name: 'openapi-contract-drift-rejection'")
+		expect(matrix).toContain("name: 'openapi-contract-regeneration-check'")
 		expect(matrix).toContain(
 			'if (config.main === undefined && config.assets === undefined) continue'
 		)

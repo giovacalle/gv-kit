@@ -58,6 +58,17 @@ describe('generateRoot — Astro project shape', () => {
 		expect(Object.keys(pkg['lint-staged']).some((glob) => glob.includes('astro'))).toBe(true)
 	})
 
+	test('formatting preserves the canonical Hono OpenAPI contract only when it exists', () => {
+		const honoIgnore = content(generateRoot(makeCfg()), '.prettierignore')
+		const integratedIgnore = content(
+			generateRoot(makeCfg({ backend: 'inside-frontend', apiClient: 'skip' })),
+			'.prettierignore'
+		)
+
+		expect(honoIgnore.split('\n')).toContain('apps/api/openapi.json')
+		expect(integratedIgnore.split('\n')).not.toContain('apps/api/openapi.json')
+	})
+
 	test('postinstall prepares selected generated packages before workspace checks', () => {
 		const pkg = JSON.parse(
 			content(generateRoot(makeCfg({ i18n: 'paraglide', apiClient: 'hey-api' })), 'package.json')

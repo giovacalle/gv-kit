@@ -29,7 +29,7 @@
 .gitignore  a836122283bb33eb
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
-.prettierignore  00ccef47c63de1e9
+.prettierignore  e6a7d108df20b155
 CLAUDE.md  80eae5bfa9938852
 Dockerfile  6ad0b5db68f05a7d
 LICENSE  508a77d2e7b51d98

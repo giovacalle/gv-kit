@@ -30,7 +30,7 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .opencode/agents/astro-marketer.md  9156f94a4c52c941
-.prettierignore  00ccef47c63de1e9
+.prettierignore  e6a7d108df20b155
 AGENTS.md  681899bb07f57501
 CLAUDE.md  f76fd79f5a6d3b26
 Dockerfile  d760d364ebc09554

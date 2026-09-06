@@ -33,7 +33,7 @@
 .gitignore  6ebdabe6e1116615
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
-.prettierignore  00ccef47c63de1e9
+.prettierignore  e6a7d108df20b155
 AGENTS.md  9d1aeb5533854fb7
 CLAUDE.md  62eec19a47496823
 LICENSE  508a77d2e7b51d98

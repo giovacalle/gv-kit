@@ -24,7 +24,7 @@ export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 		{ path: 'tsconfig.json', content: renderRootTsconfig(cfg) },
 		{ path: '.gitignore', content: renderGitignore(cfg) },
 		{ path: 'prettier.config.js', content: PRETTIER_CONFIG_SHIM },
-		{ path: '.prettierignore', content: PRETTIERIGNORE },
+		{ path: '.prettierignore', content: renderPrettierIgnore(cfg) },
 		{ path: 'eslint.config.js', content: ESLINT_CONFIG_SHIM },
 		{ path: 'README.md', content: renderReadme(cfg) },
 		{ path: '.env.example', content: renderEnvExample(cfg) },
@@ -356,14 +356,16 @@ ${cfg.choices.backend === 'hono' && cfg.choices.db === 'sqlite' && cfg.choices.d
 const PRETTIER_CONFIG_SHIM = `export { default } from '@repo/tooling-prettier'
 `
 
-const PRETTIERIGNORE = `node_modules/
+function renderPrettierIgnore(cfg: GvKitConfig): string {
+	return `node_modules/
 dist/
 .svelte-kit/
 .wrangler/
 .turbo/
 pnpm-lock.yaml
 **/openapi-client/src/*/
-`
+${cfg.choices.backend === 'hono' ? 'apps/api/openapi.json\n' : ''}`
+}
 
 const ESLINT_CONFIG_SHIM = `export { default } from '@repo/tooling-eslint'
 `

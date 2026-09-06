@@ -69,6 +69,7 @@ jobs:
           PUBLIC_AUTH_URL: https://auth.example.test
           PUBLIC_MARKETING_URL: https://marketing.example.test
           PUBLIC_APP_URL: https://app.example.test
+          PUBLIC_TURNSTILE_SITE_KEY: 1x00000000000000000000AA
         run: pnpm run typecheck
       - name: Test scaffolded
         working-directory: /tmp/scaffold

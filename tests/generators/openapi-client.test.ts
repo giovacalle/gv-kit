@@ -30,22 +30,24 @@ describe('generateOpenapiClient', () => {
 		const paths = generateOpenapiClient(makeCfg({})).map((e) => e.path)
 		expect(paths).toContain('packages/openapi-client/package.json')
 		expect(paths).toContain('packages/openapi-client/openapi-ts.config.ts')
-		expect(paths).toContain('packages/openapi-client/src/users/index.ts')
+		expect(paths).toContain('packages/openapi-client/src/generated/index.ts')
+		expect(paths).not.toContain('packages/openapi-client/src/users/index.ts')
 	})
 
 	test('emits nothing when apiClient=skip', () => {
 		expect(generateOpenapiClient(makeCfg({ apiClient: 'skip' }))).toEqual([])
 	})
 
-	test('config targets the users spec + svelte-query plugin and excludes auth', () => {
+	test('config targets only the composed gateway document with one flat output', () => {
 		const config = find(
 			generateOpenapiClient(makeCfg({})),
 			'packages/openapi-client/openapi-ts.config.ts'
 		)!
 		expect(config.content).toContain('@hey-api/openapi-ts')
-		expect(config.content).toContain('apps/api/users/openapi.json')
+		expect(config.content).toContain('apps/api/openapi.json')
+		expect(config.content).not.toContain('services/users/openapi.json')
+		expect(config.content).toContain("path: 'src/generated'")
 		expect(config.content).toContain('@tanstack/svelte-query')
-		expect(config.content).toContain('auth deliberately omitted')
 		expect(config.content).toContain('tsConfigPath')
 	})
 
@@ -54,11 +56,13 @@ describe('generateOpenapiClient', () => {
 			find(generateOpenapiClient(makeCfg({})), 'packages/openapi-client/package.json')!.content
 		) as {
 			name: string
+			exports: Record<string, string>
 			scripts: Record<string, string>
 			dependencies: Record<string, string>
 			devDependencies: Record<string, string>
 		}
 		expect(pkg.name).toBe('@repo/openapi-client')
+		expect(pkg.exports).toEqual({ '.': './src/index.ts' })
 		expect(pkg.scripts.codegen).toBe('openapi-ts')
 		expect(pkg.dependencies['@tanstack/svelte-query']).toBeDefined()
 		expect(pkg.dependencies['@hey-api/client-fetch']).toBeDefined()

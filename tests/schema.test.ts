@@ -61,6 +61,19 @@ describe('GvKitConfig schema', () => {
 		expect(GvKitConfig.safeParse({ configVersion: 2, choices }).success).toBe(false)
 	})
 
+	test('keeps Hono config v2 unchanged without a gateway choice', () => {
+		const result = GvKitConfig.parse(baseV2)
+		expect(result).toEqual(baseV2)
+		expect(result.choices.backend).toBe('hono')
+		expect('gateway' in result.choices).toBe(false)
+		expect(
+			GvKitConfig.safeParse({
+				...baseV2,
+				choices: { ...baseV2.choices, gateway: 'direct' }
+			}).success
+		).toBe(false)
+	})
+
 	test('rejects unknown top-level and choice keys in both versions', () => {
 		expect(GvKitConfig.safeParse({ ...baseV1, surprise: true }).success).toBe(false)
 		expect(

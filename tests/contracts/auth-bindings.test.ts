@@ -1,7 +1,6 @@
-import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-
+import { describe, expect, test } from 'bun:test'
 import { runGenerators } from '../../src/generators/index.js'
 import { GvKitConfig } from '../../src/schema/config.js'
 import { parseJsonc } from '../util/jsonc.js'
@@ -21,48 +20,53 @@ describe('auth-worker bindings', () => {
 		const isCf = cfg.choices.deploy === 'cf-workers'
 
 		if (isCf) {
-			test(`${file} (cf-workers) declares no service bindings and exact required secrets`, () => {
+			test(`${file} (cf-workers) declares exact bindings without a package-local environment`, () => {
 				const entries = runGenerators(cfg)
-				const wrangler = entries.find((e) => e.path === 'apps/api/auth/wrangler.jsonc')
+				const wrangler = entries.find((e) => e.path === 'services/auth/wrangler.jsonc')
 				expect(wrangler).toBeDefined()
 
 				const parsed = parseJsonc<{
 					services?: unknown[]
 					secrets?: { required?: string[] }
+					d1_databases?: unknown[]
+					vars?: Record<string, string>
 				}>(wrangler!.content)
 				expect(parsed.services ?? []).toEqual([])
-				const expected = ['BETTER_AUTH_SECRET']
-				if (cfg.choices.auth.includes('google')) {
-					expected.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
-				}
+				const expected = cfg.choices.auth.length > 0 ? ['BETTER_AUTH_SECRET'] : []
+				if (cfg.choices.auth.length > 0 && cfg.choices.db === 'postgres') expected.push('DATABASE_URL')
+				if (cfg.choices.auth.includes('google')) expected.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 				if (cfg.choices.auth.includes('emailOTP')) {
 					expected.push('TURNSTILE_SECRET_KEY')
 					if (cfg.choices.email === 'resend') expected.push('RESEND_API_KEY', 'FROM_EMAIL')
-					if (cfg.choices.email === 'notifuse') {
-						expected.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
-					}
+					if (cfg.choices.email === 'notifuse') expected.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
 				}
-				expect(parsed.secrets?.required).toEqual(expected)
+				expect(parsed.secrets?.required ?? []).toEqual(expected)
+				const authPackage = JSON.parse(
+					entries.find((e) => e.path === 'services/auth/package.json')!.content
+				) as { scripts: Record<string, string> }
+				if (cfg.choices.auth.length === 0) {
+					expect(parsed.d1_databases).toBeUndefined()
+					expect(parsed.vars).toBeUndefined()
+					expect(authPackage.scripts['deploy:staging']).not.toContain('STAGING_SECRETS_FILE')
+					const staging = entries.find(
+						(e) => e.path === '.github/workflows/deploy-staging.yml'
+					)!.content
+					expect(staging).not.toContain('BETTER_AUTH_SECRET')
+					expect(staging).not.toContain('preview_secrets.outputs.auth_file')
+				} else expect(authPackage.scripts['deploy:staging']).toContain('STAGING_SECRETS_FILE')
 
-				const devVars = entries.find((e) => e.path === 'apps/api/auth/.dev.vars')
-				expect(devVars).toBeDefined()
-				const localNames = devVars!.content
-					.split('\n')
-					.filter((line) => line && !line.startsWith('#'))
-					.map((line) => line.slice(0, line.indexOf('=')))
-				expect(localNames).toEqual(expected)
-				expect(devVars!.content).toContain('local-only')
+				expect(entries.find((e) => e.path === 'services/auth/.dev.vars')).toBeUndefined()
 			})
 		} else {
-			test(`${file} (non-cf) does NOT emit apps/api/auth/wrangler.jsonc`, () => {
+			test(`${file} (non-cf) does NOT emit services/auth/wrangler.jsonc`, () => {
 				const entries = runGenerators(cfg)
-				const wrangler = entries.find((e) => e.path === 'apps/api/auth/wrangler.jsonc')
+				const wrangler = entries.find((e) => e.path === 'services/auth/wrangler.jsonc')
 				expect(wrangler).toBeUndefined()
 			})
 
-			test(`${file} (non-cf) auth package depends on @hono/node-server and reads BETTER_AUTH_SECRET from process.env`, () => {
+			test(`${file} (non-cf) auth package uses only selected-provider credentials`, () => {
 				const entries = runGenerators(cfg)
-				const pkg = entries.find((e) => e.path === 'apps/api/auth/package.json')
+				const pkg = entries.find((e) => e.path === 'services/auth/package.json')
 				expect(pkg).toBeDefined()
 				const parsed = JSON.parse(pkg!.content) as {
 					dependencies: Record<string, string>
@@ -70,12 +74,17 @@ describe('auth-worker bindings', () => {
 				}
 				expect(parsed.dependencies['@hono/node-server']).toBeDefined()
 				expect(parsed.devDependencies.wrangler).toBeUndefined()
-				// libsql swap: `@types/bun` is no longer added when usesSqlite.
 				expect(parsed.devDependencies['@types/bun']).toBeUndefined()
 
-				const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')
-				expect(authTs).toBeDefined()
-				expect(authTs!.content).toContain('process.env.BETTER_AUTH_SECRET')
+				const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')
+				if (cfg.choices.auth.length > 0) {
+					expect(parsed.dependencies['better-auth']).toBeDefined()
+					expect(authTs?.content).toContain('process.env.BETTER_AUTH_SECRET')
+				} else {
+					expect(parsed.dependencies['better-auth']).toBeUndefined()
+					expect(parsed.dependencies['@repo/db']).toBeUndefined()
+					expect(authTs).toBeUndefined()
+				}
 			})
 		}
 	}
@@ -83,29 +92,64 @@ describe('auth-worker bindings', () => {
 
 describe('auth-worker generator (post-rewrite)', () => {
 	for (const { file, cfg } of honoFixtures) {
+		if (cfg.choices.auth.length === 0) {
+			test(`${file} preserves the runtime stub without advertising session capabilities`, () => {
+				const entries = runGenerators(cfg)
+				const app = entries.find((e) => e.path === 'services/auth/src/app.ts')!.content
+				const authReadme = entries.find((e) => e.path === 'services/auth/README.md')!.content
+				const usersReadme = entries.find((e) => e.path === 'services/users/README.md')!.content
+				expect(app).toContain("app.get('/healthz'")
+				expect(app).toContain("return c.json({ error: 'unauthorized' }, 401)")
+				expect(app).not.toContain('/api/auth')
+				expect(entries.some((e) => e.path === 'services/auth/src/auth.ts')).toBe(false)
+				expect(authReadme).toContain('This private service is a placeholder')
+				expect(authReadme).not.toMatch(/session|AUTH_URL|`AUTH`|middleware\/auth/i)
+				expect(usersReadme).not.toMatch(/session|AUTH_URL|`AUTH`|middleware\/auth/i)
+			})
+			continue
+		}
+
 		test(`${file} allows the generated CAPTCHA request header`, () => {
 			const entries = runGenerators(cfg)
-			const app = entries.find((e) => e.path === 'apps/api/auth/src/app.ts')
+			const app = entries.find((e) => e.path === 'services/auth/src/app.ts')
 			expect(app?.content).toContain("'x-captcha-response'")
 		})
 
 		test(`${file} auth.ts uses drizzleAdapter and skips forbidden helpers`, () => {
 			const entries = runGenerators(cfg)
-			const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')
+			const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')
 			expect(authTs).toBeDefined()
 			expect(authTs!.content).toContain('database: drizzleAdapter(')
 			expect(authTs!.content).not.toContain('databaseHooks(')
 			expect(authTs!.content).not.toContain('secondaryStorage:')
 		})
 
+		test(`${file} auth guidance separates Better Auth ownership from shared user reads`, () => {
+			const entries = runGenerators(cfg)
+			const readme = entries.find((e) => e.path === 'services/auth/README.md')!.content
+
+			expect(readme).toContain('Better Auth configuration and secrets stay private to this service')
+			expect(readme).toContain('`packages/backend/` owns reusable data access and use cases')
+			expect(readme).toContain('`authSchema.user`')
+			expect(readme).toContain(
+				'Other services MUST resolve sessions through `requireAuth` from\n`@repo/backend/middleware/auth`.'
+			)
+			expect(readme).toContain(
+				'Transport adapters must not call the binding, URL, or route directly'
+			)
+			expect(readme).not.toContain('Other services MUST call `/internal/session`')
+			expect(readme).not.toContain('sole owner of authentication state and secrets')
+			expect(readme).not.toMatch(/Owns the auth tables|queried only by the auth service/i)
+		})
+
 		if (cfg.choices.auth.includes('emailOTP')) {
 			test(`${file} (emailOTP) wires emailOTP plugin and @repo/mailer`, () => {
 				const entries = runGenerators(cfg)
-				const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')!
+				const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')!
 				expect(authTs.content).toContain('emailOTP({')
 				expect(authTs.content).toContain('sendVerificationOTP')
 
-				const pkg = entries.find((e) => e.path === 'apps/api/auth/package.json')!
+				const pkg = entries.find((e) => e.path === 'services/auth/package.json')!
 				const parsed = JSON.parse(pkg.content) as { dependencies: Record<string, string> }
 				expect(parsed.dependencies['@repo/mailer']).toBeDefined()
 			})
@@ -114,7 +158,7 @@ describe('auth-worker generator (post-rewrite)', () => {
 		if (cfg.choices.auth.includes('google')) {
 			test(`${file} (google) declares env-gated socialProviders`, () => {
 				const entries = runGenerators(cfg)
-				const authTs = entries.find((e) => e.path === 'apps/api/auth/src/auth.ts')!
+				const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')!
 				expect(authTs.content).toContain('socialProviders')
 				expect(authTs.content).toContain('GOOGLE_CLIENT_ID')
 				expect(authTs.content).toContain('GOOGLE_CLIENT_SECRET')

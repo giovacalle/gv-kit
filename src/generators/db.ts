@@ -1,4 +1,5 @@
 import type { FileEntry } from '../lib/files.js'
+import { HONO_WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
 
 /** Generator for `packages/db/`. Driver follows a (db x deploy) matrix. */
@@ -6,22 +7,37 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 	const isSqlite = cfg.choices.db === 'sqlite'
 	const isCf = cfg.choices.deploy === 'cf-workers'
 	const hasAuth = cfg.choices.auth.length > 0
+	const isHono = cfg.choices.backend === 'hono'
 	const project = cfg.choices.name
 
 	const entries: FileEntry[] = [
-		{ path: 'packages/db/package.json', content: renderPackageJson({ project, isSqlite, isCf }) },
+		{
+			path: 'packages/db/package.json',
+			content: renderPackageJson({ project, isSqlite, isCf, isHono })
+		},
 		{ path: 'packages/db/tsconfig.json', content: renderTsconfig({ isCf, isSqlite }) },
-		{ path: 'packages/db/drizzle.config.ts', content: renderDrizzleConfig({ isSqlite, isCf }) },
+		{
+			path: 'packages/db/drizzle.config.ts',
+			content: renderDrizzleConfig({ isSqlite, isCf, isHono })
+		},
 		{ path: 'packages/db/src/client.ts', content: renderClient({ isSqlite, isCf }) },
 		{ path: 'packages/db/src/index.ts', content: renderIndex(hasAuth) },
 		{ path: 'packages/db/src/schema/index.ts', content: renderSchemaIndex(hasAuth) },
 		{ path: 'packages/db/src/schema/sample.ts', content: renderSampleSchema(isSqlite) },
 		{ path: 'packages/db/migrations/.gitkeep', content: '' },
-		{ path: 'packages/db/README.md', content: renderReadme({ isSqlite, isCf, hasAuth }) }
+		{
+			path: 'packages/db/README.md',
+			content: renderReadme({ isSqlite, isCf, hasAuth, isHono })
+		}
 	]
 
-	if (hasAuth)
-		entries.push({ path: 'packages/db/src/schema/auth.ts', content: renderAuthSchema(isSqlite) })
+	if (hasAuth) entries.push({ path: 'packages/db/src/schema/auth.ts', content: renderAuthSchema(isSqlite) })
+	if (isHono && isCf && isSqlite) {
+		entries.push({
+			path: 'packages/db/wrangler.jsonc',
+			content: renderWranglerJsonc(project)
+		})
+	}
 
 	return entries
 }
@@ -29,11 +45,13 @@ export function generateDb(cfg: GvKitConfig): FileEntry[] {
 function renderPackageJson({
 	project,
 	isSqlite,
-	isCf
+	isCf,
+	isHono
 }: {
 	project: string
 	isSqlite: boolean
 	isCf: boolean
+	isHono: boolean
 }): string {
 	const dependencies: Record<string, string> = {
 		'drizzle-orm': '^0.45.0',
@@ -67,7 +85,11 @@ function renderPackageJson({
 			: 'drizzle-kit migrate'
 	}
 	if (isCf && isSqlite) {
-		scripts['db:migrate:local'] = `wrangler d1 migrations apply ${project}-db --local`
+		const migrateLocal = `wrangler d1 migrations apply ${project}-db --local`
+		scripts['db:migrate:local'] = isHono
+			? `${migrateLocal} --persist-to ../../.wrangler/state`
+			: migrateLocal
+		if (isHono) scripts['db:prepare:local'] = `drizzle-kit generate && pnpm db:migrate:local`
 	}
 
 	const pkg = {
@@ -85,6 +107,23 @@ function renderPackageJson({
 		devDependencies
 	}
 	return JSON.stringify(pkg, null, 2) + '\n'
+}
+
+function renderWranglerJsonc(project: string): string {
+	return `{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "${project}-db-migrations",
+	"compatibility_date": "${HONO_WORKERS_COMPAT_DATE}",
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "${project}-db",
+			"database_id": "<run: wrangler d1 create ${project}-db>",
+			"migrations_dir": "migrations"
+		}
+	]
+}
+`
 }
 
 function renderTsconfig({
@@ -114,7 +153,15 @@ function renderTsconfig({
 `
 }
 
-function renderDrizzleConfig({ isSqlite, isCf }: { isSqlite: boolean; isCf: boolean }): string {
+function renderDrizzleConfig({
+	isSqlite,
+	isCf,
+	isHono
+}: {
+	isSqlite: boolean
+	isCf: boolean
+	isHono: boolean
+}): string {
 	if (isSqlite && isCf) {
 		return `import { defineConfig } from 'drizzle-kit'
 
@@ -135,6 +182,9 @@ export default defineConfig({
 `
 	}
 	if (isSqlite) {
+		const databaseUrl = isHono
+			? "process.env.SQLITE_PATH ?? process.env.DATABASE_URL ?? 'file:./local.db'"
+			: "process.env.DATABASE_URL ?? 'file:./local.db'"
 		return `import { defineConfig } from 'drizzle-kit'
 
 export default defineConfig({
@@ -142,7 +192,7 @@ export default defineConfig({
 	out: './migrations',
 	dialect: 'sqlite',
 	dbCredentials: {
-		url: process.env.DATABASE_URL ?? 'file:./local.db'
+		url: ${databaseUrl}
 	},
 	strict: true,
 	verbose: true
@@ -272,7 +322,7 @@ function renderAuthSchema(isSqlite: boolean): string {
 	if (isSqlite) {
 		return `import { integer, sqliteTable, text } from 'drizzle-orm/sqlite-core'
 
-// Owned exclusively by the auth service. NO other service may query these tables.
+// packages/backend may read user records for domain use cases; Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.
 export const user = sqliteTable('user', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull(),
@@ -326,7 +376,7 @@ export const verification = sqliteTable('verification', {
 	}
 	return `import { boolean, pgTable, text, timestamp } from 'drizzle-orm/pg-core'
 
-// Owned exclusively by the auth service. NO other service may query these tables.
+// packages/backend may read user records for domain use cases; Better Auth configuration, secrets, and session/account/verification behavior stay private to services/auth.
 export const user = pgTable('user', {
 	id: text('id').primaryKey(),
 	name: text('name').notNull(),
@@ -382,11 +432,13 @@ export const verification = pgTable('verification', {
 function renderReadme({
 	isSqlite,
 	isCf,
-	hasAuth
+	hasAuth,
+	isHono
 }: {
 	isSqlite: boolean
 	isCf: boolean
 	hasAuth: boolean
+	isHono: boolean
 }): string {
 	const driverLabel =
 		isSqlite && isCf
@@ -470,8 +522,23 @@ Then run \`pnpm db:generate\` and review the diff.
 	}
 ## Boundary
 
-\`@repo/db\` exports schema and a client factory. It does NOT contain auth
-business logic — that lives in the auth service. Other services consume the
-schema they own; the auth tables here are queried only by the auth service.
+${
+	isHono
+		? hasAuth
+			? `\`@repo/db\` exports schema and a client factory; it contains no application
+business logic. Better Auth configuration and secrets stay private to
+\`services/auth/\`. Reusable data access and use cases belong in
+\`packages/backend/\`, including the generated users data access that reads
+\`authSchema.user\` for domain use cases. Service adapters invoke those shared
+modules instead of embedding ad hoc database queries. Session resolution still
+uses the private auth transport.`
+			: `\`@repo/db\` exports schema and a client factory; it contains no application
+business logic. No authentication schema is generated without a selected
+provider. Reusable data access and use cases belong in \`packages/backend/\`,
+and service adapters invoke those modules instead of embedding ad hoc queries.`
+		: `\`@repo/db\` exports schema and a client factory. SvelteKit server handlers
+in \`apps/web/\` consume that public package entry point. Keep application
+business logic outside this package.`
+}
 `
 }

@@ -1,6 +1,6 @@
 {
 	"$schema": "./node_modules/wrangler/config-schema.json",
-	"name": "__PROJECT__-marketing",
+	"name": "__CLOUDFLARE_MARKETING_WORKER__",
 	"compatibility_date": "__COMPAT_DATE__",
 	// Replace <domain> with the project's apex domain.
 	"routes": [{ "pattern": "<domain>", "custom_domain": true }],

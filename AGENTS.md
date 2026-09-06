@@ -55,7 +55,9 @@ Pipeline stages: `collect` → `validate` → `plan` → `confirm` → `execute`
 
 ## Service architecture
 
-`apps/api` is a container of services. Auth is served only by `apps/api/auth`. Other services call it via inline `fetch` (~10 LOC). NO cross-service infra in `packages/backend`. Same rule applies to scaffolded projects — emit a copy of `service-architecture.md` into the generated `.claude/rules/`.
+`packages/backend` is the shared backend application/core layer. It may contain reusable data access, use cases, types, helpers, and middleware. Deployable `services/<service>` packages are transport/runtime adapters and may import the application modules they need from `@repo/backend`.
+
+`apps/api` is the only public Hono API application. The web origin's `/api/*` alias and canonical API origin reach the same gateway. Better Auth stays under `/api/auth/*`; domain routes use `/api/v1/*`. Private workers live under `services/<service>`; auth is served only by `services/auth`. The gateway handles ingress, routing, operational middleware, OpenAPI delivery, and transparent forwarding. It does not import application use cases or orchestrate business workflows. The gateway composes service-defined OpenAPI fragments into `apps/api/openapi.json`, and `packages/openapi-client` exposes one flat client for that public contract. Browser traffic stays same-origin; web SSR uses only the `GATEWAY` Service Binding on Cloudflare. Private services resolve sessions through the deploy-aware `@repo/backend/middleware/auth` transport and explicit private bindings such as `AUTH`. Never import a service app into the gateway or route internal calls back through it. Keep generated `.ai/rules/` aligned with this topology.
 
 ## Testing
 

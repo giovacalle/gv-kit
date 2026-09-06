@@ -1,7 +1,25 @@
+import { cloudflareProductionWorkerName } from '../../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../../lib/files.js'
+import { HONO_WORKERS_COMPAT_DATE } from '../../lib/workers.js'
 import type { GvKitConfig } from '../../schema/config.js'
+import {
+	CLOUDFLARE_TYPEGEN_SCRIPT,
+	CLOUDFLARE_TYPES_BOOTSTRAP_FILE,
+	renderCloudflareBootstrapTypes
+} from '../cloudflare-worker-types.js'
+import {
+	AUTH_SERVICE,
+	honoPackageIdentity,
+	honoServiceName,
+	honoServicePath,
+	USERS_SERVICE
+} from '../hono-topology.js'
 
-const COMPATIBILITY_DATE = '2026-07-20'
+const PUBLIC_AUTH_PREFIXES = AUTH_SERVICE.publicPrefixes
+
+function publicAuthRouteList(): string {
+	return PUBLIC_AUTH_PREFIXES.map((prefix) => `\`${prefix}/*\``).join(', ')
+}
 
 type Runtime = 'cf-workers' | 'node'
 type AuthChoice = GvKitConfig['choices']['auth'][number]
@@ -16,89 +34,123 @@ export function generateAuthService(cfg: GvKitConfig): FileEntry[] {
 	const usesSqlite = cfg.choices.db === 'sqlite'
 	const auth = cfg.choices.auth
 	const email = cfg.choices.email
+	const hasAuth = auth.length > 0
 	const wantsGoogle = auth.includes('google')
 	const wantsEmailOTP = auth.includes('emailOTP')
 	const runtime = deriveRuntime(cfg.choices.deploy)
 
-	// `wrangler types` owns `worker-configuration.d.ts` and refuses to overwrite
-	// non-wrangler files with that name; our own declaration is at `env.d.ts`.
-	const envDeclPath = 'apps/api/auth/env.d.ts'
-
 	const entries: FileEntry[] = [
 		{
-			path: 'apps/api/auth/package.json',
-			content: pkgJson({ project, runtime, auth })
+			path: honoServicePath(AUTH_SERVICE, 'package.json'),
+			content: pkgJson({ project, runtime, auth, usesSqlite, hasAuth })
 		},
 		{
-			path: 'apps/api/auth/tsconfig.json',
+			path: honoServicePath(AUTH_SERVICE, 'tsconfig.json'),
 			content: tsconfig({ runtime, usesSqlite })
 		},
 		{
-			path: envDeclPath,
-			content: envDts({ runtime, usesSqlite, wantsGoogle, auth, email })
+			path: honoServicePath(AUTH_SERVICE, 'src/openapi.ts'),
+			content: openapiTs(project, hasAuth)
 		},
 		{
-			path: 'apps/api/auth/src/lib/utils.ts',
-			content: utilsTs({ wantsEmailOTP })
+			path: honoServicePath(AUTH_SERVICE, 'src/app.ts'),
+			content: appTs(runtime, hasAuth)
 		},
 		{
-			path: 'apps/api/auth/src/auth.ts',
-			content: authTs({ runtime, usesSqlite, wantsGoogle, auth, email })
-		},
-		{
-			path: 'apps/api/auth/src/openapi.ts',
-			content: openapiTs(project)
-		},
-		{
-			path: 'apps/api/auth/src/app.ts',
-			content: appTs(runtime)
-		},
-		{
-			path: 'apps/api/auth/src/index.ts',
+			path: honoServicePath(AUTH_SERVICE, 'src/index.ts'),
 			content: indexTs(runtime)
 		},
 		{
-			path: 'apps/api/auth/README.md',
-			content: readme({ project, runtime, wantsGoogle, wantsEmailOTP, email })
+			path: honoServicePath(AUTH_SERVICE, 'README.md'),
+			content: readme({ project, runtime, wantsGoogle, wantsEmailOTP, email, hasAuth })
 		}
 	]
 
-	if (runtime === 'cf-workers') {
-		entries.push({
-			path: 'apps/api/auth/wrangler.jsonc',
-			content: wranglerJsonc({ project, usesSqlite, wantsGoogle, wantsEmailOTP, email })
-		})
+	if (hasAuth) {
+		entries.push(
+			{
+				path: honoServicePath(AUTH_SERVICE, 'src/lib/utils.ts'),
+				content: utilsTs({ wantsEmailOTP })
+			},
+			{
+				path: honoServicePath(AUTH_SERVICE, 'src/auth.ts'),
+				content: authTs({ runtime, usesSqlite, wantsGoogle, auth, email })
+			}
+		)
 	}
 
 	if (runtime === 'cf-workers') {
-		entries.push({
-			path: 'apps/api/auth/.dev.vars',
-			content: devVars({ wantsGoogle, wantsEmailOTP, email })
+		const webHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
+		const wrangler = wranglerJsonc({
+			project,
+			usesSqlite,
+			wantsGoogle,
+			wantsEmailOTP,
+			email,
+			webHost,
+			hasAuth
 		})
+		entries.push(
+			{
+				path: honoServicePath(AUTH_SERVICE, 'wrangler.jsonc'),
+				content: wrangler
+			},
+			{
+				path: honoServicePath(AUTH_SERVICE, CLOUDFLARE_TYPES_BOOTSTRAP_FILE),
+				content: renderCloudflareBootstrapTypes(wrangler)
+			}
+		)
+	} else {
+		entries.push(
+			{
+				path: honoServicePath(AUTH_SERVICE, 'env.d.ts'),
+				content: envDts({ usesSqlite, wantsGoogle, auth, email, hasAuth })
+			},
+			{
+				path: honoServicePath(AUTH_SERVICE, 'tsup.config.ts'),
+				content: tsupConfig(usesSqlite && hasAuth)
+			}
+		)
 	}
 
 	return entries
 }
 
+function tsupConfig(usesSqlite: boolean): string {
+	return `import { defineConfig } from 'tsup'
+
+export default defineConfig({
+	noExternal: [/^@repo\\/(?!mailer$)/],
+	external: ['@repo/mailer'${usesSqlite ? ", '@libsql/client'" : ''}]
+})
+`
+}
+
 function pkgJson({
 	project,
 	runtime,
-	auth
+	auth,
+	usesSqlite,
+	hasAuth
 }: {
 	project: string
 	runtime: Runtime
 	auth: AuthChoice[]
+	usesSqlite: boolean
+	hasAuth: boolean
 }): string {
 	const dependencies: Record<string, string> = {
 		'@hono/zod-openapi': '^1.0.0',
 		'@repo/backend': 'workspace:*',
-		'@repo/db': 'workspace:*',
-		'better-auth': '^1.6.0',
+		...(hasAuth
+			? { '@repo/db': 'workspace:*', 'better-auth': '^1.6.0' }
+			: {}),
 		hono: '^4.6.0',
 		zod: '^4.3.0'
 	}
 
 	if (auth.includes('emailOTP')) dependencies['@repo/mailer'] = 'workspace:*'
+	if (runtime === 'node' && usesSqlite && hasAuth) dependencies['@libsql/client'] = '^0.14.0'
 
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
@@ -110,25 +162,29 @@ function pkgJson({
 		lint: 'eslint .'
 	}
 
+	const prepareMailer = auth.includes('emailOTP')
+		? '(test -f ../../packages/mailer/dist/index.js || pnpm --filter @repo/mailer build) && '
+		: ''
+
 	if (runtime === 'cf-workers') {
-		devDependencies.wrangler = '^4.0.0'
-		devDependencies['@cloudflare/workers-types'] = '^4.20251101.0'
+		devDependencies.wrangler = '^4.125.0'
+		devDependencies['@cloudflare/workers-types'] = '^5.20260825.1'
 		devDependencies['@types/node'] = '^24.0.0'
-		// `cf-typegen` must run before tsc/wrangler so `Env` matches wrangler.jsonc.
-		scripts['cf-typegen'] = 'wrangler types'
-		scripts.dev = 'pnpm cf-typegen && wrangler dev'
-		scripts.build = 'pnpm cf-typegen && wrangler deploy --dry-run --outdir=dist'
+		scripts['cf-typegen'] = CLOUDFLARE_TYPEGEN_SCRIPT
+		scripts.dev = `${prepareMailer}pnpm cf-typegen && wrangler dev --persist-to ../../.wrangler/state`
+		scripts.build = 'wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
-		scripts['deploy:staging'] =
-			`pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --config "\${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --name ${project}-auth-$STAGING_ALIAS`
-		scripts.typecheck = 'pnpm cf-typegen && tsc --noEmit'
+		scripts['deploy:staging'] = hasAuth
+			? 'pnpm cf-typegen && test -n "$STAGING_ALIAS" && test -n "$STAGING_SECRETS_FILE" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --secrets-file "$STAGING_SECRETS_FILE"'
+			: 'pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}"'
+		scripts.typecheck = 'tsc --noEmit'
 	} else {
 		dependencies['@hono/node-server'] = '^1.13.0'
 		devDependencies.tsup = '^8.3.0'
 		devDependencies.tsx = '^4.19.0'
 		devDependencies['@types/node'] = '^24.0.0'
-		scripts.dev = 'tsx watch src/index.ts'
+		scripts.dev = `${prepareMailer}tsx watch src/index.ts`
 		scripts.build = 'tsup src/index.ts --format esm --target=node24 --out-dir dist'
 		scripts.start = 'node dist/index.js'
 	}
@@ -136,7 +192,7 @@ function pkgJson({
 	return (
 		JSON.stringify(
 			{
-				name: `@${project}/auth-worker`,
+				name: honoPackageIdentity(project, AUTH_SERVICE),
 				version: '0.0.0',
 				private: true,
 				type: 'module',
@@ -194,15 +250,19 @@ function wranglerJsonc({
 	usesSqlite,
 	wantsGoogle,
 	wantsEmailOTP,
-	email
+	email,
+	webHost,
+	hasAuth
 }: {
 	project: string
 	usesSqlite: boolean
 	wantsGoogle: boolean
 	wantsEmailOTP: boolean
 	email: EmailChoice
+	webHost: string
+	hasAuth: boolean
 }): string {
-	const dbBlock = usesSqlite
+	const dbBlock = hasAuth && usesSqlite
 		? `,
 	"d1_databases": [
 		{
@@ -211,87 +271,71 @@ function wranglerJsonc({
 			"database_id": "<run: wrangler d1 create ${project}-db>"
 		}
 	]`
-		: `,
-	// Set DATABASE_URL via \`wrangler secret put DATABASE_URL\`. For production prefer:
-	// "hyperdrive": [{ "binding": "HYPERDRIVE", "id": "<hyperdrive id>" }]
-	"vars": {}`
+		: ''
 
-	const requiredSecrets = ['BETTER_AUTH_SECRET']
+	const requiredSecrets = hasAuth ? ['BETTER_AUTH_SECRET'] : []
+	if (hasAuth && !usesSqlite) requiredSecrets.push('DATABASE_URL')
 	if (wantsGoogle) requiredSecrets.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 	if (wantsEmailOTP) {
 		requiredSecrets.push('TURNSTILE_SECRET_KEY')
 		if (email === 'resend') requiredSecrets.push('RESEND_API_KEY', 'FROM_EMAIL')
-		if (email === 'notifuse')
-			requiredSecrets.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
+		if (email === 'notifuse') requiredSecrets.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
 	}
 
 	return `{
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "${project}-auth",
+	"name": "${cloudflareProductionWorkerName({
+		project,
+		service: AUTH_SERVICE.transport.cfWorkers.serviceNameSuffix
+	})}",
 	"main": "src/index.ts",
-	"compatibility_date": "${COMPATIBILITY_DATE}",
+	"tsconfig": "tsconfig.json",
+	"compatibility_date": "${HONO_WORKERS_COMPAT_DATE}",
 	"compatibility_flags": ["nodejs_compat"],
 	"workers_dev": false,
 	"preview_urls": false,
-	"services": [],
-	"secrets": { "required": ${JSON.stringify(requiredSecrets)} },
+	"services": [],${
+		hasAuth
+			? `
+	"vars": {
+		"BETTER_AUTH_ALLOWED_HOSTS": "${webHost},api.<domain>",
+		"AUTH_CORS_ORIGINS": "https://${webHost}"
+	},
+	"secrets": { "required": ${JSON.stringify(requiredSecrets)} },`
+			: ''
+	}
 	"dev": {
-		"ip": "127.0.0.1",
-		"port": 8787,
-		"host": "localhost",
-		"inspector_port": 9229
+		"ip": "${AUTH_SERVICE.development.ip}",
+		"port": ${AUTH_SERVICE.development.port},
+		"host": "${AUTH_SERVICE.development.hostname}",
+		"inspector_port": ${AUTH_SERVICE.development.inspectorPort}
 	},
 	"observability": { "enabled": true }${dbBlock}
 }
 `
 }
 
-function devVars({
-	wantsGoogle,
-	wantsEmailOTP,
-	email
-}: {
-	wantsGoogle: boolean
-	wantsEmailOTP: boolean
-	email: EmailChoice
-}): string {
-	const lines = [
-		'# Local-only placeholders. Wrangler reads this ignored file for `wrangler dev`.',
-		'# Install real values with `wrangler secret put <NAME>` before any deployment.',
-		'BETTER_AUTH_SECRET=local-only-better-auth-secret-at-least-32-characters'
-	]
-	if (wantsGoogle) {
-		lines.push('GOOGLE_CLIENT_ID=local-only-google-client-id')
-		lines.push('GOOGLE_CLIENT_SECRET=local-only-google-client-secret')
-	}
-	if (wantsEmailOTP) {
-		lines.push('TURNSTILE_SECRET_KEY=1x0000000000000000000000000000000AA')
-		if (email === 'resend') {
-			lines.push('RESEND_API_KEY=local-only-resend-api-key')
-			lines.push('FROM_EMAIL=local@example.test')
-		}
-		if (email === 'notifuse') {
-			lines.push('NOTIFUSE_API_KEY=local-only-notifuse-api-key')
-			lines.push('NOTIFUSE_WORKSPACE_ID=local-only-notifuse-workspace')
-			lines.push('NOTIFUSE_BASE_URL=http://127.0.0.1:3000')
-		}
-	}
-	return `${lines.join('\n')}\n`
-}
-
 function envDts({
-	runtime,
 	usesSqlite,
 	wantsGoogle,
 	auth,
-	email
+	email,
+	hasAuth
 }: {
-	runtime: Runtime
 	usesSqlite: boolean
 	wantsGoogle: boolean
 	auth: AuthChoice[]
 	email: EmailChoice
+	hasAuth: boolean
 }): string {
+	if (!hasAuth) {
+		return `declare global {
+	type Env = Record<string, never>
+}
+export {}
+`
+	}
+
 	const wantsEmailOTP = auth.includes('emailOTP')
 
 	const oauthLines = wantsGoogle
@@ -312,34 +356,14 @@ function envDts({
 
 	const turnstileLine = wantsEmailOTP ? '\t\tTURNSTILE_SECRET_KEY: string\n' : ''
 
-	if (runtime === 'cf-workers') {
-		const dbBinding = usesSqlite
-			? '\t\tDB: D1Database'
-			: '\t\tDATABASE_URL: string\n\t\tHYPERDRIVE?: Hyperdrive'
-
-		return `// Merges with wrangler-generated worker-configuration.d.ts via interface declaration merging.
-// Other services MUST NOT read these secrets — they call /internal/session via a CF service binding.
-declare global {
-	interface Env {
-		BETTER_AUTH_SECRET: string
-		BETTER_AUTH_URL?: string
-		BETTER_AUTH_TRUSTED_ORIGINS?: string
-${oauthLines}${emailLines}${turnstileLine}${dbBinding}
-	}
-}
-export {}
-`
-	}
-
 	const nodeDb = usesSqlite ? '\t\tSQLITE_PATH?: string' : '\t\tDATABASE_URL: string'
 
-	return `// Ambient \`Env\` for OpenAPIHono<{ Bindings: Env }>; values are read from \`process.env\` at runtime.
-// Other services MUST NOT read these secrets — they call /internal/session via \`AUTH_URL\`.
+	return `// OpenAPIHono needs ambient Env types even though Node reads these values from process.env.
 declare global {
 	interface Env {
 		BETTER_AUTH_SECRET: string
-		BETTER_AUTH_URL?: string
-		BETTER_AUTH_TRUSTED_ORIGINS?: string
+		BETTER_AUTH_ALLOWED_HOSTS?: string
+		AUTH_CORS_ORIGINS?: string
 ${oauthLines}${emailLines}${turnstileLine}${nodeDb}
 	}
 }
@@ -381,21 +405,23 @@ function authTs({
 	}
 	imports.push(
 		wantsEmailOTP
-			? `import { parseTrustedOrigins, pickLocale } from './lib/utils.js'`
-			: `import { parseTrustedOrigins } from './lib/utils.js'`
+			? `import { parseAllowedHosts, pickLocale } from './lib/utils.js'`
+			: `import { parseAllowedHosts } from './lib/utils.js'`
 	)
 
 	if (runtime === 'cf-workers') {
-		const dbExpr = usesSqlite ? '{ DB: env.DB }' : '{ HYPERDRIVE: env.HYPERDRIVE }'
+		const dbExpr = usesSqlite ? '{ DB: env.DB }' : '{ DATABASE_URL: env.DATABASE_URL }'
 
 		const mailerLine = wantsEmailOTP
 			? usesNotifuse
-				? `\tconst mailer = createMailer({
-\t\tapiKey: env.NOTIFUSE_API_KEY,
-\t\tworkspaceId: env.NOTIFUSE_WORKSPACE_ID,
-\t\tbaseUrl: env.NOTIFUSE_BASE_URL
-\t})\n\n`
-				: `\tconst mailer = createMailer(env.RESEND_API_KEY)\n\n`
+				? `\tconst mailer = env.NOTIFUSE_API_KEY
+\t\t? createMailer({
+\t\t\tapiKey: env.NOTIFUSE_API_KEY,
+\t\t\tworkspaceId: env.NOTIFUSE_WORKSPACE_ID,
+\t\t\tbaseUrl: env.NOTIFUSE_BASE_URL
+\t\t})
+\t\t: null\n\n`
+				: `\tconst mailer = env.RESEND_API_KEY ? createMailer(env.RESEND_API_KEY) : null\n\n`
 			: ''
 
 		const otpPlugin = wantsEmailOTP
@@ -404,7 +430,7 @@ function authTs({
 \t\t\totpLength: 6,
 \t\t\texpiresIn: 600,
 \t\t\tasync sendVerificationOTP({ email, otp }, ctx) {
-\t\t\t\tif (!env.NOTIFUSE_API_KEY) {
+\t\t\t\tif (!mailer) {
 \t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
 \t\t\t\t\treturn
 \t\t\t\t}
@@ -419,7 +445,7 @@ function authTs({
 \t\t\totpLength: 6,
 \t\t\texpiresIn: 600,
 \t\t\tasync sendVerificationOTP({ email, otp }, ctx) {
-\t\t\t\tif (!env.RESEND_API_KEY) {
+\t\t\t\tif (!mailer) {
 \t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
 \t\t\t\t\treturn
 \t\t\t\t}
@@ -468,12 +494,13 @@ export function getAuth(env: Env) {
 \tconst db = createDb(${dbExpr})
 ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 \t\tsecret: env.BETTER_AUTH_SECRET,
-\t\t...(env.BETTER_AUTH_URL ? { baseURL: env.BETTER_AUTH_URL } : {}),
-\t\ttrustedOrigins: parseTrustedOrigins(env.BETTER_AUTH_TRUSTED_ORIGINS),
+\t\tbaseURL: { allowedHosts: parseAllowedHosts(env.BETTER_AUTH_ALLOWED_HOSTS) },
 \t\tdatabase: drizzleAdapter(db, { provider: '${provider}' }),
 \t\tplugins,${socialSpread}
 \t\tadvanced: {
+\t\t\ttrustedProxyHeaders: true,
 \t\t\tipAddress: { ipAddressHeaders: ['${ipHeader}'] },
+\t\t\tcrossSubDomainCookies: { enabled: false },
 \t\t\tdefaultCookieAttributes: { secure: true, sameSite: 'lax' }
 \t\t}
 \t})
@@ -487,12 +514,16 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 
 	const mailerLine = wantsEmailOTP
 		? usesNotifuse
-			? `const mailer = createMailer({
-\tapiKey: process.env.NOTIFUSE_API_KEY ?? '',
-\tworkspaceId: process.env.NOTIFUSE_WORKSPACE_ID ?? '',
-\tbaseUrl: process.env.NOTIFUSE_BASE_URL ?? ''
-})\n\n`
-			: `const mailer = createMailer(process.env.RESEND_API_KEY ?? '')\n\n`
+			? `const mailer = process.env.NOTIFUSE_API_KEY
+\t? createMailer({
+\t\tapiKey: process.env.NOTIFUSE_API_KEY,
+\t\tworkspaceId: process.env.NOTIFUSE_WORKSPACE_ID ?? '',
+\t\tbaseUrl: process.env.NOTIFUSE_BASE_URL ?? ''
+\t})
+\t: null\n\n`
+			: `const mailer = process.env.RESEND_API_KEY
+\t? createMailer(process.env.RESEND_API_KEY)
+\t: null\n\n`
 		: ''
 
 	const otpPlugin = wantsEmailOTP
@@ -501,7 +532,7 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 \t\totpLength: 6,
 \t\texpiresIn: 600,
 \t\tasync sendVerificationOTP({ email, otp }, ctx) {
-\t\t\tif (!process.env.NOTIFUSE_API_KEY) {
+\t\t\tif (!mailer) {
 \t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
 \t\t\t\treturn
 \t\t\t}
@@ -516,7 +547,7 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 \t\totpLength: 6,
 \t\texpiresIn: 600,
 \t\tasync sendVerificationOTP({ email, otp }, ctx) {
-\t\t\tif (!process.env.RESEND_API_KEY) {
+\t\t\tif (!mailer) {
 \t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
 \t\t\t\treturn
 \t\t\t}
@@ -565,12 +596,13 @@ const db = ${dbConstruction}
 
 ${mailerLine}${pluginsBlock}${googleBlock}export const auth = betterAuth({
 \tsecret: process.env.BETTER_AUTH_SECRET ?? '',
-\t...(process.env.BETTER_AUTH_URL ? { baseURL: process.env.BETTER_AUTH_URL } : {}),
-\ttrustedOrigins: parseTrustedOrigins(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
+\tbaseURL: { allowedHosts: parseAllowedHosts(process.env.BETTER_AUTH_ALLOWED_HOSTS) },
 \tdatabase: drizzleAdapter(db, { provider: '${provider}' }),
 \tplugins,${socialSpread}
 \tadvanced: {
+\t\ttrustedProxyHeaders: true,
 \t\tipAddress: { ipAddressHeaders: ['${ipHeader}'] },
+\t\tcrossSubDomainCookies: { enabled: false },
 \t\tdefaultCookieAttributes: { secure: process.env.NODE_ENV === 'production', sameSite: 'lax' }
 \t}
 })
@@ -581,11 +613,10 @@ export function getAuth(_env?: unknown) {
 `
 }
 
-function openapiTs(project: string): string {
-	return `import { OpenAPIHono, createRoute, z } from '@hono/zod-openapi'
-
-// Documents ONLY /internal/session. The public /api/auth/* surface is intentionally
-// excluded — sibling services must use the binding/HTTP boundary, not a typed client.
+function openapiTs(project: string, hasAuth: boolean): string {
+	const sessionSchema = hasAuth
+		? `
+// Only /internal/session is typed because sibling services never call the public Better Auth routes.
 const SessionResponse = z
 	.object({
 		userId: z.string(),
@@ -593,16 +624,23 @@ const SessionResponse = z
 		expiresAt: z.string()
 	})
 	.openapi('Session')
+`
+		: ''
+	const resolvedSession = hasAuth
+		? `
+		200: {
+			description: 'Resolved session for the caller',
+			content: { 'application/json': { schema: SessionResponse } }
+		},`
+		: ''
 
+	return `import { OpenAPIHono, createRoute${hasAuth ? ', z' : ''} } from '@hono/zod-openapi'
+${sessionSchema}
 export const sessionRoute = createRoute({
 	method: 'get',
 	path: '/internal/session',
 	tags: ['internal'],
-	responses: {
-		200: {
-			description: 'Resolved session for the caller',
-			content: { 'application/json': { schema: SessionResponse } }
-		},
+	responses: {${resolvedSession}
 		401: { description: 'No active session' }
 	}
 })
@@ -610,30 +648,38 @@ export const sessionRoute = createRoute({
 export function mountOpenApi(app: OpenAPIHono<{ Bindings: Env }>): void {
 	app.doc('/openapi.json', {
 		openapi: '3.0.0',
-		info: { title: '${project}-auth (internal)', version: '0.0.0' }
+		info: { title: '${honoServiceName(project, AUTH_SERVICE)} (internal)', version: '0.0.0' }
 	})
 }
 `
 }
 
-function appTs(runtime: Runtime): string {
-	if (runtime === 'cf-workers') {
+function appTs(runtime: Runtime, hasAuth: boolean): string {
+	if (!hasAuth) {
 		return `import { OpenAPIHono } from '@hono/zod-openapi'
-import { cors } from 'hono/cors'
+import { logger } from '@repo/backend/middleware'
 
-import { getAuth } from './auth.js'
-import { parseTrustedOrigins } from './lib/utils.js'
 import { mountOpenApi, sessionRoute } from './openapi.js'
 
 const app = new OpenAPIHono<{ Bindings: Env }>()
 
+app.use('*', logger('auth'))
 app.get('/healthz', (c) => c.text('ok'))
 
-// CORS shares the BETTER_AUTH_TRUSTED_ORIGINS allow-list with better-auth's
-// own CSRF check — one env var, two consistent gates.
-app.use('/api/auth/*', async (c, next) => {
+app.openapi(sessionRoute, (c) => {
+	return c.json({ error: 'unauthorized' }, 401)
+})
+
+mountOpenApi(app)
+
+export default app
+`
+	}
+
+	const cloudflarePublicRoutes = PUBLIC_AUTH_PREFIXES.map(
+		(prefix) => `app.use('${prefix}/*', async (c, next) => {
 	const mw = cors({
-		origin: parseTrustedOrigins(c.env.BETTER_AUTH_TRUSTED_ORIGINS),
+		origin: (origin) => resolveCorsOrigin(origin, c.env.AUTH_CORS_ORIGINS),
 		credentials: true,
 		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
 		maxAge: 600
@@ -641,10 +687,40 @@ app.use('/api/auth/*', async (c, next) => {
 	return mw(c, next)
 })
 
-app.all('/api/auth/*', async (c) => {
+app.all('${prefix}/*', async (c) => {
 	const auth = getAuth(c.env)
 	return auth.handler(c.req.raw)
-})
+})`
+	).join('\n\n')
+	const nodePublicRoutes = PUBLIC_AUTH_PREFIXES.map(
+		(prefix) => `app.use(
+	'${prefix}/*',
+	cors({
+		origin: (origin) => resolveCorsOrigin(origin, process.env.AUTH_CORS_ORIGINS),
+		credentials: true,
+		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
+		maxAge: 600
+	})
+)
+
+app.all('${prefix}/*', async (c) => auth.handler(c.req.raw))`
+	).join('\n\n')
+
+	if (runtime === 'cf-workers') {
+		return `import { OpenAPIHono } from '@hono/zod-openapi'
+import { logger } from '@repo/backend/middleware'
+import { cors } from 'hono/cors'
+
+import { getAuth } from './auth.js'
+import { resolveCorsOrigin } from './lib/utils.js'
+import { mountOpenApi, sessionRoute } from './openapi.js'
+
+const app = new OpenAPIHono<{ Bindings: Env }>()
+
+app.use('*', logger('auth'))
+app.get('/healthz', (c) => c.text('ok'))
+
+${cloudflarePublicRoutes}
 
 app.openapi(sessionRoute, async (c) => {
 	const auth = getAuth(c.env)
@@ -667,29 +743,19 @@ export default app
 	}
 
 	return `import { OpenAPIHono } from '@hono/zod-openapi'
+import { logger } from '@repo/backend/middleware'
 import { cors } from 'hono/cors'
 
 import { auth } from './auth.js'
-import { parseTrustedOrigins } from './lib/utils.js'
+import { resolveCorsOrigin } from './lib/utils.js'
 import { mountOpenApi, sessionRoute } from './openapi.js'
 
 const app = new OpenAPIHono<{ Bindings: Env }>()
 
+app.use('*', logger('auth'))
 app.get('/healthz', (c) => c.text('ok'))
 
-// CORS shares the BETTER_AUTH_TRUSTED_ORIGINS allow-list with better-auth's
-// own CSRF check — one env var, two consistent gates.
-app.use(
-	'/api/auth/*',
-	cors({
-		origin: parseTrustedOrigins(process.env.BETTER_AUTH_TRUSTED_ORIGINS),
-		credentials: true,
-		allowHeaders: ['content-type', 'x-locale', 'x-captcha-response'],
-		maxAge: 600
-	})
-)
-
-app.all('/api/auth/*', async (c) => auth.handler(c.req.raw))
+${nodePublicRoutes}
 
 app.openapi(sessionRoute, async (c) => {
 	const session = await auth.api.getSession({ headers: c.req.raw.headers })
@@ -714,8 +780,7 @@ function utilsTs({ wantsEmailOTP }: { wantsEmailOTP: boolean }): string {
 	const localeBlock = wantsEmailOTP
 		? `
 
-// Match a BCP-47-ish primary tag (2–3 letters) at the start of the value,
-// stopping before any subtag, region, or quality qualifier — ignore the rest.
+// Parse only the primary BCP-47 tag; ignore subtags, regions, and quality weights.
 export const LOCALE_TAG = /^\\s*([a-z]{2,3})(?![a-z])/i
 
 export function pickLocale(headers: Headers | undefined): string {
@@ -725,9 +790,28 @@ export function pickLocale(headers: Headers | undefined): string {
 }`
 		: ''
 
-	return `export function parseTrustedOrigins(raw: string | undefined): string[] {
-\tif (!raw) return []
-\treturn raw.split(',').map((s) => s.trim()).filter(Boolean)
+	return `const LOCAL_ALLOWED_HOSTS = [
+\t'localhost:3000',
+\t'localhost:5173',
+\t'api.localhost:8786'
+]
+
+const LOCAL_CORS_ORIGINS = [
+\t'http://localhost:3000',
+\t'http://localhost:5173',
+\t'http://api.localhost:8786'
+]
+
+function parseList(raw: string | undefined, fallback: string[]): string[] {
+\treturn (raw ? raw.split(',') : fallback).map((value) => value.trim()).filter(Boolean)
+}
+
+export function parseAllowedHosts(raw: string | undefined): string[] {
+\treturn parseList(raw, LOCAL_ALLOWED_HOSTS)
+}
+
+export function resolveCorsOrigin(origin: string, raw: string | undefined): string {
+\treturn parseList(raw, LOCAL_CORS_ORIGINS).includes(origin) ? origin : ''
 }${localeBlock}
 `
 }
@@ -746,9 +830,10 @@ export default {
 
 import app from './app.js'
 
-const port = Number(process.env.PORT ?? 8787)
-serve({ fetch: app.fetch, port })
-console.log(\`auth listening on http://127.0.0.1:\${port}\`)
+const hostname = process.env.HOST ?? '${AUTH_SERVICE.development.ip}'
+const port = Number(process.env.AUTH_PORT ?? process.env.PORT ?? ${AUTH_SERVICE.development.port})
+serve({ fetch: app.fetch, port, hostname })
+console.log(\`${AUTH_SERVICE.identity} listening on http://\${hostname}:\${port}\`)
 `
 }
 
@@ -757,14 +842,31 @@ function readme({
 	runtime,
 	wantsGoogle,
 	wantsEmailOTP,
-	email
+	email,
+	hasAuth
 }: {
 	project: string
 	runtime: Runtime
 	wantsGoogle: boolean
 	wantsEmailOTP: boolean
 	email: EmailChoice
+	hasAuth: boolean
 }): string {
+	if (!hasAuth) {
+		return `# ${honoServiceName(project, AUTH_SERVICE)}
+
+This private service is a placeholder generated while authentication is disabled.
+It is reachable externally only through the gateway, where no public auth methods are mounted.
+
+## Boundary
+
+- No public authentication methods are mounted under ${publicAuthRouteList()}.
+- The service owns no authentication credentials or database access.
+
+Do not add public ingress or authentication behavior to this service. Select an authentication provider before adding login behavior.
+`
+	}
+
 	const oauth = wantsGoogle
 		? runtime === 'cf-workers'
 			? `
@@ -886,24 +988,18 @@ default.`
 
 ## Trusted origins
 
-By default better-auth only trusts \`BETTER_AUTH_URL\`. To allow additional
-origins (e.g. local frontend, preview deploys) set a comma-separated list:
-
-\`\`\`bash
-wrangler secret put BETTER_AUTH_TRUSTED_ORIGINS
-# value: https://app.example.com,https://preview-*.example.com
-\`\`\``
+Set \`BETTER_AUTH_ALLOWED_HOSTS\` to the comma-separated web, API, and preview
+hosts that may terminate auth requests. Host entries omit the protocol. Set
+\`AUTH_CORS_ORIGINS\` to the complete browser origins allowed to call the
+independent API origin with credentials. Unknown hosts and origins are rejected.`
 			: `
 
 ## Trusted origins
 
-By default better-auth only trusts \`BETTER_AUTH_URL\`. To allow additional
-origins (e.g. local frontend, preview deploys) set
-\`BETTER_AUTH_TRUSTED_ORIGINS\` to a comma-separated list:
-
-\`\`\`
-BETTER_AUTH_TRUSTED_ORIGINS=https://app.example.com,https://preview.example.com
-\`\`\``
+Set \`BETTER_AUTH_ALLOWED_HOSTS\` to the comma-separated web, API, and preview
+hosts that may terminate auth requests. Host entries omit the protocol. Set
+\`AUTH_CORS_ORIGINS\` to the complete browser origins allowed to call the
+independent API origin with credentials. Unknown hosts and origins are rejected.`
 
 	const setupBlock =
 		runtime === 'cf-workers'
@@ -933,29 +1029,36 @@ ${emailSecrets}${captchaSecrets}${oauth}${trustedOriginsNote}${otpLocaleNote}
 pnpm dev
 \`\`\`
 
-The server listens on \`http://127.0.0.1:\${PORT ?? 8787}\`. Sibling services
-(e.g. \`apps/api/users\`) reach it via the \`AUTH_URL\` environment variable.
+The server listens on \`http://127.0.0.1:\${PORT ?? ${AUTH_SERVICE.development.port}}\`. Sibling services
+(e.g. \`${USERS_SERVICE.workspacePath}\`) reach it via the \`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` environment variable.
 `
 
-	return `# ${project}-auth
+	return `# ${honoServiceName(project, AUTH_SERVICE)}
 
-The auth service. **Sole owner** of authentication state and secrets.
+The auth service is a private service and the Better Auth transport/runtime adapter. Better Auth configuration and secrets stay private to this service. It is reachable externally only through the gateway. Do not add a direct route, public hostname, or browser-facing service URL.
+
+\`packages/backend/\` owns reusable data access and use cases, including the generated users data access that reads \`authSchema.user\` for domain use cases. That shared application read does not expose Better Auth configuration or secrets and does not bypass the private session boundary.
 
 ## What this service does
 
-- Hosts the public better-auth surface at \`/api/auth/*\`
+- Configures Better Auth directly in \`${AUTH_SERVICE.workspacePath}/src/auth.ts\` and owns its gateway-forwarded routes at ${publicAuthRouteList()}
 - Exposes \`/internal/session\` RPC for sibling services
-- Owns the auth tables (sessions, accounts, verification) in \`packages/db\`
+- Supplies Better Auth with the deploy-aware database client for its session, account, and verification behavior
 
-## What this service does NOT do
+## What this service does not do
 
-- Run business logic
+- Expose independent public ingress
+- Run domain business logic
 - Call other services (no \`services\` bindings, no outbound HTTP)
 
-Other services MUST call \`/internal/session\` ${
-		runtime === 'cf-workers' ? 'through a CF service binding' : 'via HTTP using `AUTH_URL`'
-	} —
-**never** import this service's code or read its secrets.
+Other services MUST resolve sessions through \`requireAuth\` from
+\`@repo/backend/middleware/auth\`. That shared middleware alone owns the
+${
+	runtime === 'cf-workers'
+		? `\`${AUTH_SERVICE.internalTarget}\` Service Binding transport to \`/internal/session\``
+		: `\`${AUTH_SERVICE.transport.node.targetEnvironmentVariable}\` private URL transport to \`/internal/session\``
+}. Transport adapters must not call the binding, URL, or route directly, recreate
+that transport, import this service's code, or read its secrets.
 
 ${setupBlock}
 ## Schema regeneration

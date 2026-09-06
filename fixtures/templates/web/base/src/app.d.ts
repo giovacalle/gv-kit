@@ -18,16 +18,26 @@ declare global {
 			/*@gvkit:endif*/
 		}
 		interface Platform {
+			/*@gvkit:if honoGatewayCfWorkers*/
+			env: Env
+			/*@gvkit:endif*/
+			/*@gvkit:if deployNode*/
 			env: {
-				/*@gvkit:if authCfWorkers*/
-				AUTH: Fetcher
+				/*@gvkit:if honoGateway*/
+				__GATEWAY_TARGET__?: Fetcher
 				/*@gvkit:endif*/
 			}
+			/*@gvkit:endif*/
+			/*@gvkit:if insideFrontendCfWorkers*/
+			env: {}
+			/*@gvkit:endif*/
 		}
 	}
 	namespace NodeJS {
 		interface ProcessEnv {
+			/*@gvkit:if insideFrontend*/
 			PUBLIC_AUTH_URL: string
+			/*@gvkit:endif*/
 			/*@gvkit:if authEmailOtp*/
 			PUBLIC_TURNSTILE_SITE_KEY: string
 			/*@gvkit:endif*/

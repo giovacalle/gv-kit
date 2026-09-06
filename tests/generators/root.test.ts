@@ -5,6 +5,22 @@ import { generateTooling } from '../../src/generators/tooling.js'
 import type { FileEntry } from '../../src/lib/files.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
+const canonicalHonoQuickstart = `### First run
+
+\`\`\`bash
+pnpm install
+cp .env.example .env
+# Fill the required values in .env.
+pnpm local:prepare
+pnpm dev
+\`\`\`
+
+### Subsequent runs
+
+\`\`\`bash
+pnpm dev
+\`\`\``
+
 const baseChoices: Choices = {
 	name: 'demo',
 	frontend: 'sveltekit',
@@ -42,10 +58,21 @@ describe('generateRoot — Astro project shape', () => {
 		expect(Object.keys(pkg['lint-staged']).some((glob) => glob.includes('astro'))).toBe(true)
 	})
 
+	test('formatting preserves the canonical Hono OpenAPI contract only when it exists', () => {
+		const honoIgnore = content(generateRoot(makeCfg()), '.prettierignore')
+		const integratedIgnore = content(
+			generateRoot(makeCfg({ backend: 'inside-frontend', apiClient: 'skip' })),
+			'.prettierignore'
+		)
+
+		expect(honoIgnore.split('\n')).toContain('apps/api/openapi.json')
+		expect(integratedIgnore.split('\n')).not.toContain('apps/api/openapi.json')
+	})
+
 	test('postinstall prepares selected generated packages before workspace checks', () => {
 		const pkg = JSON.parse(
 			content(generateRoot(makeCfg({ i18n: 'paraglide', apiClient: 'hey-api' })), 'package.json')
-		) as { scripts: { postinstall?: string } }
+		) as { scripts: Record<string, string | undefined> }
 		expect(pkg.scripts.postinstall).toContain(
 			'test ! -f packages/i18n/project.inlang/settings.json ||'
 		)
@@ -53,7 +80,12 @@ describe('generateRoot — Astro project shape', () => {
 		expect(pkg.scripts.postinstall).toContain(
 			'test ! -f packages/openapi-client/openapi-ts.config.ts ||'
 		)
-		expect(pkg.scripts.postinstall).toContain('pnpm --filter @repo/openapi-client codegen')
+		expect(pkg.scripts.postinstall).toContain('pnpm codegen')
+		expect(pkg.scripts.codegen).toBe(
+			'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen'
+		)
+		expect(pkg.scripts['openapi:compose']).toContain('openapi:compose')
+		expect(pkg.scripts['openapi:check']).toContain('openapi:check')
 	})
 
 	test('Turbo forwards complete public origins and selected monitoring to static builds', () => {
@@ -74,31 +106,202 @@ describe('generateRoot — Astro project shape', () => {
 		)
 	})
 
-	test('auth public variables are forwarded to builds and documented without secret values', () => {
+	test('Hono auth documents host and CORS allowlists without a public auth URL', () => {
 		const entries = generateRoot(
-			makeCfg({ marketing: 'inside-web', auth: ['emailOTP'], email: 'resend' })
+			makeCfg({
+				marketing: 'inside-web',
+				auth: ['emailOTP'],
+				email: 'resend',
+				deploy: 'skip'
+			})
 		)
 		const turbo = JSON.parse(content(entries, 'turbo.json')) as {
-			tasks: { build: { env?: string[] } }
+			tasks: Record<string, { dependsOn?: string[]; env?: string[] }>
 		}
-		expect(turbo.tasks.build.env).toEqual([
-			'PUBLIC_AUTH_URL',
+		expect(turbo.tasks.build?.env).toEqual(['PUBLIC_TURNSTILE_SITE_KEY'])
+		expect(turbo.tasks['@demo/api-gateway#dev']?.dependsOn).toEqual(['^build'])
+		expect(turbo.tasks['@demo/api-gateway#dev']?.env).toEqual([
+			'API_PUBLIC_ORIGIN',
+			'GATEWAY_PUBLIC_ORIGINS',
+			'GATEWAY_TRUSTED_INGRESS_SECRET',
+			'API_CORS_ORIGINS',
+			'GATEWAY_UPSTREAM_TIMEOUT_MS',
+			'AUTH_URL',
+			'USERS_URL'
+		])
+		expect(turbo.tasks['@demo/auth-worker#dev']?.env).toEqual([
+			'SQLITE_PATH',
+			'BETTER_AUTH_SECRET',
+			'BETTER_AUTH_ALLOWED_HOSTS',
+			'AUTH_CORS_ORIGINS',
+			'RESEND_API_KEY',
+			'FROM_EMAIL',
+			'TURNSTILE_SECRET_KEY'
+		])
+		expect(turbo.tasks['@demo/users-worker#dev']?.env).toEqual(['SQLITE_PATH', 'AUTH_URL'])
+		expect(turbo.tasks['demo-web#dev']?.env).toEqual([
+			'GATEWAY_URL',
+			'GATEWAY_TRUSTED_INGRESS_SECRET',
 			'PUBLIC_TURNSTILE_SITE_KEY'
 		])
 		const env = content(entries, '.env.example')
-		expect(env).toContain('PUBLIC_AUTH_URL=http://localhost:5173')
+		expect(env).not.toContain('PUBLIC_AUTH_URL')
+		expect(env).toContain('API_PUBLIC_ORIGIN=http://api.localhost:8786')
+		expect(env).toContain('BETTER_AUTH_ALLOWED_HOSTS=localhost:5173,api.localhost:8786')
+		expect(env).toContain('AUTH_CORS_ORIGINS=http://localhost:5173,http://api.localhost:8786')
+		expect(env).not.toContain('<preview-web-host>')
 		expect(env).toContain('PUBLIC_TURNSTILE_SITE_KEY=')
 		expect(env).toContain('FROM_EMAIL=')
+		expect(env).toContain('SQLITE_PATH=file:./.data/local.db')
 	})
 
-	test('non-Cloudflare Hono auth variables use the auth-service origin', () => {
+	test('Hono root commands load, validate, and prepare the generated local environment', () => {
+		const entries = generateRoot(
+			makeCfg({ marketing: 'inside-web', auth: ['emailOTP'], email: 'resend', deploy: 'skip' })
+		)
+		const pkg = JSON.parse(content(entries, 'package.json')) as {
+			scripts: Record<string, string>
+		}
+		const local = content(entries, 'scripts/local.mjs')
+		const readme = content(entries, 'README.md')
+
+		expect(pkg.scripts.dev).toBe('node scripts/local.mjs dev')
+		expect(pkg.scripts.typecheck).toBe('turbo run typecheck')
+		expect(pkg.scripts['local:prepare']).toBe('node scripts/local.mjs prepare')
+		expect(local).toContain("loadEnvFile(resolve('.env'))")
+		expect(local).toContain('Missing .env. Run `cp .env.example .env`')
+		expect(local).toContain('"API_PUBLIC_ORIGIN"')
+		expect(local).toContain('"GATEWAY_PUBLIC_ORIGINS"')
+		expect(local).toContain('"GATEWAY_TRUSTED_INGRESS_SECRET"')
+		expect(local).toContain('"BETTER_AUTH_SECRET"')
+		expect(local).toContain('"TURNSTILE_SECRET_KEY"')
+		expect(local).toContain("dev: ['exec', 'turbo', 'run', 'dev'")
+		expect(local).toContain("'--filter=./apps/*', '--filter=./services/*'")
+		expect(local).not.toContain('typecheck')
+		expect(local).not.toContain('--env-mode=loose')
+		expect(readme).toContain(canonicalHonoQuickstart)
+	})
+
+	test('integrated-backend quickstart does not claim Hono local preparation', () => {
+		const readme = content(
+			generateRoot(
+				makeCfg({ backend: 'inside-frontend', apiClient: 'skip', auth: [], email: 'skip' })
+			),
+			'README.md'
+		)
+
+		expect(readme).toContain(`## Quickstart
+
+\`\`\`bash
+pnpm install
+pnpm dev
+\`\`\``)
+		expect(readme).not.toContain('pnpm local:prepare')
+		expect(readme).not.toContain('cp .env.example .env')
+	})
+
+	test('no-auth Hono README documents every required private local transport target', () => {
+		const entries = generateRoot(makeCfg({ marketing: 'inside-web', deploy: 'skip' }))
+		const local = content(entries, 'scripts/local.mjs')
+		const readme = content(entries, 'README.md')
+
+		for (const setting of ['GATEWAY_URL', 'AUTH_URL', 'USERS_URL']) {
+			expect(local).toContain(`"${setting}"`)
+			expect(readme).toContain(`\`${setting}\``)
+		}
+	})
+
+	test('Hono README documents local, provider, and Cloudflare environment settings', () => {
+		const entries = generateRoot(
+			makeCfg({
+				db: 'postgres',
+				auth: ['emailOTP', 'google'],
+				email: 'resend',
+				monitoring: ['umami', 'posthog']
+			})
+		)
+		const readme = content(entries, 'README.md')
+
+		for (const setting of [
+			'API_PUBLIC_ORIGIN',
+			'GATEWAY_PUBLIC_ORIGINS',
+			'API_CORS_ORIGINS',
+			'GATEWAY_UPSTREAM_TIMEOUT_MS',
+			'GATEWAY_URL',
+			'AUTH_URL',
+			'USERS_URL',
+			'BETTER_AUTH_SECRET',
+			'BETTER_AUTH_ALLOWED_HOSTS',
+			'AUTH_CORS_ORIGINS',
+			'DATABASE_URL',
+			'GOOGLE_CLIENT_ID',
+			'GOOGLE_CLIENT_SECRET',
+			'RESEND_API_KEY',
+			'FROM_EMAIL',
+			'TURNSTILE_SECRET_KEY',
+			'PUBLIC_TURNSTILE_SITE_KEY',
+			'PUBLIC_MARKETING_URL',
+			'PUBLIC_APP_URL',
+			'PUBLIC_UMAMI_WEBSITE_ID',
+			'PUBLIC_UMAMI_HOST',
+			'PUBLIC_POSTHOG_KEY',
+			'PUBLIC_POSTHOG_HOST',
+			'CLOUDFLARE_PREVIEW_WEB_DOMAIN',
+			'CLOUDFLARE_PREVIEW_API_DOMAIN',
+			'CLOUDFLARE_PREVIEW_ZONE_NAME'
+		]) expect(readme).toContain(`\`${setting}\``)
+		expect(readme).toContain(
+			'`.env.cloudflare.example` is a reference for non-secret production values'
+		)
+		expect(readme).toMatch(/Preview\s+workflows derive PR-specific origins/)
+		expect(readme).toContain('host and optional port without a scheme')
+		expect(readme).toContain('complete browser origins')
+		expect(readme).toContain('Private services use Service Bindings in Cloudflare')
+	})
+
+	test('no-auth Cloudflare README distinguishes active values from retained auth examples', () => {
+		const readme = content(generateRoot(makeCfg()), 'README.md')
+
+		expect(readme).toContain(
+			'`GATEWAY_UPSTREAM_TIMEOUT_MS` in `apps/api/wrangler.jsonc`. These are gateway Worker variables.'
+		)
+		expect(readme).toContain(
+			'`PUBLIC_APP_URL` as a GitHub Actions repository variable. The production workflow passes it to the Astro deployment/build; it is not a Wrangler runtime variable.'
+		)
+		expect(readme).toContain(
+			'`BETTER_AUTH_ALLOWED_HOSTS` and `AUTH_CORS_ORIGINS` are retained for a stable production example but are inactive without a selected auth provider.'
+		)
+		expect(readme).not.toContain(
+			'copy these values into the matching production Wrangler configurations'
+		)
+	})
+
+	test('inside-web Cloudflare README distinguishes auth Wrangler values from inactive PUBLIC_APP_URL', () => {
+		const readme = content(
+			generateRoot(makeCfg({ marketing: 'inside-web', auth: ['emailOTP'], email: 'resend' })),
+			'README.md'
+		)
+
+		expect(readme).toContain(
+			'`PUBLIC_APP_URL` is retained for a stable production example but is inactive when marketing stays inside the web app.'
+		)
+		expect(readme).toContain(
+			'`BETTER_AUTH_ALLOWED_HOSTS` and `AUTH_CORS_ORIGINS` in `services/auth/wrangler.jsonc`.'
+		)
+		expect(readme).toContain(
+			'The first contains hosts without schemes; the second contains complete origins.'
+		)
+	})
+
+	test('non-Cloudflare Hono auth uses gateway ingress allowlists', () => {
 		const cfg = makeCfg({ deploy: 'docker', auth: ['emailOTP'], email: 'resend' })
 		const env = content(generateRoot(cfg), '.env.example')
 		const compose = content(generateDeploy(cfg), 'docker-compose.yml')
 
-		expect(env).toContain('BETTER_AUTH_URL=http://localhost:8787')
-		expect(env).not.toContain('BETTER_AUTH_URL=http://localhost:5173')
-		expect(compose).toContain('BETTER_AUTH_URL: ${BETTER_AUTH_URL:-http://localhost:8787}')
+		expect(env).not.toContain('BETTER_AUTH_URL=')
+		expect(env).toContain('BETTER_AUTH_ALLOWED_HOSTS=')
+		expect(compose).toContain('BETTER_AUTH_ALLOWED_HOSTS:')
+		expect(compose).toContain('AUTH_CORS_ORIGINS:')
 	})
 
 	test('PostHog example uses the EU ingestion host forwarded by Docker builds', () => {
@@ -117,10 +320,22 @@ describe('generateRoot — Astro project shape', () => {
 		expect(readme).toContain('https://app.example.com')
 	})
 
-	test('Docker examples use the Compose app origin instead of the dev-server port', () => {
+	test('Docker examples distinguish public ingress from private service targets', () => {
 		const entries = generateRoot(makeCfg({ deploy: 'docker' }))
-		expect(content(entries, '.env.example')).toContain('PUBLIC_APP_URL=http://localhost:3000')
-		expect(content(entries, 'README.md')).toContain('PUBLIC_APP_URL=http://localhost:3000')
+		const env = content(entries, '.env.example')
+		expect(env).toContain('PUBLIC_APP_URL=http://localhost:3000')
+		expect(env).toContain('API_PUBLIC_ORIGIN=http://api.localhost:3000')
+		expect(env).toContain(
+			'GATEWAY_PUBLIC_ORIGINS=http://localhost:3000,http://api.localhost:3000,http://localhost:8786,http://127.0.0.1:8786'
+		)
+		expect(env).toContain('GATEWAY_TRUSTED_INGRESS_SECRET=')
+		expect(env).toContain('GATEWAY_URL=http://127.0.0.1:8786')
+		expect(env).toContain('AUTH_URL=http://127.0.0.1:8787')
+		expect(env).toContain('USERS_URL=http://127.0.0.1:8788')
+		expect(env).not.toMatch(/^PUBLIC_(?:API|AUTH|USERS)_URL=/m)
+		const readme = content(entries, 'README.md')
+		expect(readme).toContain('PUBLIC_APP_URL=http://localhost:3000')
+		expect(readme).toContain('`http://localhost:3000/api/*` alias')
 	})
 
 	test('inside-web does not invent a marketing app or public-origin pair', () => {

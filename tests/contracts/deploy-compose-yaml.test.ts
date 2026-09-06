@@ -78,10 +78,18 @@ describe('deploy compose — YAML structural validity', () => {
 })
 
 describe('deploy compose — service topology contract', () => {
-	test('hono mode emits postgres+migrate+auth+users+web (when postgres)', () => {
+	test('hono mode emits ingress+gateway+private services+database topology', () => {
 		const doc = parseCompose(makeCfg({ backend: 'hono', db: 'postgres' }))
 		const services = Object.keys(doc.services as object).sort()
-		expect(services).toEqual(['auth', 'migrate', 'postgres', 'users', 'web'])
+		expect(services).toEqual([
+			'auth',
+			'gateway',
+			'ingress',
+			'migrate',
+			'postgres',
+			'users',
+			'web'
+		])
 	})
 
 	test('inside-frontend mode emits postgres+migrate+web only (when postgres)', () => {
@@ -109,6 +117,8 @@ describe('deploy compose — service topology contract', () => {
 		const services = doc.services as Record<string, Record<string, unknown>>
 		expect(Object.keys(services).sort()).toEqual([
 			'auth',
+			'gateway',
+			'ingress',
 			'marketing',
 			'migrate',
 			'postgres',
@@ -140,14 +150,18 @@ describe('deploy compose — env contract with services generators', () => {
 			'PORT',
 			'DATABASE_URL',
 			'BETTER_AUTH_SECRET',
-			'BETTER_AUTH_URL',
-			'BETTER_AUTH_TRUSTED_ORIGINS',
+			'BETTER_AUTH_ALLOWED_HOSTS',
+			'AUTH_CORS_ORIGINS',
 			'GOOGLE_CLIENT_ID',
 			'GOOGLE_CLIENT_SECRET',
-			'RESEND_API_KEY'
+			'TURNSTILE_SECRET_KEY',
+			'RESEND_API_KEY',
+			'FROM_EMAIL'
 		]
 		for (const key of required) expect(authEnv).toContain(key)
 
+		expect(authEnv).not.toContain('BETTER_AUTH_URL')
+		expect(authEnv).not.toContain('BETTER_AUTH_TRUSTED_ORIGINS')
 		expect(authEnv).not.toContain('NOTIFUSE_API_KEY')
 		expect(authEnv).not.toContain('SQLITE_PATH')
 	})

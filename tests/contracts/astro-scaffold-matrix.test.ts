@@ -60,9 +60,7 @@ describe('Astro generated-project verification matrix', () => {
 		for (const unsupported of UNSUPPORTED_ASTRO_CASES) {
 			const parsed = GvKitConfig.safeParse(unsupported.config)
 			expect(parsed.success).toBe(false)
-			if (!parsed.success) {
-				expect(parsed.error.issues.map((issue) => issue.message)).toContain(unsupported.expected)
-			}
+			if (!parsed.success) expect(parsed.error.issues.map((issue) => issue.message)).toContain(unsupported.expected)
 		}
 	})
 
@@ -78,7 +76,7 @@ describe('Astro generated-project verification matrix', () => {
 			const paths = new Set(buildScaffoldPlan(entry.config).map((file) => file.path))
 			expect(paths.has('apps/marketing/package.json')).toBe(true)
 			expect(paths.has('apps/web/package.json')).toBe(true)
-			expect(paths.has('apps/api/auth/package.json')).toBe(
+			expect(paths.has('services/auth/package.json')).toBe(
 				entry.choices.topology !== 'inside-frontend'
 			)
 		}

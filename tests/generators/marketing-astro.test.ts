@@ -2,7 +2,12 @@ import { describe, expect, test } from 'bun:test'
 import { buildContentSecurityPolicy } from '../../fixtures/templates/marketing/base/src/lib/content-security-policy.js'
 import { runGenerators } from '../../src/generators/index.js'
 import { generateMarketingAstro } from '../../src/generators/marketing-astro.js'
+import {
+	CLOUDFLARE_WORKER_NAME_LIMIT,
+	cloudflareProductionWorkerName
+} from '../../src/lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../../src/lib/files.js'
+import { parseJsonc } from '../../src/lib/jsonc.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
 const baseChoices: Choices = {
@@ -49,9 +54,7 @@ describe('generateMarketingAstro — shape gating', () => {
 			'apps/marketing/src/pages/index.astro',
 			'apps/marketing/src/pages/404.astro',
 			'apps/marketing/src/pages/robots.txt.ts'
-		]) {
-			expect(paths).toContain(path)
-		}
+		]) expect(paths).toContain(path)
 		expect(paths.some((path) => path.startsWith('apps/marketing/src/pages/blog'))).toBe(false)
 	})
 
@@ -86,9 +89,7 @@ describe('generateMarketingAstro — static and shared UI contract', () => {
 		expect(home).toContain('@repo/ui/')
 		expect(tsconfig).toContain('../../packages/ui/src/lib')
 		expect(astroConfig).toContain('../../packages/ui/src/lib')
-		for (const entry of entries.filter((entry) => entry.path.match(/\.(astro|ts|js|svelte)$/))) {
-			expect(entry.content, entry.path).not.toMatch(/from\s+['"]@lib(?:\/|['"])/)
-		}
+		for (const entry of entries.filter((entry) => entry.path.match(/\.(astro|ts|js|svelte)$/))) expect(entry.content, entry.path).not.toMatch(/from\s+['"]@lib(?:\/|['"])/)
 	})
 
 	test('loads shared styles/fonts once and scans Astro plus raw Svelte sources', () => {
@@ -111,13 +112,89 @@ describe('generateMarketingAstro — static and shared UI contract', () => {
 			'@repo/backend',
 			'@repo/db',
 			'$app/'
-		]) {
-			expect(all).not.toContain(forbidden)
-		}
+		]) expect(all).not.toContain(forbidden)
 	})
 })
 
 describe('generateMarketingAstro — option overlays', () => {
+	test('bounds the route-backed marketing Worker without renaming its package or preview', () => {
+		const project = `a${'b'.repeat(254)}`
+		const entries = generateMarketingAstro(
+			makeCfg({
+				name: project,
+				deploy: 'cf-workers',
+				backend: 'inside-frontend',
+				apiClient: 'skip'
+			})
+		)
+		const wrangler = parseJsonc<{
+			name: string
+			workers_dev?: boolean
+			routes: Array<{ pattern: string; custom_domain: boolean }>
+		}>(content(entries, 'apps/marketing/wrangler.jsonc'))
+		const packageJson = JSON.parse(content(entries, 'apps/marketing/package.json')) as {
+			name: string
+			scripts: Record<string, string>
+		}
+
+		expect(wrangler.workers_dev).toBeUndefined()
+		expect(wrangler.routes).toEqual([{ pattern: '<domain>', custom_domain: true }])
+		expect(wrangler.name).toBe(cloudflareProductionWorkerName({ project, service: 'marketing' }))
+		expect(wrangler.name.length).toBeLessThanOrEqual(CLOUDFLARE_WORKER_NAME_LIMIT)
+		expect(packageJson.name).toBe(`${project}-marketing`)
+		expect(packageJson.scripts['deploy:staging']).toContain(
+			`--name ${project}-marketing-$STAGING_ALIAS`
+		)
+
+		const legacyProject = 'a'.repeat(100)
+		const legacyWrangler = parseJsonc<{ name: string }>(
+			content(
+				generateMarketingAstro(
+					makeCfg({
+						name: legacyProject,
+						deploy: 'cf-workers',
+						backend: 'inside-frontend',
+						apiClient: 'skip'
+					})
+				),
+				'apps/marketing/wrangler.jsonc'
+			)
+		)
+		expect(legacyWrangler.name).toBe(`${legacyProject}-marketing`)
+
+		const exactProject = 'a'.repeat(CLOUDFLARE_WORKER_NAME_LIMIT - '-marketing'.length)
+		const oneOverProject = `${exactProject}a`
+		const exactWrangler = parseJsonc<{ name: string }>(
+			content(
+				generateMarketingAstro(
+					makeCfg({
+						name: exactProject,
+						deploy: 'cf-workers',
+						backend: 'inside-frontend',
+						apiClient: 'skip'
+					})
+				),
+				'apps/marketing/wrangler.jsonc'
+			)
+		)
+		const oneOverWrangler = parseJsonc<{ name: string }>(
+			content(
+				generateMarketingAstro(
+					makeCfg({
+						name: oneOverProject,
+						deploy: 'cf-workers',
+						backend: 'inside-frontend',
+						apiClient: 'skip'
+					})
+				),
+				'apps/marketing/wrangler.jsonc'
+			)
+		)
+		expect(exactWrangler.name).toBe(`${exactProject}-marketing`)
+		expect(oneOverWrangler.name).toHaveLength(CLOUDFLARE_WORKER_NAME_LIMIT)
+		expect(oneOverWrangler.name).not.toBe(`${oneOverProject}-marketing`)
+	})
+
 	test('Paraglide adds localized static route without copying catalogs', () => {
 		const entries = generateMarketingAstro(makeCfg({ i18n: 'paraglide' }))
 		expect(findEntry(entries, 'apps/marketing/src/pages/[locale]/index.astro')).toBeDefined()

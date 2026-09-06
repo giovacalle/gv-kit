@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test'
+import { generateAiTooling } from '../../src/generators/ai-tooling.js'
 import { generateFrontendSveltekit } from '../../src/generators/frontend-sveltekit.js'
+import { generateRoot } from '../../src/generators/root.js'
+import {
+	CLOUDFLARE_WORKER_NAME_LIMIT,
+	cloudflareProductionWorkerName
+} from '../../src/lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../../src/lib/files.js'
+import { parseJsonc } from '../../src/lib/jsonc.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
 
 type Auth = Choices['auth']
@@ -81,9 +88,7 @@ describe('generateFrontendSveltekit — auth inclusion / exclusion', () => {
 		expect(login.content).toContain('InputOTP')
 		expect(login.content).toContain('turnstile')
 		const load = findEntry(entries, 'apps/web/src/routes/login/+page.server.ts')!
-		expect(load.content).toContain(
-			"import { PUBLIC_TURNSTILE_SITE_KEY } from '$env/static/public'"
-		)
+		expect(load.content).toContain("import { PUBLIC_TURNSTILE_SITE_KEY } from '$env/static/public'")
 		expect(load.content).not.toContain('platform?.env')
 	})
 
@@ -119,9 +124,7 @@ describe('generateFrontendSveltekit — auth inclusion / exclusion', () => {
 			'errors',
 			'submitting',
 			'turnstileTokenProxy'
-		]) {
-			expect(login).not.toContain(emailOnlySymbol)
-		}
+		]) expect(login).not.toContain(emailOnlySymbol)
 		expect(login).toContain('continueWithGoogle')
 	})
 
@@ -164,6 +167,37 @@ describe('generateFrontendSveltekit — fence stripping', () => {
 		expect(layout).not.toContain('locals')
 	})
 
+	test.each<Choices['deploy']>(['cf-workers', 'docker'])(
+		'no-auth inside-frontend %s landing page removes auth-only UI imports',
+		(deploy) => {
+			const entries = generateFrontendSveltekit(
+				makeCfg({
+					backend: 'inside-frontend',
+					deploy,
+					auth: [],
+					email: 'skip',
+					apiClient: 'skip'
+				})
+			)
+			const landing = findEntry(entries, 'apps/web/src/routes/+page.svelte')!.content
+			expect(landing).not.toContain("import * as Button from '@repo/ui/primitives/button'")
+			expect(landing).not.toContain("import { Badge } from '@repo/ui/primitives/badge'")
+		}
+	)
+
+	test('authenticated inside-frontend landing output matches the Hono baseline', () => {
+		const auth = ['emailOTP'] as Auth
+		const insideFrontend = findEntry(
+			generateFrontendSveltekit(makeCfg({ backend: 'inside-frontend', auth, email: 'resend' })),
+			'apps/web/src/routes/+page.svelte'
+		)!.content
+		const hono = findEntry(
+			generateFrontendSveltekit(makeCfg({ backend: 'hono', auth, email: 'resend' })),
+			'apps/web/src/routes/+page.svelte'
+		)!.content
+		expect(insideFrontend).toBe(hono)
+	})
+
 	test('hooks.server.ts attaches user only when auth is on', () => {
 		const off = generateFrontendSveltekit(makeCfg({ auth: [], email: 'skip' }))
 		const on = generateFrontendSveltekit(makeCfg({ auth: ['emailOTP'], email: 'resend' }))
@@ -175,11 +209,18 @@ describe('generateFrontendSveltekit — fence stripping', () => {
 		expect(offHooks.content).not.toContain('attachUser')
 	})
 
-	test('lib/auth/client.ts uses PUBLIC_AUTH_URL only when auth is on', () => {
+	test('Hono auth uses the same-origin client while integrated auth keeps PUBLIC_AUTH_URL', () => {
 		const off = generateFrontendSveltekit(makeCfg({ auth: [], email: 'skip' }))
-		const on = generateFrontendSveltekit(makeCfg({ auth: ['emailOTP'], email: 'resend' }))
-		const onClient = findEntry(on, 'apps/web/src/lib/auth/client.ts')!
-		expect(onClient.content).toContain('PUBLIC_AUTH_URL')
+		const hono = generateFrontendSveltekit(makeCfg({ auth: ['emailOTP'], email: 'resend' }))
+		const integrated = generateFrontendSveltekit(
+			makeCfg({ backend: 'inside-frontend', auth: ['emailOTP'], email: 'resend' })
+		)
+		expect(findEntry(hono, 'apps/web/src/lib/auth/client.ts')!.content).not.toContain(
+			'PUBLIC_AUTH_URL'
+		)
+		expect(findEntry(integrated, 'apps/web/src/lib/auth/client.ts')!.content).toContain(
+			'PUBLIC_AUTH_URL'
+		)
 		expect(findEntry(off, 'apps/web/src/lib/auth/client.ts')).toBeUndefined()
 	})
 
@@ -248,19 +289,126 @@ describe('generateFrontendSveltekit — variable substitution', () => {
 	})
 })
 
+describe('generateFrontendSveltekit — monitoring boundary', () => {
+	test('Hono Umami retains placeholder behavior without becoming a gateway runtime requirement', () => {
+		const cfg = makeCfg({ marketing: 'astro', monitoring: ['umami', 'posthog'] })
+		const appHtml = findEntry(generateFrontendSveltekit(cfg), 'apps/web/src/app.html')!.content
+		const rootEntries = generateRoot(cfg)
+		const envExample = findEntry(rootEntries, '.env.example')!.content
+		const webGuidance = findEntry(generateAiTooling(cfg), '.ai/rules/web-svelte.md')!.content
+		const turbo = JSON.parse(findEntry(rootEntries, 'turbo.json')!.content) as {
+			tasks: Record<string, { env?: string[] }>
+		}
+		const webDevEnv = turbo.tasks['demo-web#dev']!.env
+		const gatewayDevEnv = turbo.tasks['@demo/api-gateway#dev']!.env
+		const marketingDevEnv = turbo.tasks['demo-marketing#dev']!.env
+
+		expect(appHtml).toContain('src="https://umami.example.com/script.js"')
+		expect(appHtml).toContain('data-website-id="__UMAMI_WEBSITE_ID__"')
+		expect(appHtml).not.toContain('PUBLIC_UMAMI_')
+		expect(webDevEnv).toContain('GATEWAY_URL')
+		expect(webDevEnv).not.toContain('PUBLIC_UMAMI_HOST')
+		expect(webDevEnv).not.toContain('PUBLIC_UMAMI_WEBSITE_ID')
+		expect(webDevEnv).not.toContain('PUBLIC_POSTHOG_KEY')
+		expect(webDevEnv).not.toContain('PUBLIC_POSTHOG_HOST')
+		expect(envExample).toContain('PUBLIC_UMAMI_WEBSITE_ID=')
+		expect(envExample).toContain('PUBLIC_UMAMI_HOST=')
+		expect(envExample).toContain('PUBLIC_POSTHOG_KEY=')
+		expect(envExample).toContain('PUBLIC_POSTHOG_HOST=https://eu.i.posthog.com')
+		expect(webGuidance).toContain(
+			'Wrappers around **third-party SDKs** with their own I/O surface (analytics, captcha, payments, transactional email)'
+		)
+		expect(gatewayDevEnv).toContain('API_PUBLIC_ORIGIN')
+		expect(gatewayDevEnv).toContain('GATEWAY_PUBLIC_ORIGINS')
+		expect(marketingDevEnv).toEqual(['PUBLIC_MARKETING_URL', 'PUBLIC_APP_URL'])
+	})
+})
+
 describe('generateFrontendSveltekit — boundary regression', () => {
 	test('NO entry path starts with apps/web/src/lib/components/ui/ for any flag combination', () => {
 		for (const auth of AUTH_VARIANTS) {
 			const email = auth.length > 0 ? 'resend' : 'skip'
 			const entries = generateFrontendSveltekit(makeCfg({ auth, email }))
-			for (const e of entries) {
-				expect(e.path.startsWith('apps/web/src/lib/components/ui/')).toBe(false)
-			}
+			for (const e of entries) expect(e.path.startsWith('apps/web/src/lib/components/ui/')).toBe(false)
 		}
 	})
 })
 
 describe('generateFrontendSveltekit — wrangler placement per deploy flag', () => {
+	test('bounds route-backed web Workers and the gateway binding without renaming packages or previews', () => {
+		const project = `a${'b'.repeat(254)}`
+		const honoEntries = generateFrontendSveltekit(makeCfg({ name: project }))
+		const wrangler = parseJsonc<{
+			name: string
+			services: Array<{ binding: string; service: string }>
+		}>(findEntry(honoEntries, 'apps/web/wrangler.jsonc')!.content)
+		const packageJson = JSON.parse(findEntry(honoEntries, 'apps/web/package.json')!.content) as {
+			name: string
+		}
+		expect(wrangler.name).toBe(cloudflareProductionWorkerName({ project, service: 'web' }))
+		expect(wrangler.services).toEqual([
+			{
+				binding: 'GATEWAY',
+				service: cloudflareProductionWorkerName({ project, service: 'api' })
+			}
+		])
+		expect(packageJson.name).toBe(`${project}-web`)
+
+		const integratedEntries = generateFrontendSveltekit(
+			makeCfg({ name: project, backend: 'inside-frontend', apiClient: 'skip' })
+		)
+		const integratedWrangler = parseJsonc<{
+			name: string
+			workers_dev?: boolean
+			routes: Array<{ pattern: string; custom_domain: boolean }>
+		}>(findEntry(integratedEntries, 'apps/web/wrangler.jsonc')!.content)
+		const integratedPackage = JSON.parse(
+			findEntry(integratedEntries, 'apps/web/package.json')!.content
+		) as { scripts: Record<string, string> }
+		expect(integratedWrangler.workers_dev).toBeUndefined()
+		expect(integratedWrangler.routes).toEqual([{ pattern: '<domain>', custom_domain: true }])
+		expect(integratedWrangler.name).toBe(
+			cloudflareProductionWorkerName({ project, service: 'web' })
+		)
+		expect(integratedWrangler.name.length).toBeLessThanOrEqual(CLOUDFLARE_WORKER_NAME_LIMIT)
+		expect(integratedPackage.scripts['deploy:staging']).toContain(
+			`--name ${project}-web-$STAGING_ALIAS`
+		)
+
+		const legacyProject = 'a'.repeat(100)
+		const legacyWrangler = parseJsonc<{ name: string }>(
+			findEntry(
+				generateFrontendSveltekit(
+					makeCfg({ name: legacyProject, backend: 'inside-frontend', apiClient: 'skip' })
+				),
+				'apps/web/wrangler.jsonc'
+			)!.content
+		)
+		expect(legacyWrangler.name).toBe(`${legacyProject}-web`)
+
+		const exactProject = 'a'.repeat(CLOUDFLARE_WORKER_NAME_LIMIT - '-web'.length)
+		const oneOverProject = `${exactProject}a`
+		const exactWrangler = parseJsonc<{ name: string }>(
+			findEntry(
+				generateFrontendSveltekit(
+					makeCfg({ name: exactProject, backend: 'inside-frontend', apiClient: 'skip' })
+				),
+				'apps/web/wrangler.jsonc'
+			)!.content
+		)
+		const oneOverWrangler = parseJsonc<{ name: string }>(
+			findEntry(
+				generateFrontendSveltekit(
+					makeCfg({ name: oneOverProject, backend: 'inside-frontend', apiClient: 'skip' })
+				),
+				'apps/web/wrangler.jsonc'
+			)!.content
+		)
+		expect(exactWrangler.name).toBe(`${exactProject}-web`)
+		expect(oneOverWrangler.name).toHaveLength(CLOUDFLARE_WORKER_NAME_LIMIT)
+		expect(oneOverWrangler.name).not.toBe(`${oneOverProject}-web`)
+	})
+
 	test('wrangler.jsonc emitted iff deploy is cf-workers', () => {
 		const cf = generateFrontendSveltekit(makeCfg({ deploy: 'cf-workers' }))
 		const docker = generateFrontendSveltekit(makeCfg({ deploy: 'docker' }))
@@ -280,7 +428,7 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 		expect(wrangler.content).not.toContain('auth.api.')
 	})
 
-	test('Hono auth uses an AUTH service binding without exposing its secret to web', () => {
+	test('Hono auth binds web SSR only to the gateway and emits no auth facade', () => {
 		const honoAuth = generateFrontendSveltekit(
 			makeCfg({
 				deploy: 'cf-workers',
@@ -290,19 +438,15 @@ describe('generateFrontendSveltekit — wrangler placement per deploy flag', () 
 			})
 		)
 		const wrangler = findEntry(honoAuth, 'apps/web/wrangler.jsonc')!.content
-		expect(wrangler).toContain('"binding": "AUTH"')
-		expect(wrangler).toContain('"service": "demo-auth"')
+		expect(wrangler).toContain('"binding": "GATEWAY"')
+		expect(wrangler).toContain('"service": "demo-api"')
+		expect(wrangler).not.toContain('"binding": "AUTH"')
 		expect(wrangler).not.toContain('BETTER_AUTH_SECRET')
-		const proxy = findEntry(
-			honoAuth,
-			'apps/web/src/routes/api/auth/[...path]/+server.ts'
-		)
-		expect(proxy).toBeDefined()
-		expect(proxy!.content).toContain('auth.fetch(request)')
+		expect(findEntry(honoAuth, 'apps/web/src/routes/api/auth/[...path]/+server.ts')).toBeUndefined()
 		const session = findEntry(honoAuth, 'apps/web/src/lib/server/load-session.ts')!
 		expect(session.content).toContain("event.fetch('/api/auth/get-session'")
 		const env = findEntry(honoAuth, 'apps/web/.env.example')!
-		expect(env.content).toContain('PUBLIC_AUTH_URL=http://localhost:5173')
+		expect(env.content).not.toContain('PUBLIC_AUTH_URL')
 	})
 })
 
@@ -379,10 +523,22 @@ describe('generateFrontendSveltekit — hey-api / TanStack Query overlay', () =>
 			'apps/web/src/routes/+layout.ts'
 		)!
 		expect(layout.content).toContain('new QueryClient')
-		expect(layout.content).toContain('@repo/openapi-client/users')
-		expect(layout.content).toContain('PUBLIC_USERS_URL')
+		expect(layout.content).toContain("from '@repo/openapi-client'")
+		expect(layout.content).not.toContain('@repo/openapi-client/users')
+		expect(layout.content).toContain("baseUrl: ''")
+		expect(layout.content).not.toContain('PUBLIC_USERS_URL')
 		// must spread parent (server) data so user/locale survive the universal load
 		expect(layout.content).toContain('...data')
+	})
+
+	test('SSR uses the same root operation with the request-scoped fetch transport', () => {
+		const serverLoad = findEntry(
+			generateFrontendSveltekit(makeCfg({ apiClient: 'hey-api' })),
+			'apps/web/src/routes/users/+page.server.ts'
+		)!
+		expect(serverLoad.content).toContain("usersGetMe } from '@repo/openapi-client'")
+		expect(serverLoad.content).toContain('usersGetMe({ baseUrl: url.origin, fetch })')
+		expect(serverLoad.content).not.toContain('@repo/openapi-client/users')
 	})
 
 	test('root +layout.svelte wraps children in QueryClientProvider only with hey-api', () => {
@@ -425,8 +581,7 @@ describe('generateFrontendSveltekit — hey-api / TanStack Query overlay', () =>
 			'errors,',
 			'submitting',
 			'turnstileTokenProxy'
-		])
-			expect(login).not.toContain(unused)
+		]) expect(login).not.toContain(unused)
 		expect(login).toContain('continueWithGoogle')
 	})
 })

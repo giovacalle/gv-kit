@@ -23,7 +23,7 @@ describe('users-worker bindings', () => {
 		if (isCf) {
 			test(`${file} (cf-workers) binds AUTH service and never names BETTER_AUTH_SECRET`, () => {
 				const entries = runGenerators(cfg)
-				const wrangler = entries.find((e) => e.path === 'apps/api/users/wrangler.jsonc')
+				const wrangler = entries.find((e) => e.path === 'services/users/wrangler.jsonc')
 				expect(wrangler).toBeDefined()
 
 				const parsed = parseJsonc<{
@@ -37,15 +37,15 @@ describe('users-worker bindings', () => {
 				expect(wrangler!.content).not.toContain('BETTER_AUTH_SECRET')
 			})
 		} else {
-			test(`${file} (non-cf) does NOT emit apps/api/users/wrangler.jsonc`, () => {
+			test(`${file} (non-cf) does NOT emit services/users/wrangler.jsonc`, () => {
 				const entries = runGenerators(cfg)
-				const wrangler = entries.find((e) => e.path === 'apps/api/users/wrangler.jsonc')
+				const wrangler = entries.find((e) => e.path === 'services/users/wrangler.jsonc')
 				expect(wrangler).toBeUndefined()
 			})
 
 			test(`${file} (non-cf) users package depends on @hono/node-server and never reads BETTER_AUTH_SECRET`, () => {
 				const entries = runGenerators(cfg)
-				const pkg = entries.find((e) => e.path === 'apps/api/users/package.json')
+				const pkg = entries.find((e) => e.path === 'services/users/package.json')
 				expect(pkg).toBeDefined()
 				const parsed = JSON.parse(pkg!.content) as {
 					dependencies: Record<string, string>
@@ -54,13 +54,9 @@ describe('users-worker bindings', () => {
 				expect(parsed.dependencies['@hono/node-server']).toBeDefined()
 				expect(parsed.devDependencies.wrangler).toBeUndefined()
 
-				const userSources = entries.filter((e) => e.path.startsWith('apps/api/users/src/'))
+				const userSources = entries.filter((e) => e.path.startsWith('services/users/src/'))
 				for (const src of userSources) {
 					expect(src.content).not.toContain('BETTER_AUTH_SECRET')
-					// Forbidden: the better-auth handler factory subpath. The
-					// boundary contract is that users-worker NEVER imports the
-					// auth factory directly. The deploy-aware session middleware
-					// at `@repo/backend/middleware/auth` is allowed and required.
 					expect(src.content).not.toContain(`from '@repo/backend/auth'`)
 				}
 			})
@@ -68,21 +64,35 @@ describe('users-worker bindings', () => {
 
 		test(`${file} users-worker uses @repo/backend/middleware/auth (deploy-aware) on protected routes`, () => {
 			const entries = runGenerators(cfg)
-			const appTs = entries.find((e) => e.path === 'apps/api/users/src/app.ts')
+			const appTs = entries.find((e) => e.path === 'services/users/src/app.ts')
 			expect(appTs).toBeDefined()
-			// Must import requireAuth from the deploy-aware middleware. Asserts
-			// W4 wired the middleware/auth subpath rather than a local
-			// auth-client + factory pair.
 			expect(appTs!.content).toContain(`from '@repo/backend/middleware/auth'`)
 			expect(appTs!.content).toContain('requireAuth')
 		})
 
+		if (cfg.choices.auth.length > 0) {
+			test(`${file} documents shared users data access without exclusive auth-table ownership`, () => {
+				const entries = runGenerators(cfg)
+				const readme = entries.find((e) => e.path === 'services/users/README.md')!.content
+				const dataAccess = entries.find(
+					(e) => e.path === 'packages/backend/src/core/data-access/users.ts'
+				)!.content
+
+				expect(readme).toContain('transport/runtime adapter')
+				expect(readme).toContain('`@repo/backend/core/use-cases/users`')
+				expect(readme).toContain('`authSchema.user`')
+				expect(readme).toContain('Better Auth configuration and secrets')
+				expect(readme).not.toMatch(/query auth tables \(`account`|never read auth secrets or query auth tables/i)
+				expect(dataAccess).toContain('from(authSchema.user)')
+			})
+		}
+
 		test(`${file} users-worker does NOT emit removed auth-client / require-auth / env.ts`, () => {
 			const entries = runGenerators(cfg)
 			const removedPaths = [
-				'apps/api/users/src/lib/auth-client.ts',
-				'apps/api/users/src/middleware/require-auth.ts',
-				'apps/api/users/src/env.ts'
+				'services/users/src/lib/auth-client.ts',
+				'services/users/src/middleware/require-auth.ts',
+				'services/users/src/env.ts'
 			]
 			for (const path of removedPaths) {
 				const found = entries.find((e) => e.path === path)

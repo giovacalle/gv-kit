@@ -1,7 +1,7 @@
 # Client data — TanStack Query (svelte-query)
 
-The generated client (`@repo/openapi-client/<service>`) ships both plain SDK
-functions and TanStack Query options. This rule fences where each belongs.
+The flat generated client (`@repo/openapi-client`) ships both plain SDK
+functions and TanStack Query options. Domain-prefixed operation IDs keep root exports unique.
 
 ## The split — server-first stays server-first
 
@@ -19,10 +19,10 @@ NOT replace load functions, form actions, or the auth client.
 
 ```ts
 // +page.server.ts
-import { getUsersMe } from '@repo/openapi-client/users'
+import { usersGetMe } from '@repo/openapi-client'
 
-export const load = async ({ fetch }) => {
-	const { data } = await getUsersMe({ fetch }) // event.fetch → cookie forwarding
+export const load = async ({ fetch, url }) => {
+	const { data } = await usersGetMe({ baseUrl: url.origin, fetch }) // event.fetch routes same-origin API calls privately
 	return { profile: data }
 }
 ```
@@ -32,17 +32,17 @@ export const load = async ({ fetch }) => {
 ```svelte
 <script lang="ts">
 	import { createQuery } from '@tanstack/svelte-query'
-	import { getUsersMeOptions } from '@repo/openapi-client/users'
+	import { usersGetMeOptions } from '@repo/openapi-client'
 
-	const profile = createQuery(() => getUsersMeOptions())
+	const profile = createQuery(() => usersGetMeOptions())
 </script>
 ```
 
 Wrap option args in a function — `createQuery(() => options)` — so reactive
 inputs (a search term, filters, an id) re-run the query. Access results
 directly with runes, no `$`: `profile.data`, `profile.isPending`,
-`profile.isError`. For paginated endpoints the generator also emits
-`<op>InfiniteOptions` for `createInfiniteQuery`.
+`profile.isError`. Paginated endpoints also expose `<op>InfiniteOptions` for
+`createInfiniteQuery`.
 
 ## The QueryClient is per-request
 
@@ -80,4 +80,4 @@ genuinely client-only, non-form interactions.
 | `createMutation` for a form submit               | `superForms` + form action                  |
 | `new QueryClient()` at module scope              | per-request in `+layout.ts` load            |
 | Query the auth service via the generated client  | `authClient` from `$lib/auth/client`        |
-| `createQuery(getUsersMeOptions())` (no fn)       | `createQuery(() => getUsersMeOptions())`    |
+| `createQuery(usersGetMeOptions())` (no fn)       | `createQuery(() => usersGetMeOptions())`    |

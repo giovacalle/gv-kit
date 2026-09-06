@@ -1,4 +1,9 @@
 import { describe, expect, test } from 'bun:test'
+import { unsafeArtifactFindings } from '../../scripts/gateway-verification-evidence.js'
+import {
+	reportDockerVerifierFailure,
+	signInWithDockerOtp
+} from '../../scripts/verify-gateway-docker.js'
 import { generateDeploy } from '../../src/generators/deploy.js'
 import { runGenerators } from '../../src/generators/index.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
@@ -46,6 +51,80 @@ function composeServices(): Record<string, Record<string, unknown>> {
 	}
 	return document.services
 }
+
+describe('Docker gateway verifier diagnostics', () => {
+	test('redacts every occurrence of the extracted OTP from sign-in failures', async () => {
+		const otp = '731946'
+		let requestCount = 0
+		let diagnostic = ''
+		try {
+			await signInWithDockerOtp({
+				project: '.',
+				env: {},
+				origin: 'http://localhost:3000',
+				email: 'docker-verifier@example.test',
+				request: async () => {
+					requestCount += 1
+					if (requestCount === 1) return new Response(null, { status: 204 })
+					return Response.json(
+						{ error: `submitted ${otp}; repeated ${otp}`, otp },
+						{ status: 401 }
+					)
+				},
+				readOtp: async () => otp
+			})
+		} catch (error) {
+			diagnostic = error instanceof Error ? error.message : String(error)
+		}
+
+		expect(diagnostic).toContain('OTP sign-in failed at http://localhost:3000: 401')
+		expect(diagnostic).not.toContain(otp)
+		expect(diagnostic.match(/\[REDACTED\]/g)).toHaveLength(3)
+		expect(unsafeArtifactFindings(diagnostic)).toEqual([])
+	})
+
+	test('sanitizes OTP-send failure diagnostics through the shared evidence policy', async () => {
+		const otp = '482615'
+		const token = 'ghp_abcdefghijklmnopqrstuvwxyz'
+		let diagnostic = ''
+		try {
+			await signInWithDockerOtp({
+				project: '.',
+				env: {},
+				origin: 'http://localhost:3000',
+				email: 'docker-verifier@example.test',
+				request: async () =>
+					new Response(
+						`[auth] OTP for docker-verifier@example.test: ${otp}; {"otp":"${otp}"}; Authorization: Bearer ${token}; /Users/private/gv-kit`,
+						{ status: 503 }
+					)
+			})
+		} catch (error) {
+			diagnostic = error instanceof Error ? error.message : String(error)
+		}
+
+		expect(diagnostic).toContain('OTP send failed at http://localhost:3000: 503')
+		expect(diagnostic).not.toContain(otp)
+		expect(diagnostic).not.toContain(token)
+		expect(diagnostic).not.toContain('/Users/private')
+		expect(unsafeArtifactFindings(diagnostic)).toEqual([])
+	})
+
+	test('sanitizes the actual terminal error reporter', () => {
+		const output: string[] = []
+		reportDockerVerifierFailure(
+			new Error(
+				'[auth] OTP for terminal@example.test: 364821; {"otp":"364821"}; /home/private/gv-kit'
+			),
+			(diagnostic) => output.push(diagnostic)
+		)
+
+		expect(output).toHaveLength(1)
+		expect(output[0]).not.toContain('364821')
+		expect(output[0]).not.toContain('/home/private')
+		expect(unsafeArtifactFindings(output[0]!)).toEqual([])
+	})
+})
 
 describe('Docker gateway topology', () => {
 	test('publishes only ingress and gateway while keeping auth and users private', () => {

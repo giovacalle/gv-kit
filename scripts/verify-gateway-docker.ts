@@ -5,7 +5,11 @@ import { join, resolve } from 'node:path'
 import { parseJsonc } from '../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../src/pipeline/plan.js'
 import { GvKitConfig } from '../src/schema/config.js'
-import { appendCommandEvidence, writeSanitizedArtifact } from './gateway-verification-evidence.js'
+import {
+	appendCommandEvidence,
+	redactArtifactText,
+	writeSanitizedArtifact
+} from './gateway-verification-evidence.js'
 
 const PNPM_VERSION = '11.1.1'
 let webOrigin = 'http://localhost:3000'
@@ -431,30 +435,50 @@ async function waitForOtp({
 	throw new Error(`Timed out waiting for the container OTP for ${email}`)
 }
 
-async function signIn({
+export function dockerVerifierFailureDiagnostic(
+	error: unknown,
+	exactSecrets: string[] = []
+): string {
+	let diagnostic = error instanceof Error ? error.message : String(error)
+	for (const secret of [...exactSecrets].sort((left, right) => right.length - left.length)) if (secret) diagnostic = diagnostic.replaceAll(secret, '[REDACTED]')
+	return redactArtifactText(diagnostic, [resolve('.')])
+}
+
+export function reportDockerVerifierFailure(
+	error: unknown,
+	write: (diagnostic: string) => void = console.error
+): void {
+	write(dockerVerifierFailureDiagnostic(error))
+}
+
+export async function signInWithDockerOtp({
 	project,
 	env,
 	origin,
-	email
+	email,
+	request = postJson,
+	readOtp = waitForOtp
 }: {
 	project: string
 	env: NodeJS.ProcessEnv
 	origin: string
 	email: string
+	request?: typeof postJson
+	readOtp?: typeof waitForOtp
 }): Promise<CookieJar> {
-	const send = await postJson({
+	const send = await request({
 		url: `${origin}/api/auth/email-otp/send-verification-otp`,
 		body: { email, type: 'sign-in' },
 		headers: { origin, 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' }
 	})
-	if (!send.ok) throw new Error(`OTP send failed at ${origin}: ${send.status} ${await send.text()}`)
-	const otp = await waitForOtp({ project, env, email })
-	const response = await postJson({
+	if (!send.ok) throw new Error(dockerVerifierFailureDiagnostic(`OTP send failed at ${origin}: ${send.status} ${await send.text()}`))
+	const otp = await readOtp({ project, env, email })
+	const response = await request({
 		url: `${origin}/api/auth/sign-in/email-otp`,
 		body: { email, otp },
 		headers: { origin }
 	})
-	if (!response.ok) throw new Error(`OTP sign-in failed at ${origin}: ${response.status} ${await response.text()}`)
+	if (!response.ok) throw new Error(dockerVerifierFailureDiagnostic(`OTP sign-in failed at ${origin}: ${response.status} ${await response.text()}`, [otp]))
 	const jar = cookieJar(response)
 	if (!jar.header) throw new Error(`OTP sign-in at ${origin} did not set a cookie`)
 	if (jar.setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie))) throw new Error(`OTP sign-in at ${origin} emitted a domain cookie`)
@@ -579,8 +603,8 @@ async function verifyRuntime({
 	const suffix = Date.now()
 	const webEmail = `docker-web-${suffix}@example.test`
 	const apiEmail = `docker-api-${suffix}@example.test`
-	const webJar = await signIn({ project, env, origin: webOrigin, email: webEmail })
-	const apiJar = await signIn({ project, env, origin: apiOrigin, email: apiEmail })
+	const webJar = await signInWithDockerOtp({ project, env, origin: webOrigin, email: webEmail })
+	const apiJar = await signInWithDockerOtp({ project, env, origin: apiOrigin, email: apiEmail })
 	if (webJar.header === apiJar.header) throw new Error('Web and API origins shared a cookie jar')
 	const webSession = await session({ origin: webOrigin, jar: webJar, email: webEmail })
 	const apiSession = await session({ origin: apiOrigin, jar: apiJar, email: apiEmail })
@@ -1017,7 +1041,7 @@ async function main(): Promise<void> {
 
 if (import.meta.main) {
 	main().catch((error: unknown) => {
-		console.error(error instanceof Error ? error.message : String(error))
+		reportDockerVerifierFailure(error)
 		process.exitCode = 1
 	})
 }

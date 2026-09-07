@@ -18,6 +18,7 @@ const LOCAL_ENVIRONMENT_NAMES = [
 	'API_CORS_ORIGINS',
 	'API_PUBLIC_ORIGIN',
 	'AUTH_CORS_ORIGINS',
+	'AUTH_OTP_CAPTURE',
 	'AUTH_URL',
 	'BETTER_AUTH_ALLOWED_HOSTS',
 	'BETTER_AUTH_SECRET',
@@ -181,7 +182,7 @@ async function writeLocalEnvironment(
 	authUrl: string
 ): Promise<Record<string, string>> {
 	const example = await readFile(join(project, '.env.example'), 'utf8')
-	const environment = example
+	const environment = `${example
 		.replace(
 			/^BETTER_AUTH_SECRET=$/m,
 			'BETTER_AUTH_SECRET=local-only-better-auth-secret-at-least-32-characters'
@@ -194,7 +195,7 @@ async function writeLocalEnvironment(
 		.replace(
 			/^GATEWAY_TRUSTED_INGRESS_SECRET=$/m,
 			'GATEWAY_TRUSTED_INGRESS_SECRET=local-only-gateway-ingress-secret'
-		)
+		)}AUTH_OTP_CAPTURE=console\n`
 	await writeFile(join(project, '.env'), environment)
 	return Object.fromEntries(
 		environment.split('\n').flatMap((line) => {

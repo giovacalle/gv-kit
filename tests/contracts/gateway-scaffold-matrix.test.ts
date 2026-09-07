@@ -55,6 +55,12 @@ describe('gateway generated-workspace verification matrix', () => {
 		const conflictingParent = {
 			PATH: '/usr/bin',
 			DOCKER_CONFIG: '/tmp/docker-config',
+			AUTH_OTP_CAPTURE: 'console',
+			FROM_EMAIL: 'parent@example.test',
+			NOTIFUSE_API_KEY: 'parent-notifuse-key',
+			NOTIFUSE_BASE_URL: 'https://parent-notifuse.example.test',
+			NOTIFUSE_WORKSPACE_ID: 'parent-workspace',
+			RESEND_API_KEY: 'parent-resend-key',
 			ORIGIN: 'https://parent-web.example.test',
 			BETTER_AUTH_ALLOWED_HOSTS: 'parent-web.example.test,parent-api.example.test',
 			AUTH_CORS_ORIGINS: 'https://parent-web.example.test',
@@ -96,6 +102,14 @@ describe('gateway generated-workspace verification matrix', () => {
 				`${webOrigin},${apiOrigin},http://localhost:8786,http://127.0.0.1:8786`
 			)
 			expect(runtimeEnvironment.DOCKER_CONFIG, String(webPort)).toBe('/tmp/docker-config')
+			for (const name of [
+				'AUTH_OTP_CAPTURE',
+				'FROM_EMAIL',
+				'NOTIFUSE_API_KEY',
+				'NOTIFUSE_BASE_URL',
+				'NOTIFUSE_WORKSPACE_ID',
+				'RESEND_API_KEY'
+			]) expect(runtimeEnvironment[name], `${name}:${webPort}`).toBeUndefined()
 		}
 	})
 

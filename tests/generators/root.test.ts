@@ -136,6 +136,7 @@ describe('generateRoot — Astro project shape', () => {
 			'AUTH_CORS_ORIGINS',
 			'RESEND_API_KEY',
 			'FROM_EMAIL',
+			'AUTH_OTP_CAPTURE',
 			'TURNSTILE_SECRET_KEY'
 		])
 		expect(turbo.tasks['@demo/users-worker#dev']?.env).toEqual(['SQLITE_PATH', 'AUTH_URL'])

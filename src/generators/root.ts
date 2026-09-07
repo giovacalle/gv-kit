@@ -198,7 +198,7 @@ function renderHonoDevTasks(cfg: GvKitConfig) {
 	if (cfg.choices.auth.includes('google')) authEnv.push('GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET')
 	if (cfg.choices.email === 'resend') authEnv.push('RESEND_API_KEY', 'FROM_EMAIL')
 	if (cfg.choices.email === 'notifuse') authEnv.push('NOTIFUSE_API_KEY', 'NOTIFUSE_WORKSPACE_ID', 'NOTIFUSE_BASE_URL')
-	if (cfg.choices.auth.includes('emailOTP')) authEnv.push('TURNSTILE_SECRET_KEY')
+	if (cfg.choices.auth.includes('emailOTP')) authEnv.push('AUTH_OTP_CAPTURE', 'TURNSTILE_SECRET_KEY')
 	authEnv.push(...cloudflareDevEnv)
 
 	const webEnv: string[] = [HONO_GATEWAY.transport.node.targetEnvironmentVariable]

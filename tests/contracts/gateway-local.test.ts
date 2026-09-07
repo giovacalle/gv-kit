@@ -83,7 +83,12 @@ describe('Cloudflare gateway local environment', () => {
 		for (const packageTask of cloudflareWorkerPackages) expect(turbo.tasks[packageTask]?.env, packageTask).toContain(PROCESS_ENV_BRIDGE)
 		expect(gatewayPackage.scripts.dev).toContain('wrangler dev --host api.localhost:8786')
 		expect(gatewayWrangler.dev.host).toBe('localhost')
+		expect(
+			turbo.tasks['@hono-cf-workers-passwordless/auth-worker#dev']?.env
+		).toContain('AUTH_OTP_CAPTURE')
 		expect(entry(entries, '.env.example')).not.toContain(PROCESS_ENV_BRIDGE)
+		expect(entry(entries, '.env.example')).not.toContain('AUTH_OTP_CAPTURE')
+		expect(entry(entries, 'services/auth/wrangler.jsonc')).not.toContain('AUTH_OTP_CAPTURE')
 	})
 
 	test('local forwarding does not create package environment files or alter publishing commands', () => {
@@ -103,6 +108,12 @@ describe('Cloudflare gateway local environment', () => {
 			expect(pkg.scripts['deploy:production'], path).not.toContain(PROCESS_ENV_BRIDGE)
 			expect(pkg.scripts['deploy:staging'], path).not.toContain(PROCESS_ENV_BRIDGE)
 		}
+	})
+
+	test('the verifier alone enables local OTP capture', () => {
+		const verifier = readFileSync(join(import.meta.dir, '..', '..', 'scripts/verify-gateway-local.ts'), 'utf8')
+		expect(verifier).toContain('AUTH_OTP_CAPTURE=console')
+		expect(verifier).toContain("'AUTH_OTP_CAPTURE'")
 	})
 
 	test('non-Cloudflare and non-Hono plans do not enable Wrangler process forwarding', () => {

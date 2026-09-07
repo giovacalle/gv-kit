@@ -142,9 +142,7 @@ function pkgJson({
 	const dependencies: Record<string, string> = {
 		'@hono/zod-openapi': '^1.0.0',
 		'@repo/backend': 'workspace:*',
-		...(hasAuth
-			? { '@repo/db': 'workspace:*', 'better-auth': '^1.6.0' }
-			: {}),
+		...(hasAuth ? { '@repo/db': 'workspace:*', 'better-auth': '^1.6.0' } : {}),
 		hono: '^4.6.0',
 		zod: '^4.3.0'
 	}
@@ -262,8 +260,9 @@ function wranglerJsonc({
 	webHost: string
 	hasAuth: boolean
 }): string {
-	const dbBlock = hasAuth && usesSqlite
-		? `,
+	const dbBlock =
+		hasAuth && usesSqlite
+			? `,
 	"d1_databases": [
 		{
 			"binding": "DB",
@@ -271,7 +270,7 @@ function wranglerJsonc({
 			"database_id": "<run: wrangler d1 create ${project}-db>"
 		}
 	]`
-		: ''
+			: ''
 
 	const requiredSecrets = hasAuth ? ['BETTER_AUTH_SECRET'] : []
 	if (hasAuth && !usesSqlite) requiredSecrets.push('DATABASE_URL')
@@ -354,7 +353,9 @@ export {}
 		}
 	}
 
-	const turnstileLine = wantsEmailOTP ? '\t\tTURNSTILE_SECRET_KEY: string\n' : ''
+	const turnstileLine = wantsEmailOTP
+		? '\t\tAUTH_OTP_CAPTURE?: string\n\t\tTURNSTILE_SECRET_KEY: string\n'
+		: ''
 
 	const nodeDb = usesSqlite ? '\t\tSQLITE_PATH?: string' : '\t\tDATABASE_URL: string'
 
@@ -414,14 +415,18 @@ function authTs({
 
 		const mailerLine = wantsEmailOTP
 			? usesNotifuse
-				? `\tconst mailer = env.NOTIFUSE_API_KEY
-\t\t? createMailer({
-\t\t\tapiKey: env.NOTIFUSE_API_KEY,
-\t\t\tworkspaceId: env.NOTIFUSE_WORKSPACE_ID,
-\t\t\tbaseUrl: env.NOTIFUSE_BASE_URL
-\t\t})
-\t\t: null\n\n`
-				: `\tconst mailer = env.RESEND_API_KEY ? createMailer(env.RESEND_API_KEY) : null\n\n`
+				? `\tconst captureOtp = (env as Env & { AUTH_OTP_CAPTURE?: string }).AUTH_OTP_CAPTURE === 'console'
+\tconst mailer =
+\t\tenv.NOTIFUSE_API_KEY && env.NOTIFUSE_WORKSPACE_ID && env.NOTIFUSE_BASE_URL
+\t\t\t? createMailer({
+\t\t\t\tapiKey: env.NOTIFUSE_API_KEY,
+\t\t\t\tworkspaceId: env.NOTIFUSE_WORKSPACE_ID,
+\t\t\t\tbaseUrl: env.NOTIFUSE_BASE_URL
+\t\t\t})
+\t\t\t: null\n\n`
+				: `\tconst captureOtp = (env as Env & { AUTH_OTP_CAPTURE?: string }).AUTH_OTP_CAPTURE === 'console'
+\tconst mailer =
+\t\tenv.RESEND_API_KEY && env.FROM_EMAIL ? createMailer(env.RESEND_API_KEY) : null\n\n`
 			: ''
 
 		const otpPlugin = wantsEmailOTP
@@ -431,14 +436,21 @@ function authTs({
 \t\t\texpiresIn: 600,
 \t\t\tasync sendVerificationOTP({ email, otp }, ctx) {
 \t\t\t\tif (!mailer) {
-\t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
-\t\t\t\t\treturn
+\t\t\t\t\tif (captureOtp) {
+\t\t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
+\t\t\t\t\t\treturn
+\t\t\t\t\t}
+\t\t\t\t\tthrow new Error('OTP mailer is not configured')
 \t\t\t\t}
-\t\t\t\tawait mailer.send({
-\t\t\t\t\tto: { email, language: pickLocale(ctx?.request?.headers) },
-\t\t\t\t\ttemplate: 'otp-login',
-\t\t\t\t\tdata: { code: otp, expiry_minutes: 10 }
-\t\t\t\t})
+\t\t\t\ttry {
+\t\t\t\t\tawait mailer.send({
+\t\t\t\t\t\tto: { email, language: pickLocale(ctx?.request?.headers) },
+\t\t\t\t\t\ttemplate: 'otp-login',
+\t\t\t\t\t\tdata: { code: otp, expiry_minutes: 10 }
+\t\t\t\t\t})
+\t\t\t\t} catch {
+\t\t\t\t\tthrow new Error('OTP delivery failed')
+\t\t\t\t}
 \t\t\t}
 \t\t})`
 				: `\t\temailOTP({
@@ -446,19 +458,26 @@ function authTs({
 \t\t\texpiresIn: 600,
 \t\t\tasync sendVerificationOTP({ email, otp }, ctx) {
 \t\t\t\tif (!mailer) {
-\t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
-\t\t\t\t\treturn
-\t\t\t\t}
-\t\t\t\tawait mailer.sendTemplate({
-\t\t\t\t\tfrom: env.FROM_EMAIL,
-\t\t\t\t\tto: email,
-\t\t\t\t\ttemplate: 'otp',
-\t\t\t\t\tdata: {
-\t\t\t\t\t\tcode: otp,
-\t\t\t\t\t\texpiryMinutes: 10,
-\t\t\t\t\t\tlocale: pickLocale(ctx?.request?.headers) as Locale
+\t\t\t\t\tif (captureOtp) {
+\t\t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
+\t\t\t\t\t\treturn
 \t\t\t\t\t}
-\t\t\t\t})
+\t\t\t\t\tthrow new Error('OTP mailer is not configured')
+\t\t\t\t}
+\t\t\t\ttry {
+\t\t\t\t\tawait mailer.sendTemplate({
+\t\t\t\t\t\tfrom: env.FROM_EMAIL,
+\t\t\t\t\t\tto: email,
+\t\t\t\t\t\ttemplate: 'otp',
+\t\t\t\t\t\tdata: {
+\t\t\t\t\t\t\tcode: otp,
+\t\t\t\t\t\t\texpiryMinutes: 10,
+\t\t\t\t\t\t\tlocale: pickLocale(ctx?.request?.headers) as Locale
+\t\t\t\t\t\t}
+\t\t\t\t\t})
+\t\t\t\t} catch {
+\t\t\t\t\tthrow new Error('OTP delivery failed')
+\t\t\t\t}
 \t\t\t}
 \t\t})`
 			: ''
@@ -514,14 +533,20 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 
 	const mailerLine = wantsEmailOTP
 		? usesNotifuse
-			? `const mailer = process.env.NOTIFUSE_API_KEY
-\t? createMailer({
-\t\tapiKey: process.env.NOTIFUSE_API_KEY,
-\t\tworkspaceId: process.env.NOTIFUSE_WORKSPACE_ID ?? '',
-\t\tbaseUrl: process.env.NOTIFUSE_BASE_URL ?? ''
-\t})
-\t: null\n\n`
-			: `const mailer = process.env.RESEND_API_KEY
+			? `const captureOtp = process.env.AUTH_OTP_CAPTURE === 'console'
+const mailer =
+\tprocess.env.NOTIFUSE_API_KEY &&
+\tprocess.env.NOTIFUSE_WORKSPACE_ID &&
+\tprocess.env.NOTIFUSE_BASE_URL
+\t\t? createMailer({
+\t\t\tapiKey: process.env.NOTIFUSE_API_KEY,
+\t\t\tworkspaceId: process.env.NOTIFUSE_WORKSPACE_ID,
+\t\t\tbaseUrl: process.env.NOTIFUSE_BASE_URL
+\t\t})
+\t\t: null\n\n`
+			: `const captureOtp = process.env.AUTH_OTP_CAPTURE === 'console'
+const fromEmail = process.env.FROM_EMAIL ?? ''
+const mailer = process.env.RESEND_API_KEY && fromEmail
 \t? createMailer(process.env.RESEND_API_KEY)
 \t: null\n\n`
 		: ''
@@ -533,14 +558,21 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 \t\texpiresIn: 600,
 \t\tasync sendVerificationOTP({ email, otp }, ctx) {
 \t\t\tif (!mailer) {
-\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
-\t\t\t\treturn
+\t\t\t\tif (captureOtp) {
+\t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
+\t\t\t\t\treturn
+\t\t\t\t}
+\t\t\t\tthrow new Error('OTP mailer is not configured')
 \t\t\t}
-\t\t\tawait mailer.send({
-\t\t\t\tto: { email, language: pickLocale(ctx?.request?.headers) },
-\t\t\t\ttemplate: 'otp-login',
-\t\t\t\tdata: { code: otp, expiry_minutes: 10 }
-\t\t\t})
+\t\t\ttry {
+\t\t\t\tawait mailer.send({
+\t\t\t\t\tto: { email, language: pickLocale(ctx?.request?.headers) },
+\t\t\t\t\ttemplate: 'otp-login',
+\t\t\t\t\tdata: { code: otp, expiry_minutes: 10 }
+\t\t\t\t})
+\t\t\t} catch {
+\t\t\t\tthrow new Error('OTP delivery failed')
+\t\t\t}
 \t\t}
 \t})`
 			: `\temailOTP({
@@ -548,19 +580,26 @@ ${mailerLine}${pluginsBlock}${googleBlock}\treturn betterAuth({
 \t\texpiresIn: 600,
 \t\tasync sendVerificationOTP({ email, otp }, ctx) {
 \t\t\tif (!mailer) {
-\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
-\t\t\t\treturn
-\t\t\t}
-\t\t\tawait mailer.sendTemplate({
-\t\t\t\tfrom: process.env.FROM_EMAIL ?? '',
-\t\t\t\tto: email,
-\t\t\t\ttemplate: 'otp',
-\t\t\t\tdata: {
-\t\t\t\t\tcode: otp,
-\t\t\t\t\texpiryMinutes: 10,
-\t\t\t\t\tlocale: pickLocale(ctx?.request?.headers) as Locale
+\t\t\t\tif (captureOtp) {
+\t\t\t\t\tconsole.log(\`[auth] OTP for \${email}: \${otp}\`)
+\t\t\t\t\treturn
 \t\t\t\t}
-\t\t\t})
+\t\t\t\tthrow new Error('OTP mailer is not configured')
+\t\t\t}
+\t\t\ttry {
+\t\t\t\tawait mailer.sendTemplate({
+\t\t\t\t\tfrom: fromEmail,
+\t\t\t\t\tto: email,
+\t\t\t\t\ttemplate: 'otp',
+\t\t\t\t\tdata: {
+\t\t\t\t\t\tcode: otp,
+\t\t\t\t\t\texpiryMinutes: 10,
+\t\t\t\t\t\tlocale: pickLocale(ctx?.request?.headers) as Locale
+\t\t\t\t\t}
+\t\t\t\t})
+\t\t\t} catch {
+\t\t\t\tthrow new Error('OTP delivery failed')
+\t\t\t}
 \t\t}
 \t})`
 		: ''
@@ -960,6 +999,17 @@ TURNSTILE_SECRET_KEY=...
 
 	const captchaSecrets = wantsEmailOTP ? `\n### Captcha secret${captchaSecretsBody}` : ''
 
+	const localOtpCaptureNote = wantsEmailOTP
+		? `
+
+## Local OTP verification
+
+OTP delivery fails closed when the selected mailer is not fully configured. For
+local synthetic verification only, set \`AUTH_OTP_CAPTURE=console\` to emit the
+recipient and OTP to the local process output. Never set this variable in
+production or preview environments.`
+		: ''
+
 	const otpLocaleNote = wantsEmailOTP
 		? usesNotifuse
 			? `
@@ -1009,7 +1059,7 @@ independent API origin with credentials. Unknown hosts and origins are rejected.
 wrangler secret put BETTER_AUTH_SECRET
 \`\`\`
 ${emailSecrets}${captchaSecrets}${oauth}
-Then edit \`wrangler.jsonc\` and replace \`<domain>\` with your apex domain.${trustedOriginsNote}${otpLocaleNote}
+Then edit \`wrangler.jsonc\` and replace \`<domain>\` with your apex domain.${trustedOriginsNote}${localOtpCaptureNote}${otpLocaleNote}
 
 ## Local dev
 
@@ -1021,7 +1071,7 @@ pnpm dev
 
 Set \`BETTER_AUTH_SECRET\` in \`.env\` (dev) or your host platform's secret
 manager (prod).
-${emailSecrets}${captchaSecrets}${oauth}${trustedOriginsNote}${otpLocaleNote}
+${emailSecrets}${captchaSecrets}${oauth}${trustedOriginsNote}${localOtpCaptureNote}${otpLocaleNote}
 
 ## Local dev
 

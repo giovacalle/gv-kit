@@ -59,10 +59,19 @@ export function createDockerRuntimeEnvironment({
 	webOrigin,
 	apiOrigin
 }: DockerRuntimeEnvironmentOptions): NodeJS.ProcessEnv {
+	const environment = { ...inheritedEnvironment }
+	for (const name of [
+		'AUTH_OTP_CAPTURE',
+		'FROM_EMAIL',
+		'NOTIFUSE_API_KEY',
+		'NOTIFUSE_BASE_URL',
+		'NOTIFUSE_WORKSPACE_ID',
+		'RESEND_API_KEY'
+	]) delete environment[name]
 	const webHost = new URL(webOrigin).host
 	const apiHost = new URL(apiOrigin).host
 	return {
-		...inheritedEnvironment,
+		...environment,
 		CI: '1',
 		PATH: `${binPath}:${inheritedEnvironment.PATH ?? ''}`,
 		COMPOSE_PROJECT_NAME: projectName,
@@ -807,6 +816,7 @@ async function main(): Promise<void> {
 	const generated = await materialize(args.fixture, args.output)
 	if (args.contract) await installStreamingProbe(generated.project)
 	const hasAuth = generated.config.choices.auth.length > 0
+	const wantsEmailOtp = generated.config.choices.auth.includes('emailOTP')
 	const hasMarketing = generated.config.choices.marketing === 'astro'
 	const webPort = await availableRuntimePort(3000, 13_000)
 	const marketingPort = hasMarketing ? await availableRuntimePort(4321, 14_000) : 4321
@@ -814,6 +824,21 @@ async function main(): Promise<void> {
 	apiOrigin = `http://${API_HOST}:${webPort}`
 	marketingOrigin = `http://localhost:${marketingPort}`
 	const composeOverrides = ['services:']
+	if (wantsEmailOtp) {
+		composeOverrides.push(
+			'  auth:',
+			'    environment:',
+			'      AUTH_OTP_CAPTURE: "console"'
+		)
+		if (generated.config.choices.email === 'resend') composeOverrides.push('      RESEND_API_KEY: ""', '      FROM_EMAIL: ""')
+		if (generated.config.choices.email === 'notifuse') {
+			composeOverrides.push(
+				'      NOTIFUSE_API_KEY: ""',
+				'      NOTIFUSE_WORKSPACE_ID: ""',
+				'      NOTIFUSE_BASE_URL: ""'
+			)
+		}
+	}
 	const marketingOverrides = [
 		'  marketing:',
 		'    ports: !override',

@@ -143,11 +143,35 @@ describe('auth-worker generator (post-rewrite)', () => {
 		})
 
 		if (cfg.choices.auth.includes('emailOTP')) {
-			test(`${file} (emailOTP) wires emailOTP plugin and @repo/mailer`, () => {
+			test(`${file} (emailOTP) wires fail-closed delivery and local-only capture`, () => {
 				const entries = runGenerators(cfg)
 				const authTs = entries.find((e) => e.path === 'services/auth/src/auth.ts')!
+				const readme = entries.find((e) => e.path === 'services/auth/README.md')!.content
 				expect(authTs.content).toContain('emailOTP({')
 				expect(authTs.content).toContain('sendVerificationOTP')
+				expect(authTs.content).toContain("AUTH_OTP_CAPTURE === 'console'")
+				expect(authTs.content).toContain("throw new Error('OTP mailer is not configured')")
+				expect(readme).toContain('AUTH_OTP_CAPTURE=console')
+				expect(readme).toContain('Never set this variable in\nproduction or preview environments.')
+				expect(entries.find((e) => e.path === '.env.example')!.content).not.toContain(
+					'AUTH_OTP_CAPTURE'
+				)
+				if (cfg.choices.deploy === 'cf-workers') {
+					expect(
+						entries.find((e) => e.path === 'services/auth/wrangler.jsonc')!.content
+					).not.toContain('AUTH_OTP_CAPTURE')
+					expect(
+						entries.find((e) => e.path === '.github/workflows/deploy-production.yml')!.content
+					).not.toContain('AUTH_OTP_CAPTURE')
+					expect(
+						entries.find((e) => e.path === '.github/workflows/deploy-staging.yml')!.content
+					).not.toContain('AUTH_OTP_CAPTURE')
+				}
+				if (cfg.choices.deploy === 'docker') {
+					expect(entries.find((e) => e.path === 'docker-compose.yml')!.content).not.toContain(
+						'AUTH_OTP_CAPTURE'
+					)
+				}
 
 				const pkg = entries.find((e) => e.path === 'services/auth/package.json')!
 				const parsed = JSON.parse(pkg.content) as { dependencies: Record<string, string> }

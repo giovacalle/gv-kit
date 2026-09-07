@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { describe, expect, test } from 'bun:test'
 import { unsafeArtifactFindings } from '../../scripts/gateway-verification-evidence.js'
 import {
@@ -314,6 +316,14 @@ describe('Docker gateway topology', () => {
 		expect(authEnvironment.TURNSTILE_SECRET_KEY).toContain('set TURNSTILE_SECRET_KEY')
 		expect(authEnvironment.RESEND_API_KEY).toBe('${RESEND_API_KEY:-}')
 		expect(authEnvironment.FROM_EMAIL).toBe('${FROM_EMAIL:-}')
+		expect(authEnvironment.AUTH_OTP_CAPTURE).toBeUndefined()
+		const verifier = readFileSync(
+			join(import.meta.dir, '..', '..', 'scripts/verify-gateway-docker.ts'),
+			'utf8'
+		)
+		expect(verifier).toContain("'      AUTH_OTP_CAPTURE: \"console\"'")
+		expect(verifier).toContain("'      RESEND_API_KEY: \"\"'")
+		expect(verifier).toContain("'      FROM_EMAIL: \"\"'")
 		expect(webBuild.args.PUBLIC_TURNSTILE_SITE_KEY).toBe(
 			'${PUBLIC_TURNSTILE_SITE_KEY:-1x00000000000000000000AA}'
 		)

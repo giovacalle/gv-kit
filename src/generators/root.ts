@@ -483,7 +483,8 @@ function renderEnvironmentSettingsGuidance(cfg: GvKitConfig): string {
 		'`GATEWAY_UPSTREAM_TIMEOUT_MS` bounds private-service requests in milliseconds.',
 		`${privateTransportSettings} are private local transport targets. They are not public service origins.`
 	]
-	if (cfg.choices.deploy !== 'cf-workers') localSettings.push('`GATEWAY_TRUSTED_INGRESS_SECRET` is shared only by the private Node SSR transport and gateway.')
+	if (cfg.choices.deploy === 'docker') localSettings.push('`GATEWAY_TRUSTED_INGRESS_SECRET` is shared only by the gateway, generated Nginx ingress, and private Node SSR transport.')
+	else if (cfg.choices.deploy !== 'cf-workers') localSettings.push('`GATEWAY_TRUSTED_INGRESS_SECRET` is shared only by the private Node SSR transport and gateway.')
 	if (cfg.choices.marketing === 'astro') localSettings.push('`PUBLIC_MARKETING_URL` and `PUBLIC_APP_URL` set the local build-time frontend origins.')
 	if (cfg.choices.auth.length > 0) localSettings.push('`BETTER_AUTH_SECRET` is private. Each `BETTER_AUTH_ALLOWED_HOSTS` entry is a host and optional port without a scheme. `AUTH_CORS_ORIGINS` uses complete browser origins.')
 	if (cfg.choices.db === 'postgres') localSettings.push('`DATABASE_URL` connects local services to PostgreSQL.')

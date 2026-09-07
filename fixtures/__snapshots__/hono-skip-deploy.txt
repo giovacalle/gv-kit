@@ -30,12 +30,13 @@
 CLAUDE.md  5ece7722518a5887
 LICENSE  508a77d2e7b51d98
 README.md  60cfc70526560ee6
-apps/api/README.md  75ec2f93c8f0fe33
+apps/api/README.md  1aed5f032abdc7e9
 apps/api/openapi.json  b9a1e2557e0510d4
 apps/api/package.json  a1be748ee778f56c
 apps/api/scripts/compose-openapi.ts  fe7d1a157049c722
 apps/api/src/app.ts  a8a07c2772a7478d
-apps/api/src/index.ts  78da1eda14919e62
+apps/api/src/client-ip.ts  090073318f9920c2
+apps/api/src/index.ts  cea15610cbeb49d9
 apps/api/tsconfig.json  69f2df8e361aa93a
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
@@ -46,7 +47,7 @@ apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
 apps/web/src/app.d.ts  e40eab85d7498d24
 apps/web/src/app.html  c6d51ff500541650
-apps/web/src/hooks.server.ts  10544e3c032256e1
+apps/web/src/hooks.server.ts  b7bca06e37e000bd
 apps/web/src/lib/components/layout/footer.svelte  58d0e7441e7d2d7f
 apps/web/src/lib/components/layout/nav.svelte  fb4825881d5c50be
 apps/web/src/lib/components/seo.svelte  7f7aed0c1efc6402

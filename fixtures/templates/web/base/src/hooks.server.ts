@@ -47,6 +47,7 @@ export const handleFetch: HandleFetch = async ({ event, request, fetch }) => {
 	forwarded.headers.set('host', event.url.host)
 	forwarded.headers.set('x-forwarded-host', event.url.host)
 	forwarded.headers.set('x-forwarded-proto', event.url.protocol.slice(0, -1))
+	forwarded.headers.delete('x-forwarded-for')
 	if (env.GATEWAY_TRUSTED_INGRESS_SECRET) forwarded.headers.set('x-gateway-ingress-secret', env.GATEWAY_TRUSTED_INGRESS_SECRET)
 	return fetch(forwarded)
 }

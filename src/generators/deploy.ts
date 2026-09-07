@@ -2277,6 +2277,7 @@ server {
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Forwarded-For $remote_addr;
 		proxy_set_header X-Gateway-Ingress-Secret \${GATEWAY_TRUSTED_INGRESS_SECRET};
 		proxy_set_header X-Request-ID $request_id;
 	}
@@ -2289,6 +2290,7 @@ server {
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Forwarded-For $remote_addr;
 		proxy_set_header X-Gateway-Ingress-Secret \${GATEWAY_TRUSTED_INGRESS_SECRET};
 		proxy_set_header X-Request-ID $request_id;
 	}
@@ -2314,6 +2316,7 @@ server {
 		proxy_set_header Host $http_host;
 		proxy_set_header X-Forwarded-Host $http_host;
 		proxy_set_header X-Forwarded-Proto \${PUBLIC_SCHEME};
+		proxy_set_header X-Forwarded-For $remote_addr;
 		proxy_set_header X-Gateway-Ingress-Secret \${GATEWAY_TRUSTED_INGRESS_SECRET};
 		proxy_set_header X-Request-ID $request_id;
 	}

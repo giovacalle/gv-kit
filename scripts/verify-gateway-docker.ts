@@ -382,6 +382,108 @@ async function postJson({
 	})
 }
 
+async function verifyRotatingClientIpHeaders({
+	project,
+	env,
+	origin,
+	email
+}: {
+	project: string
+	env: NodeJS.ProcessEnv
+	origin: string
+	email: string
+}) {
+	const send = await postJson({
+		url: `${origin}/api/auth/email-otp/send-verification-otp`,
+		body: { email, type: 'sign-in' },
+		headers: { origin, 'x-captcha-response': 'XXXX.DUMMY.TOKEN.XXXX' }
+	})
+	if (!send.ok) throw new Error(`Rate-limit OTP send failed at ${origin}: ${send.status}`)
+	const otp = await waitForOtp({ project, env, email })
+	const wrongOtp = otp === '000000' ? '111111' : '000000'
+	const statuses: number[] = []
+	for (let index = 0; index < 4; index += 1) {
+		const suppliedIp = `198.51.100.${index + 10}`
+		const response = await postJson({
+			url: `${origin}/api/auth/sign-in/email-otp`,
+			body: { email, otp: wrongOtp },
+			headers: {
+				origin,
+				'cf-connecting-ip': suppliedIp,
+				'x-forwarded-for': suppliedIp,
+				'x-real-ip': suppliedIp
+			}
+		})
+		statuses.push(response.status)
+	}
+	if (JSON.stringify(statuses) !== JSON.stringify([400, 400, 400, 429])) throw new Error(`Rotating caller IP headers changed the rate-limit identity at ${origin}: ${statuses.join(',')}`)
+	return { attempts: statuses, callerHeadersRotated: true, oneRateLimitIdentity: true }
+}
+
+async function resetAuthRateLimitState({
+	project,
+	env
+}: {
+	project: string
+	env: NodeJS.ProcessEnv
+}): Promise<void> {
+	const result = await captureCommandResult({
+		program: 'docker',
+		args: ['compose', 'restart', 'auth'],
+		cwd: project,
+		env
+	})
+	if (result.code !== 0) throw new Error('Could not reset the auth rate-limit store')
+	const probe = await requestWhenReady(`${DIRECT_API_ORIGIN}/api/auth/get-session`)
+	if (probe.status !== 200) throw new Error(`Auth did not recover after a rate-limit probe: ${probe.status}`)
+}
+
+async function verifyDistinctNginxPeer({
+	project,
+	env,
+	origin,
+	email
+}: {
+	project: string
+	env: NodeJS.ProcessEnv
+	origin: string
+	email: string
+}) {
+	const script = `import { request } from 'node:http';
+const body = JSON.stringify({ email: ${JSON.stringify(email)}, otp: '000000' });
+const status = await new Promise((resolve, reject) => {
+	const probe = request({
+		host: 'ingress',
+		port: 8080,
+		path: '/api/auth/sign-in/email-otp',
+		method: 'POST',
+		headers: {
+			'content-type': 'application/json',
+			'content-length': Buffer.byteLength(body),
+			host: ${JSON.stringify(new URL(origin).host)},
+			origin: ${JSON.stringify(origin)},
+			'x-forwarded-for': '198.51.100.250'
+		}
+	}, (response) => {
+		response.resume();
+		response.on('end', () => resolve(response.statusCode));
+	});
+	probe.on('error', reject);
+	probe.end(body);
+});
+console.log(JSON.stringify({ status }));`
+	const result = await captureCommandResult({
+		program: 'docker',
+		args: ['compose', 'exec', '-T', 'web', 'node', '--input-type=module', '--eval', script],
+		cwd: project,
+		env
+	})
+	if (result.code !== 0) throw new Error('Distinct trusted-ingress peer probe failed')
+	const output = JSON.parse(result.output.trim()) as { status?: number }
+	if (output.status !== 400) throw new Error(`Trusted Nginx collapsed a distinct peer into an exhausted rate-limit identity: ${output.status}`)
+	return { status: output.status, source: 'separate Compose-network peer' }
+}
+
 async function waitForOtp({
 	project,
 	env,
@@ -610,6 +712,26 @@ async function verifyRuntime({
 	}
 
 	const suffix = Date.now()
+	const directRateLimit = await verifyRotatingClientIpHeaders({
+		project,
+		env,
+		origin: DIRECT_API_ORIGIN,
+		email: `docker-direct-rate-limit-${suffix}@example.test`
+	})
+	await resetAuthRateLimitState({ project, env })
+	const nginxRateLimit = await verifyRotatingClientIpHeaders({
+		project,
+		env,
+		origin: webOrigin,
+		email: `docker-nginx-rate-limit-${suffix}@example.test`
+	})
+	const distinctNginxPeer = await verifyDistinctNginxPeer({
+		project,
+		env,
+		origin: webOrigin,
+		email: `docker-distinct-peer-${suffix}@example.test`
+	})
+	await resetAuthRateLimitState({ project, env })
 	const webEmail = `docker-web-${suffix}@example.test`
 	const apiEmail = `docker-api-${suffix}@example.test`
 	const webJar = await signInWithDockerOtp({ project, env, origin: webOrigin, email: webEmail })
@@ -658,6 +780,12 @@ async function verifyRuntime({
 				approvedApiWithForgedForwarding: approvedApiWithForgedForwarding.status,
 				unknownDirectWithApprovedForwarding: unknownDirectHost.status
 			}
+		},
+		clientIpRateLimit: {
+			isolatedByAuthRestart: true,
+			directGateway: directRateLimit,
+			nginx: nginxRateLimit,
+			distinctNginxPeer
 		},
 		cookies: {
 			web: redactedCookies(webJar),

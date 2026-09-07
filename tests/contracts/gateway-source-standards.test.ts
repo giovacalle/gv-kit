@@ -19,6 +19,7 @@ const expectedGatewayRenderers = [
 	'renderGatewayPackageJson',
 	'renderGatewayTsconfig',
 	'renderGatewayAppSource',
+	'renderAuthenticatedClientIpSource',
 	'renderGatewayEntrySource',
 	'renderGatewayWranglerConfig',
 	'renderGatewayOpenApiComposerSource',

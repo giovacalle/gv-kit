@@ -31,13 +31,14 @@
 CLAUDE.md  3c285b984cf20ed4
 Dockerfile  a686f15a4ff29fff
 LICENSE  508a77d2e7b51d98
-README.md  ce007f1255f7a7ab
-apps/api/README.md  75ec2f93c8f0fe33
+README.md  d0e5a27f8affb492
+apps/api/README.md  1aed5f032abdc7e9
 apps/api/openapi.json  b7623730c83b2719
 apps/api/package.json  055281eb4687e4a1
 apps/api/scripts/compose-openapi.ts  e937e367889bff40
 apps/api/src/app.ts  a8a07c2772a7478d
-apps/api/src/index.ts  62aec8ecf001f9a1
+apps/api/src/client-ip.ts  090073318f9920c2
+apps/api/src/index.ts  4c23db1c0e9a6edf
 apps/api/tsconfig.json  69f2df8e361aa93a
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
@@ -48,7 +49,7 @@ apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
 apps/web/src/app.d.ts  e40eab85d7498d24
 apps/web/src/app.html  9c90a9a5306c1411
-apps/web/src/hooks.server.ts  10544e3c032256e1
+apps/web/src/hooks.server.ts  b7bca06e37e000bd
 apps/web/src/lib/components/layout/footer.svelte  58d0e7441e7d2d7f
 apps/web/src/lib/components/layout/nav.svelte  fb4825881d5c50be
 apps/web/src/lib/components/seo.svelte  7f7aed0c1efc6402
@@ -71,7 +72,7 @@ apps/web/svelte.config.js  5c32ff96e10d06c8
 apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  e8dee2244bca3ff3
 docker-compose.yml  2d63c5cdb25dcc17
-docker/ingress.conf.template  f8122ac4b08bae6d
+docker/ingress.conf.template  d76a6d1286ddaf00
 eslint.config.js  cfd85b071f7c820c
 package.json  f98bcd5846f22431
 packages/backend/package.json  896460895e5e7ca4

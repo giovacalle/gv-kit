@@ -35,7 +35,7 @@
 CLAUDE.md  c8a063747849c21b
 LICENSE  508a77d2e7b51d98
 README.md  83a917bd92861a8a
-apps/api/README.md  020a266e72d07ce2
+apps/api/README.md  017caab0f87ecef0
 apps/api/openapi.json  da0caca873fb436f
 apps/api/package.json  4dfddb524d8e3fc1
 apps/api/scripts/compose-openapi.ts  bb8cd9336590896a
@@ -53,7 +53,7 @@ apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
 apps/web/src/app.d.ts  694aadece21112ee
 apps/web/src/app.html  cc8d9336373ee738
-apps/web/src/hooks.server.ts  10544e3c032256e1
+apps/web/src/hooks.server.ts  b7bca06e37e000bd
 apps/web/src/lib/components/layout/footer.svelte  58d0e7441e7d2d7f
 apps/web/src/lib/components/layout/nav.svelte  fb4825881d5c50be
 apps/web/src/lib/components/seo.svelte  7f7aed0c1efc6402

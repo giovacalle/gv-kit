@@ -83,6 +83,13 @@ export function generateGatewayForTopology({
 		{ path: 'apps/api/README.md', content: renderGatewayReadme({ routes, runtime }) }
 	]
 
+	if (runtime === 'node') {
+		entries.push({
+			path: 'apps/api/src/client-ip.ts',
+			content: renderAuthenticatedClientIpSource()
+		})
+	}
+
 	if (runtime === 'cf-workers') {
 		const webHost = cfg.choices.marketing === 'astro' ? 'app.<domain>' : '<domain>'
 		const wrangler = renderGatewayWranglerConfig({ project, services, webHost })
@@ -585,6 +592,46 @@ export function createGateway(
 `
 }
 
+function renderAuthenticatedClientIpSource(): string {
+	return `import { timingSafeEqual } from 'node:crypto'
+import { isIP } from 'node:net'
+
+const FORWARDED_CLIENT_IP_HEADER = 'x-forwarded-for'
+const TRUSTED_INGRESS_HEADER = 'x-gateway-ingress-secret'
+
+function sameSecret(left: string | undefined, right: string): boolean {
+	if (!left) return false
+	const leftBytes = Buffer.from(left)
+	const rightBytes = Buffer.from(right)
+	return leftBytes.length === rightBytes.length && timingSafeEqual(leftBytes, rightBytes)
+}
+
+export function withAuthenticatedClientIp({
+	request,
+	peerAddress,
+	trustedIngressSecret
+}: {
+	request: Request
+	peerAddress: string | undefined
+	trustedIngressSecret: string
+}): Request | undefined {
+	const forwardedIp = request.headers.get(FORWARDED_CLIENT_IP_HEADER)?.trim()
+	const trustedForwardedIp =
+		sameSecret(request.headers.get(TRUSTED_INGRESS_HEADER) ?? undefined, trustedIngressSecret) &&
+		forwardedIp &&
+		isIP(forwardedIp)
+			? forwardedIp
+			: undefined
+	const peerIp = peerAddress?.trim()
+	const clientIp = trustedForwardedIp ?? (peerIp && isIP(peerIp) ? peerIp : undefined)
+	if (!clientIp) return undefined
+	const headers = new Headers(request.headers)
+	headers.set(FORWARDED_CLIENT_IP_HEADER, clientIp)
+	return new Request(request, { headers })
+}
+`
+}
+
 function renderGatewayEntrySource({
 	runtime,
 	services,
@@ -624,6 +671,7 @@ export default {
 import openApiDocument from '../openapi.json' with { type: 'json' }
 
 import { createGateway, type GatewayTarget } from './app.js'
+import { withAuthenticatedClientIp } from './client-ip.js'
 
 function httpTarget(origin: string): GatewayTarget {
 	return {
@@ -656,7 +704,19 @@ ${nodeTargets}
 )
 const hostname = process.env.HOST ?? '${HONO_GATEWAY.development.ip}'
 const port = Number(process.env.PORT ?? ${HONO_GATEWAY.development.port})
-serve({ fetch: app.fetch, port, hostname })
+serve({
+	fetch(request, env) {
+		const authenticated = withAuthenticatedClientIp({
+			request,
+			peerAddress: env.incoming.socket.remoteAddress,
+			trustedIngressSecret
+		})
+		if (!authenticated) return new Response('client address unavailable', { status: 503 })
+		return app.fetch(authenticated, env)
+	},
+	port,
+	hostname
+})
 console.log(\`${HONO_GATEWAY.identity} listening on http://\${hostname}:\${port}\`)
 `
 }
@@ -1116,6 +1176,16 @@ Before deploying to Cloudflare, replace each \`<domain>\` placeholder in \`wrang
 		new Set(routes.map((route) => route.owner)).size < routes.length
 			? `\nThe prefix-to-target table below is part of this rollout contract. Add or move an owned prefix before callers use it, and keep the previous owner compatible until every adjacent version has moved.\n`
 			: ''
+	const trustedOriginBoundary =
+		runtime === 'cf-workers'
+			? `Cloudflare request URLs come from the platform and Service Binding transport. The Worker does not accept Node's trusted-ingress header.`
+			: `Node SSR authenticates its forwarded public origin with \`${GATEWAY_TRUSTED_INGRESS_SECRET}\`; keep that value private.`
+	const clientIpBoundary =
+		runtime === 'cf-workers'
+			? `Cloudflare auth uses the platform-provided \`cf-connecting-ip\` value. The gateway does not replace it with a Node forwarding header.`
+			: `On Node, the gateway replaces caller-supplied \`x-forwarded-for\` with the connection peer address. Authenticated ingress may supply one validated IP address. Docker Nginx owns that boundary and overwrites \`x-forwarded-for\` with \`$remote_addr\`; it never appends an incoming list. Internal SSR removes any carried client-IP value before authenticating its private transport.
+
+When another proxy sits in front of Docker Nginx, \`$remote_addr\` identifies that proxy unless Nginx authenticates the proxy network. Keep the gateway ingress secret private. Configure \`set_real_ip_from\` with only the proxy's exact CIDRs, set \`real_ip_header\` to the proxy's canonical client-IP header, and enable \`real_ip_recursive\` only when every proxy hop is trusted. Without that configuration, rate limiting safely groups traffic under the proxy address instead of trusting its unsigned forwarding header.`
 	return `# API gateway
 
 The gateway is the only public API application. It serves the web origin's same-origin
@@ -1141,8 +1211,10 @@ headers, cookies, query strings, or bodies.
 
 \`${GATEWAY_PUBLIC_ORIGINS}\` is the comma-separated allowlist of complete web and API origins
 accepted at the gateway boundary. The gateway rejects unknown request hosts and replaces caller-supplied
-forwarding metadata with the approved host and scheme before calling a private service. Node SSR sets
-trusted forwarding metadata with \`${GATEWAY_TRUSTED_INGRESS_SECRET}\`; keep that value private.
+forwarding metadata with the approved host and scheme before calling a private service.
+${trustedOriginBoundary}
+
+${clientIpBoundary}
 
 \`${API_CORS_ORIGINS}\` is a comma-separated list of complete browser origins allowed to call
 the canonical API origin with credentials. Wildcards are rejected. Same-origin web requests use the

@@ -89,7 +89,7 @@ docker-compose.yml  40c04d7282ecc53f
 docker/ingress.conf.template  d76a6d1286ddaf00
 eslint.config.js  cfd85b071f7c820c
 opencode.json  b82a2b5eb3e8ef6c
-package.json  0aed01f1ec610d3c
+package.json  beaec9d245c39a07
 packages/backend/package.json  896460895e5e7ca4
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
@@ -242,7 +242,7 @@ packages/ui/src/lib/hooks/.gitkeep  e3b0c44298fc1c14
 packages/ui/src/lib/styles/app.css  ec69d17b9db12ebb
 packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
-pnpm-workspace.yaml  c95f84b1e1a3b589
+pnpm-workspace.yaml  fb386dc0009a3986
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  be10d7fe0d5a3039
 scripts/local.mjs  c2da370aac65bf3b

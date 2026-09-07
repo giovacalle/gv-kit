@@ -6,11 +6,12 @@ import { parseJsonc } from '../../src/lib/jsonc.js'
 import { buildScaffoldPlan } from '../../src/pipeline/plan.js'
 import { GvKitConfig } from '../../src/schema/config.js'
 
+// Only package.json and pnpm-workspace.yaml changed for the dependency security policy.
 const fixtureBaselines = {
 	'inside-frontend-docker-postgres.jsonc':
-		'8bb69fcce70daa68d3e91238dff217905cae0a783141b8c48e34017d9396e627',
+		'739a2f98b8f00edae36e9f2f27f11a5286664b3ffeb46dfa4ac016ecbccd7c95',
 	'inside-frontend-docker-sqlite.jsonc':
-		'a95da4e5e771c4369db5c5209c8283a774cf5b367afaed3b0b8a6e34a2318495'
+		'ab8fdc195353f811b0d49db0716666ff92a91ea068d6404f6ee369942b1d7995'
 } as const
 
 function loadPlan(fixtureName: string): FileEntry[] {
@@ -90,7 +91,7 @@ describe('non-Hono integrated Docker output', () => {
 			}
 		})
 
-		test(`${fixtureName} matches the accepted non-Hono baseline`, () => {
+		test(`${fixtureName} matches the non-Hono baseline with the workspace dependency policy`, () => {
 			expect(outputHashWithoutDockerComments(loadPlan(fixtureName))).toBe(baselineHash)
 		})
 	}

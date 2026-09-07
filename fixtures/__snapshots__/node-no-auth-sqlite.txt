@@ -74,7 +74,7 @@ apps/web/vite.config.ts  e8dee2244bca3ff3
 docker-compose.yml  2d63c5cdb25dcc17
 docker/ingress.conf.template  d76a6d1286ddaf00
 eslint.config.js  cfd85b071f7c820c
-package.json  f98bcd5846f22431
+package.json  9a11d449334f490f
 packages/backend/package.json  896460895e5e7ca4
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
@@ -233,7 +233,7 @@ packages/ui/src/lib/hooks/.gitkeep  e3b0c44298fc1c14
 packages/ui/src/lib/styles/app.css  ec69d17b9db12ebb
 packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
-pnpm-workspace.yaml  c95f84b1e1a3b589
+pnpm-workspace.yaml  fb386dc0009a3986
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  b0dddb6ba7421569
 scripts/local.mjs  8740e72610532613

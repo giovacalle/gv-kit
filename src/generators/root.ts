@@ -90,9 +90,6 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 			'**/*.{ts,tsx,svelte,svelte.ts,svelte.js}': ['prettier --write', 'eslint --fix'],
 			'**/*.{json,css,html,md,astro}': ['prettier --write']
 		},
-		overrides: {
-			zod: '^4.3.0'
-		},
 		engines: {
 			node: '>=24.0.0 <25.0.0',
 			pnpm: '>=11'
@@ -110,6 +107,15 @@ function renderPnpmWorkspace(cfg: GvKitConfig): string {
 ${deployables}
   - 'packages/*'
   - 'packages/tooling/*'
+
+# pnpm 11 reads overrides here, not from package.json.
+# Keep pre-1.0 API changes scoped to the consumers verified with these versions.
+overrides:
+  '@sveltejs/kit>cookie@<0.7.0': 0.7.2
+  '@esbuild-kit/core-utils@3.3.2>esbuild': 0.25.12
+  'tsup@8.5.1>esbuild': 0.28.2
+  '@hey-api/json-schema-ref-parser@1.4.2>js-yaml': 4.3.2
+  zod: ^4.3.0
 
 # Pre-approve native build scripts so \`pnpm install\` never stops to prompt
 # (pnpm 10+ otherwise writes a placeholder here that blocks subsequent commands).

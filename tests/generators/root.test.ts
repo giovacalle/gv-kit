@@ -58,6 +58,31 @@ describe('generateRoot — Astro project shape', () => {
 		expect(Object.keys(pkg['lint-staged']).some((glob) => glob.includes('astro'))).toBe(true)
 	})
 
+	test.each([
+		{},
+		{ auth: ['emailOTP'], email: 'resend', deploy: 'docker' },
+		{ backend: 'inside-frontend', apiClient: 'skip', deploy: 'skip' }
+	] satisfies Partial<Choices>[])(
+		'pnpm 11 reads security overrides from the workspace without globally replacing esbuild or cookie: %j',
+		(choices) => {
+			const entries = generateRoot(makeCfg(choices))
+			const pkg = JSON.parse(content(entries, 'package.json'))
+			const workspace = Bun.YAML.parse(content(entries, 'pnpm-workspace.yaml')) as {
+				overrides: Record<string, string>
+			}
+
+			expect(pkg.overrides).toBeUndefined()
+			expect(pkg.pnpm).toBeUndefined()
+			expect(workspace.overrides).toEqual({
+				'@sveltejs/kit>cookie@<0.7.0': '0.7.2',
+				'@esbuild-kit/core-utils@3.3.2>esbuild': '0.25.12',
+				'tsup@8.5.1>esbuild': '0.28.2',
+				'@hey-api/json-schema-ref-parser@1.4.2>js-yaml': '4.3.2',
+				zod: '^4.3.0'
+			})
+		}
+	)
+
 	test('formatting preserves the canonical Hono OpenAPI contract only when it exists', () => {
 		const honoIgnore = content(generateRoot(makeCfg()), '.prettierignore')
 		const integratedIgnore = content(

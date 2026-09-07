@@ -83,7 +83,7 @@ apps/web/vite.config.ts  c915f2890ca17f3c
 apps/web/worker-configuration.bootstrap.d.ts  d767dca7e4dc9ba8
 apps/web/wrangler.jsonc  f5bba2ae3ef44f16
 eslint.config.js  cfd85b071f7c820c
-package.json  78bf0ac27f27d366
+package.json  5a3a58e4fcd4cb96
 packages/backend/package.json  a307dd802bb0bcd8
 packages/backend/src/core/data-access/users.ts  3cee1df896a23f1b
 packages/backend/src/core/types.ts  ba34cd9886b09156
@@ -272,7 +272,7 @@ packages/ui/src/lib/hooks/.gitkeep  e3b0c44298fc1c14
 packages/ui/src/lib/styles/app.css  ec69d17b9db12ebb
 packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
-pnpm-workspace.yaml  c95f84b1e1a3b589
+pnpm-workspace.yaml  fb386dc0009a3986
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  f646bca1e286f997
 scripts/cleanup-cloudflare-preview-workers.sh  821472f1af1a2739

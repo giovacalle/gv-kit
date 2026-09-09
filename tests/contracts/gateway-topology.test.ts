@@ -33,6 +33,7 @@ function planFixture(name: string) {
 const gatewayOwnedSourcePaths = [
 	'fixtures/templates/web/overlays/api-client-hey-api/src/routes/users/+page.server.ts',
 	'fixtures/templates/web/overlays/inside-frontend-baseline/src/app.d.ts',
+	'scripts/gateway-native-probes.ts',
 	'scripts/gateway-verification-evidence.ts',
 	'scripts/verify-gateway-cloudflare.ts',
 	'scripts/verify-gateway-docker.ts',
@@ -53,6 +54,7 @@ const gatewayOwnedSourcePaths = [
 	'tests/contracts/gateway-auth.test.ts',
 	'tests/contracts/gateway-cloudflare.test.ts',
 	'tests/contracts/gateway-docker.test.ts',
+	'tests/contracts/gateway-node-transport.test.ts',
 	'tests/contracts/gateway-openapi.test.ts',
 	'tests/contracts/gateway-preview-workflows.test.ts',
 	'tests/contracts/gateway-rollout-compatibility.test.ts',
@@ -74,6 +76,7 @@ const gatewayEffortSourcePaths = [
 	'fixtures/templates/web/overlays/auth/src/lib/auth/client.ts',
 	'fixtures/templates/web/overlays/auth/src/lib/server/load-session.ts',
 	'fixtures/templates/web/overlays/inside-frontend-baseline/src/app.d.ts',
+	'scripts/gateway-native-probes.ts',
 	'scripts/gateway-verification-evidence.ts',
 	'scripts/verify-gateway-cloudflare.ts',
 	'scripts/verify-gateway-docker.ts',
@@ -111,6 +114,7 @@ const gatewayEffortSourcePaths = [
 	'tests/contracts/gateway-cloudflare.test.ts',
 	'tests/contracts/gateway-docker.test.ts',
 	'tests/contracts/gateway-local.test.ts',
+	'tests/contracts/gateway-node-transport.test.ts',
 	'tests/contracts/gateway-openapi.test.ts',
 	'tests/contracts/gateway-preview-workflows.test.ts',
 	'tests/contracts/gateway-rollout-compatibility.test.ts',
@@ -142,8 +146,8 @@ const gatewayEffortGeneratedSourcePaths = [
 	'src/generated/web-templates.ts'
 ]
 const gatewayEffortLiveTypeScriptPathContract = {
-	count: 71,
-	digest: '7369a3d804dee244c2fef18705c0de31527268a23b3b0e4503a81b499ba1dfd4'
+	count: 73,
+	digest: '3079eb628dc119d67ae5ce37f09ab9af0cb463ad7035ef3ed348e3ebadc815d2'
 }
 
 function inlineControlBodyFindings(path: string, source: string): string[] {
@@ -1164,7 +1168,7 @@ describe('local private-service gateway topology', () => {
 		expect(tasks['hono-skip-deploy-web#dev']?.env).toContain('GATEWAY_URL')
 		expect(gatewayIndex?.content).toContain("process.env.HOST ?? '127.0.0.1'")
 		expect(gatewayIndex?.content).toContain('process.env.PORT ?? 8786')
-		expect(gatewayIndex?.content).toContain("redirect: 'manual'")
+		expect(gatewayIndex?.content).toContain('transport.request(')
 		expect(gatewayIndex?.content).toContain('corsOrigins: process.env.API_CORS_ORIGINS')
 		expect(gatewayIndex?.content).toContain(
 			'upstreamTimeoutMs: Number(process.env.GATEWAY_UPSTREAM_TIMEOUT_MS ?? 10000)'

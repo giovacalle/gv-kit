@@ -103,6 +103,9 @@ function renderPnpmWorkspace(cfg: GvKitConfig): string {
 		cfg.choices.backend === 'hono'
 			? "  - 'apps/*'\n  - 'services/*'"
 			: "  - 'apps/*'\n  - 'apps/api/*'"
+	const sharpOverride = cfg.choices.deploy === 'cf-workers'
+		? "  'miniflare>sharp@>=0.35.0 <0.35.4': 0.35.4\n"
+		: ''
 	return `packages:
 ${deployables}
   - 'packages/*'
@@ -115,7 +118,7 @@ overrides:
   '@esbuild-kit/core-utils@3.3.2>esbuild': 0.25.12
   'tsup@8.5.1>esbuild': 0.28.2
   '@hey-api/json-schema-ref-parser@1.4.2>js-yaml': 4.3.2
-  zod: ^4.3.0
+${sharpOverride}  zod: ^4.3.0
 
 # Pre-approve native build scripts so \`pnpm install\` never stops to prompt
 # (pnpm 10+ otherwise writes a placeholder here that blocks subsequent commands).

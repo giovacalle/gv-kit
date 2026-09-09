@@ -10,6 +10,7 @@ import {
 	redactArtifactText,
 	writeSanitizedArtifact
 } from './gateway-verification-evidence.js'
+import { installUsersStreamingProbe, verifyNativeIngresses } from './gateway-native-probes.js'
 
 const PNPM_VERSION = '11.1.1'
 const LOCAL_API_ORIGIN = 'http://api.localhost:8786'
@@ -943,6 +944,9 @@ async function verifyDualOriginAuth({
 	const sdkSsrBody = await sdkSsr.text()
 	if (!sdkSsr.ok || !sdkSsrBody.includes(webEmail)) throw new Error('SSR flat client operation did not use the private gateway transport')
 
+	const nativeTransport = deploy === 'cf-workers'
+		? undefined
+		: await verifyNativeIngresses([apiOrigin, webOrigin])
 	const operational = await verifyOperationalRuntime(project)
 	const evidence = {
 		project: '.',
@@ -1020,6 +1024,7 @@ async function verifyDualOriginAuth({
 			responseHeader: true
 		},
 		operational,
+		nativeTransport,
 		openApi: {
 			status: openApiResponse.status,
 			servers: runtimeOpenApi.servers,
@@ -1190,6 +1195,7 @@ async function main(): Promise<void> {
 	const viteConfig = await readFile(join(generated.project, 'apps/web/vite.config.ts'), 'utf8')
 	if (!viteConfig.includes("'^/api(?:[/?]|$)': { target:")) throw new Error('generated local Vite ingress omits the exact API boundary')
 	if (viteConfig.includes("'/api': { target:")) throw new Error('generated local Vite ingress overmatches paths outside /api')
+	if (generated.config.choices.deploy !== 'cf-workers') await installUsersStreamingProbe(generated.project)
 
 	await recordCommandEvidence({
 		name: 'install',

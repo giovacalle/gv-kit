@@ -304,7 +304,7 @@ packages/ui/src/lib/hooks/.gitkeep  e3b0c44298fc1c14
 packages/ui/src/lib/styles/app.css  ec69d17b9db12ebb
 packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
-pnpm-workspace.yaml  fb386dc0009a3986
+pnpm-workspace.yaml  101a234e52f0d1a8
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  4f89f95b8b2b4b76
 scripts/cleanup-cloudflare-preview-workers.sh  821472f1af1a2739

@@ -61,11 +61,14 @@ describe('generateRoot — Astro project shape', () => {
 	test.each([
 		{},
 		{ auth: ['emailOTP'], email: 'resend', deploy: 'docker' },
-		{ backend: 'inside-frontend', apiClient: 'skip', deploy: 'skip' }
+		{ backend: 'inside-frontend', apiClient: 'skip', deploy: 'skip' },
+		{ backend: 'inside-frontend', apiClient: 'skip', db: 'postgres', deploy: 'cf-workers' },
+		{ deploy: 'skip' }
 	] satisfies Partial<Choices>[])(
-		'pnpm 11 reads security overrides from the workspace without globally replacing esbuild or cookie: %j',
+		'pnpm 11 keeps security overrides consumer-scoped and limits the sharp patch to Cloudflare: %j',
 		(choices) => {
-			const entries = generateRoot(makeCfg(choices))
+			const cfg = makeCfg(choices)
+			const entries = generateRoot(cfg)
 			const pkg = JSON.parse(content(entries, 'package.json'))
 			const workspace = Bun.YAML.parse(content(entries, 'pnpm-workspace.yaml')) as {
 				overrides: Record<string, string>
@@ -78,6 +81,9 @@ describe('generateRoot — Astro project shape', () => {
 				'@esbuild-kit/core-utils@3.3.2>esbuild': '0.25.12',
 				'tsup@8.5.1>esbuild': '0.28.2',
 				'@hey-api/json-schema-ref-parser@1.4.2>js-yaml': '4.3.2',
+				...(cfg.choices.deploy === 'cf-workers'
+					? { 'miniflare>sharp@>=0.35.0 <0.35.4': '0.35.4' }
+					: {}),
 				zod: '^4.3.0'
 			})
 		}

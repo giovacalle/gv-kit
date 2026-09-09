@@ -216,7 +216,7 @@ packages/ui/src/lib/hooks/.gitkeep  e3b0c44298fc1c14
 packages/ui/src/lib/styles/app.css  ec69d17b9db12ebb
 packages/ui/src/lib/utils.ts  c287547371394cfa
 packages/ui/tsconfig.json  55963b0422d6d5c7
-pnpm-workspace.yaml  03ef5ab61d4ad03c
+pnpm-workspace.yaml  a3b03ec7cd1db195
 prettier.config.js  76a534fdcb4541a5
 project.config.jsonc  6f55c5956444dce0
 tsconfig.json  30916d65cceb0f5a

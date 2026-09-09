@@ -74,11 +74,7 @@ export function generateGatewayForTopology({
 		{ path: 'apps/api/src/app.ts', content: renderGatewayAppSource({ routes, services }) },
 		{
 			path: 'apps/api/src/index.ts',
-			content: renderGatewayEntrySource({
-				runtime,
-				services,
-				streamsChunkedIngress: cfg.choices.deploy === 'docker'
-			})
+			content: renderGatewayEntrySource({ runtime, services })
 		},
 		{ path: 'apps/api/README.md', content: renderGatewayReadme({ routes, runtime }) }
 	]
@@ -634,12 +630,10 @@ export function withAuthenticatedClientIp({
 
 function renderGatewayEntrySource({
 	runtime,
-	services,
-	streamsChunkedIngress
+	services
 }: {
 	runtime: Runtime
 	services: readonly HonoServiceTopology[]
-	streamsChunkedIngress: boolean
 }): string {
 	if (runtime === 'cf-workers') {
 		return `import openApiDocument from '../openapi.json' with { type: 'json' }
@@ -668,18 +662,101 @@ export default {
 		.join(',\n')
 
 	return `import { serve } from '@hono/node-server'
+import http from 'node:http'
+import https from 'node:https'
+import { Readable } from 'node:stream'
+import type { ReadableStream as NodeReadableStream } from 'node:stream/web'
 import openApiDocument from '../openapi.json' with { type: 'json' }
 
 import { createGateway, type GatewayTarget } from './app.js'
 import { withAuthenticatedClientIp } from './client-ip.js'
 
+// Hop-by-hop headers describe one connection's framing, not the resource; each connection owns its own.
+const HOP_BY_HOP_HEADERS = new Set([
+	'connection',
+	'keep-alive',
+	'proxy-authenticate',
+	'proxy-authorization',
+	'te',
+	'trailer',
+	'transfer-encoding',
+	'upgrade'
+])
+
+function forwardableHeaders(request: Request): Record<string, string> {
+	const headers: Record<string, string> = {}
+	const connectionTokens = new Set(
+		(request.headers.get('connection') ?? '')
+			.split(',')
+			.map((token) => token.trim().toLowerCase())
+			.filter(Boolean)
+	)
+	request.headers.forEach((value, name) => {
+		const lower = name.toLowerCase()
+		if (lower === 'host' || lower === 'connection' || HOP_BY_HOP_HEADERS.has(lower) || connectionTokens.has(lower)) return
+		headers[name] = value
+	})
+	const contentLength = request.headers.get('content-length')
+	if (contentLength !== null) headers['content-length'] = contentLength
+	return headers
+}
+
 function httpTarget(origin: string): GatewayTarget {
+	const transport = new URL(origin).protocol === 'https:' ? https : http
 	return {
 		fetch(request) {
-			const incoming = new URL(request.url)
-			const upstream = new URL(\`\${incoming.pathname}\${incoming.search}\`, origin)
-			const forwarded = new Request(upstream, request)${streamsChunkedIngress ? "\n\t\t\tforwarded.headers.delete('transfer-encoding')" : ''}
-			return fetch(forwarded, { redirect: 'manual' })
+			return new Promise((resolve, reject) => {
+				if (request.signal.aborted) {
+					reject(request.signal.reason)
+					return
+				}
+				const incoming = new URL(request.url)
+				const upstream = new URL(\`\${incoming.pathname}\${incoming.search}\`, origin)
+				let upstreamResponse: http.IncomingMessage | undefined
+				// Cancellation must release the owned upstream connection, not only abandon the response.
+				const releaseUpstream = () => {
+					upstreamResponse?.destroy()
+					upstreamRequest.destroy()
+				}
+				// node:http preserves the request stream, never follows redirects, and never retries.
+				const upstreamRequest = transport.request(
+					upstream,
+					{ method: request.method, headers: forwardableHeaders(request) },
+					(upstreamMessage) => {
+						upstreamResponse = upstreamMessage
+						const headers = new Headers()
+						const raw = upstreamMessage.rawHeaders
+						for (let index = 0; index < raw.length; index += 2) {
+							const name = raw[index]!
+							if (HOP_BY_HOP_HEADERS.has(name.toLowerCase())) continue
+							headers.append(name, raw[index + 1]!)
+						}
+						const status = upstreamMessage.statusCode ?? 502
+						// 204, 205, and 304 forbid a body; wrapping their connection in a stream
+						// makes the Response constructor throw and turns a valid status into 502.
+						if (request.method === 'HEAD' || status === 204 || status === 205 || status === 304) {
+							// HEAD and 304 may retain the representation length without carrying its body.
+							upstreamMessage.resume()
+							resolve(new Response(null, { status, statusText: upstreamMessage.statusMessage ?? '', headers }))
+							return
+						}
+						resolve(
+							new Response(Readable.toWeb(upstreamMessage) as unknown as ReadableStream, {
+								status,
+								statusText: upstreamMessage.statusMessage ?? '',
+								headers
+							})
+						)
+					}
+				)
+				upstreamRequest.on('error', reject)
+				request.signal.addEventListener('abort', releaseUpstream, { once: true })
+				if (request.body) {
+					const bodyStream = Readable.fromWeb(request.body as NodeReadableStream)
+					bodyStream.on('error', () => upstreamRequest.destroy())
+					bodyStream.pipe(upstreamRequest)
+				} else upstreamRequest.end()
+			})
 		}
 	}
 }

@@ -74,7 +74,20 @@ describe('Docker gateway streaming ingress', () => {
 			(entry) => entry.path === 'apps/api/src/index.ts'
 		)!.content
 
-		expect(entrypoint).toContain("forwarded.headers.delete('transfer-encoding')")
-		expect(entrypoint).toContain("return fetch(forwarded, { redirect: 'manual' })")
+		expect(entrypoint).toContain("transport.request(")
+		expect(entrypoint).toContain("'transfer-encoding'")
+		expect(entrypoint).not.toContain('return fetch(forwarded')
+	})
+
+	test('does not let Docker ingress choices change the Node transport', () => {
+		const dockerEntrypoint = runGenerators(config).find(
+			(entry) => entry.path === 'apps/api/src/index.ts'
+		)!.content
+		const localConfig = { ...config, choices: { ...config.choices, deploy: 'skip' as const } }
+		const localEntrypoint = runGenerators(localConfig).find(
+			(entry) => entry.path === 'apps/api/src/index.ts'
+		)!.content
+
+		expect(localEntrypoint).toBe(dockerEntrypoint)
 	})
 })

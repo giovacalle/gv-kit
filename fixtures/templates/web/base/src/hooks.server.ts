@@ -1,6 +1,8 @@
 import type { Handle/*@gvkit:if honoGateway*/, HandleFetch/*@gvkit:endif*/ } from '@sveltejs/kit'
 /*@gvkit:if honoGateway*/
+/*@gvkit:if deployNode*/
 import { env } from '$env/dynamic/private'
+/*@gvkit:endif*/
 /*@gvkit:endif*/
 import { sequence } from '@sveltejs/kit/hooks'
 /*@gvkit:if i18nParaglide*/
@@ -39,6 +41,9 @@ export const handleFetch: HandleFetch = async ({ event, request, fetch }) => {
 	const gateway = event.platform?.env?.__GATEWAY_TARGET__
 	if (gateway) return gateway.fetch(request)
 
+	/*@gvkit:if deployCfWorkers*/
+	return new Response('service unavailable', { status: 503 })
+	/*@gvkit:else*/
 	const upstream = new URL(
 		`${incoming.pathname}${incoming.search}`,
 		env.GATEWAY_URL ?? '__GATEWAY_URL__'
@@ -50,6 +55,7 @@ export const handleFetch: HandleFetch = async ({ event, request, fetch }) => {
 	forwarded.headers.delete('x-forwarded-for')
 	if (env.GATEWAY_TRUSTED_INGRESS_SECRET) forwarded.headers.set('x-gateway-ingress-secret', env.GATEWAY_TRUSTED_INGRESS_SECRET)
 	return fetch(forwarded)
+	/*@gvkit:endif*/
 }
 /*@gvkit:endif*/
 export const handle: Handle = sequence(

@@ -609,7 +609,7 @@ type GatewayModule = {
 
 type HandleFetchModule = {
 	handleFetch(input: {
-		event: { url: URL; platform?: { env: { GATEWAY?: GatewayTarget } } }
+		event: { url: URL; platform?: { env?: { GATEWAY?: GatewayTarget } } }
 		request: Request
 		fetch(request: Request): Promise<Response>
 	}): Promise<Response>
@@ -647,8 +647,11 @@ async function loadGeneratedServiceLogger(): Promise<{
 	return module
 }
 
-async function loadGeneratedHandleFetch(): Promise<HandleFetchModule> {
-	const hooks = planFixture('hono-skip-deploy').find(
+async function loadGeneratedHandleFetch(
+	fixture = 'hono-skip-deploy',
+	environment: Record<string, string> = { GATEWAY_URL: 'http://gateway.test' }
+): Promise<HandleFetchModule> {
+	const hooks = planFixture(fixture).find(
 		(entry) => entry.path === 'apps/web/src/hooks.server.ts'
 	)
 	if (!hooks) throw new Error('generated web server hooks are missing')
@@ -656,7 +659,7 @@ async function loadGeneratedHandleFetch(): Promise<HandleFetchModule> {
 	const source = hooks.content
 		.replace(
 			"import { env } from '$env/dynamic/private'",
-			"const env = { GATEWAY_URL: 'http://gateway.test' }"
+			`const env = ${JSON.stringify(environment)}`
 		)
 		.replace(
 			"import { sequence } from '@sveltejs/kit/hooks'",
@@ -1248,47 +1251,230 @@ describe('local private-service gateway topology', () => {
 		expect(hooks?.content).not.toContain('gateway.fetch(event.request)')
 	})
 
-	test('SSR sends only same-origin API requests through the private gateway', async () => {
-		const { handleFetch } = await loadGeneratedHandleFetch()
-		const gatewayRequests: Request[] = []
-		const passthroughRequests: Request[] = []
-		const event = {
-			url: new URL('https://app.example/account'),
-			platform: {
-				env: {
-					GATEWAY: {
-						async fetch(request: Request) {
-							gatewayRequests.push(request)
-							return new Response('gateway')
+	test('Cloudflare SSR rejects a missing gateway binding without HTTP fallback', async () => {
+		const { handleFetch } = await loadGeneratedHandleFetch('cf-workers-no-auth-postgres', {
+			GATEWAY_URL: 'https://unexpected.example',
+			GATEWAY_TRUSTED_INGRESS_SECRET: 'synthetic-trust'
+		})
+		const requests: Request[] = []
+		const fetch = async (request: Request) => {
+			requests.push(request)
+			return new Response('unexpected HTTP fallback')
+		}
+		for (const platform of [undefined, {}, { env: {} }]) {
+			for (const path of ['/api', '/api?query=one', '/api/v1/users/me?query=two']) {
+				const response = await handleFetch({
+					event: {
+						url: new URL('https://app.example/account'),
+						...(platform === undefined ? {} : { platform })
+					},
+					request: new Request(`https://app.example${path}`, {
+						headers: { cookie: 'session=synthetic' }
+					}),
+					fetch
+				})
+				expect(response.status).toBe(503)
+				expect(await response.text()).toBe('service unavailable')
+			}
+		}
+		expect(requests).toEqual([])
+	})
+
+	test.each(['cf-workers-no-auth-postgres', 'hono-skip-deploy', 'hono-docker-no-client'])(
+		'SSR sends only same-origin API requests through the private gateway: %s',
+		async (fixture) => {
+			const { handleFetch } = await loadGeneratedHandleFetch(fixture)
+			const gatewayRequests: Request[] = []
+			const passthroughRequests: Request[] = []
+			const event = {
+				url: new URL('https://app.example/account'),
+				platform: {
+					env: {
+						GATEWAY: {
+							async fetch(request: Request) {
+								gatewayRequests.push(request)
+								return new Response('gateway')
+							}
 						}
 					}
 				}
 			}
-		}
-		const passthrough = async (request: Request) => {
-			passthroughRequests.push(request)
-			return new Response('passthrough')
-		}
-		const exactApiRequest = new Request('https://app.example/api')
-		const sameOriginApiRequest = new Request('https://app.example/api/v1/users/me')
-		const externalApiRequest = new Request('https://third-party.example/api/data')
-		const outsideApiRequest = new Request('https://app.example/apiary')
+			const passthrough = async (request: Request) => {
+				passthroughRequests.push(request)
+				return new Response('passthrough')
+			}
+			const exactApiRequest = new Request('https://app.example/api')
+			const sameOriginApiRequest = new Request('https://app.example/api/v1/users/me')
+			const externalApiRequest = new Request('https://third-party.example/api/data')
+			const outsideApiRequest = new Request('https://app.example/apiary')
 
-		expect(
-			await (await handleFetch({ event, request: exactApiRequest, fetch: passthrough })).text()
-		).toBe('gateway')
-		expect(
-			await (await handleFetch({ event, request: sameOriginApiRequest, fetch: passthrough })).text()
-		).toBe('gateway')
-		expect(
-			await (await handleFetch({ event, request: externalApiRequest, fetch: passthrough })).text()
-		).toBe('passthrough')
-		expect(
-			await (await handleFetch({ event, request: outsideApiRequest, fetch: passthrough })).text()
-		).toBe('passthrough')
-		expect(gatewayRequests).toEqual([exactApiRequest, sameOriginApiRequest])
-		expect(passthroughRequests).toEqual([externalApiRequest, outsideApiRequest])
+			expect(
+				await (await handleFetch({ event, request: exactApiRequest, fetch: passthrough })).text()
+			).toBe('gateway')
+			expect(
+				await (
+					await handleFetch({ event, request: sameOriginApiRequest, fetch: passthrough })
+				).text()
+			).toBe('gateway')
+			expect(
+				await (await handleFetch({ event, request: externalApiRequest, fetch: passthrough })).text()
+			).toBe('passthrough')
+			expect(
+				await (await handleFetch({ event, request: outsideApiRequest, fetch: passthrough })).text()
+			).toBe('passthrough')
+			expect(gatewayRequests).toEqual([exactApiRequest, sameOriginApiRequest])
+			expect(passthroughRequests).toEqual([externalApiRequest, outsideApiRequest])
+		}
+	)
+
+	test('Cloudflare SSR preserves the binding request and response without reconstruction', async () => {
+		const { handleFetch } = await loadGeneratedHandleFetch('cf-workers-no-auth-postgres')
+		const request = new Request('https://app.example/api/v1/users/me?query=one', {
+			method: 'POST',
+			headers: { cookie: 'session=synthetic', 'x-request-id': 'synthetic-request' },
+			body: 'request payload'
+		})
+		const response = new Response('response payload', {
+			status: 307,
+			headers: [
+				['location', '/next'],
+				['set-cookie', 'first=one; HttpOnly'],
+				['set-cookie', 'second=two; HttpOnly']
+			]
+		})
+		const forwarded: Request[] = []
+		const returned = await handleFetch({
+			event: {
+				url: new URL('https://app.example/account'),
+				platform: {
+					env: {
+						GATEWAY: {
+							async fetch(incoming) {
+								forwarded.push(incoming)
+								return response
+							}
+						}
+					}
+				}
+			},
+			request,
+			async fetch() {
+				throw new Error('ordinary fetch must not run')
+			}
+		})
+		expect(forwarded).toHaveLength(1)
+		expect(forwarded[0]).toBe(request)
+		expect(request.bodyUsed).toBe(false)
+		expect(await forwarded[0]!.text()).toBe('request payload')
+		expect(returned).toBe(response)
+		expect(returned.status).toBe(307)
+		expect(returned.headers.getSetCookie()).toEqual(['first=one; HttpOnly', 'second=two; HttpOnly'])
+		expect(returned.headers.get('location')).toBe('/next')
+		expect(await returned.text()).toBe('response payload')
 	})
+
+	test('Cloudflare SSR propagates binding errors without HTTP fallback', async () => {
+		const { handleFetch } = await loadGeneratedHandleFetch('cf-workers-no-auth-postgres')
+		const failure = new Error('synthetic binding failure')
+		let ordinaryCalls = 0
+		await expect(
+			handleFetch({
+				event: {
+					url: new URL('https://app.example/account'),
+					platform: {
+						env: {
+							GATEWAY: {
+								async fetch() {
+									throw failure
+								}
+							}
+						}
+					}
+				},
+				request: new Request('https://app.example/api/v1/users/me'),
+				async fetch() {
+					ordinaryCalls += 1
+					return new Response('unexpected fallback')
+				}
+			})
+		).rejects.toBe(failure)
+		expect(ordinaryCalls).toBe(0)
+	})
+
+	test('Cloudflare SSR leaves requests outside the API boundary alone without a binding', async () => {
+		const { handleFetch } = await loadGeneratedHandleFetch('cf-workers-no-auth-postgres')
+		for (const url of [
+			'https://external.example/api',
+			'https://app.example/apiary',
+			'https://app.example/account'
+		]) {
+			const request = new Request(url)
+			const response = new Response('ordinary fetch')
+			const forwarded: Request[] = []
+			expect(
+				await handleFetch({
+					event: { url: new URL('https://app.example/account') },
+					request,
+					async fetch(incoming) {
+						forwarded.push(incoming)
+						return response
+					}
+				})
+			).toBe(response)
+			expect(forwarded).toHaveLength(1)
+			expect(forwarded[0]).toBe(request)
+		}
+	})
+
+	test.each(['hono-skip-deploy', 'hono-docker-no-client'])(
+		'Node SSR preserves private HTTP forwarding without a binding: %s',
+		async (fixture) => {
+			const environments: Record<string, string>[] = [
+				{ GATEWAY_URL: 'http://gateway.test', GATEWAY_TRUSTED_INGRESS_SECRET: 'synthetic-trust' },
+				{}
+			]
+			for (const environment of environments) {
+				const { handleFetch } = await loadGeneratedHandleFetch(fixture, environment)
+				const request = new Request('https://app.example/api/v1/users/me?query=one', {
+					method: 'POST',
+					headers: {
+						cookie: 'session=synthetic',
+						'x-forwarded-host': 'untrusted.example',
+						'x-forwarded-proto': 'http',
+						'x-forwarded-for': '203.0.113.99'
+					},
+					body: 'request payload'
+				})
+				const response = new Response('private response')
+				const forwarded: Request[] = []
+				expect(
+					await handleFetch({
+						event: { url: new URL('https://app.example/account') },
+						request,
+						async fetch(incoming) {
+							forwarded.push(incoming)
+							return response
+						}
+					})
+				).toBe(response)
+				expect(forwarded).toHaveLength(1)
+				const incoming = forwarded[0]!
+				expect(incoming.url).toBe(
+					`${environment.GATEWAY_URL ?? 'http://127.0.0.1:8786'}/api/v1/users/me?query=one`
+				)
+				expect(incoming.method).toBe('POST')
+				expect(incoming.headers.get('cookie')).toBe('session=synthetic')
+				expect(incoming.headers.get('host')).toBe('app.example')
+				expect(incoming.headers.get('x-forwarded-host')).toBe('app.example')
+				expect(incoming.headers.get('x-forwarded-proto')).toBe('https')
+				expect(incoming.headers.get('x-forwarded-for')).toBeNull()
+				expect(incoming.headers.get('x-gateway-ingress-secret')).toBe(
+					environment.GATEWAY_TRUSTED_INGRESS_SECRET ?? null
+				)
+				expect(await incoming.text()).toBe('request payload')
+			}
+		}
+	)
 
 	test('the workspace and root tooling discover the gateway and private services', () => {
 		const entries = planFixture('hono-skip-deploy')

@@ -1191,7 +1191,10 @@ async function main(): Promise<void> {
 	console.log(redactArtifactText(`[gateway-local] generated project: ${generated.project}`, [resolve('.')]))
 	const webHooks = await readFile(join(generated.project, 'apps/web/src/hooks.server.ts'), 'utf8')
 	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)')) throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
-	if (!webHooks.includes('export const handleFetch') || !webHooks.includes('env.GATEWAY_URL')) throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
+	const hasPrivateSsrTransport = generated.config.choices.deploy === 'cf-workers'
+		? webHooks.includes('gateway.fetch(request)') && !webHooks.includes('env.GATEWAY_URL')
+		: webHooks.includes('env.GATEWAY_URL')
+	if (!webHooks.includes('export const handleFetch') || !hasPrivateSsrTransport) throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
 	const viteConfig = await readFile(join(generated.project, 'apps/web/vite.config.ts'), 'utf8')
 	if (!viteConfig.includes("'^/api(?:[/?]|$)': { target:")) throw new Error('generated local Vite ingress omits the exact API boundary')
 	if (viteConfig.includes("'/api': { target:")) throw new Error('generated local Vite ingress overmatches paths outside /api')

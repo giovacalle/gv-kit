@@ -52,6 +52,7 @@ const gatewayOwnedSourcePaths = [
 	'src/generators/services/users.ts',
 	'src/lib/workers.ts',
 	'tests/contracts/gateway-auth.test.ts',
+	'tests/contracts/gateway-client-ip.test.ts',
 	'tests/contracts/gateway-cloudflare.test.ts',
 	'tests/contracts/gateway-docker.test.ts',
 	'tests/contracts/gateway-node-transport.test.ts',
@@ -62,6 +63,7 @@ const gatewayOwnedSourcePaths = [
 	'tests/contracts/gateway-source-standards.test.ts',
 	'tests/contracts/gateway-streaming.test.ts',
 	'tests/contracts/gateway-topology.test.ts',
+	'tests/contracts/generated-auth-otp.test.ts',
 	'tests/contracts/users-bindings.test.ts',
 	'tests/generators/gateway.test.ts',
 	'tests/generators/hono-topology.test.ts'
@@ -111,6 +113,7 @@ const gatewayEffortSourcePaths = [
 	'tests/contracts/ci-workflow.test.ts',
 	'tests/contracts/deploy-compose-yaml.test.ts',
 	'tests/contracts/gateway-auth.test.ts',
+	'tests/contracts/gateway-client-ip.test.ts',
 	'tests/contracts/gateway-cloudflare.test.ts',
 	'tests/contracts/gateway-docker.test.ts',
 	'tests/contracts/gateway-local.test.ts',
@@ -122,6 +125,7 @@ const gatewayEffortSourcePaths = [
 	'tests/contracts/gateway-source-standards.test.ts',
 	'tests/contracts/gateway-streaming.test.ts',
 	'tests/contracts/gateway-topology.test.ts',
+	'tests/contracts/generated-auth-otp.test.ts',
 	'tests/contracts/inside-frontend-bindings.test.ts',
 	'tests/contracts/non-hono-output.test.ts',
 	'tests/contracts/topology-routes.test.ts',
@@ -146,8 +150,17 @@ const gatewayEffortGeneratedSourcePaths = [
 	'src/generated/web-templates.ts'
 ]
 const gatewayEffortLiveTypeScriptPathContract = {
-	count: 73,
-	digest: '3079eb628dc119d67ae5ce37f09ab9af0cb463ad7035ef3ed348e3ebadc815d2'
+	count: 75,
+	digest: 'f14b7361a630d2a403f68e2fe28baf48ff4b7a462ee82935b87e262127122ba9'
+}
+
+const securityBoundaryTestPaths = [
+	'tests/contracts/gateway-client-ip.test.ts',
+	'tests/contracts/generated-auth-otp.test.ts'
+]
+
+function missingSecurityBoundaryTests(paths: readonly string[]): string[] {
+	return securityBoundaryTestPaths.filter((path) => !paths.includes(path))
 }
 
 function inlineControlBodyFindings(path: string, source: string): string[] {
@@ -774,6 +787,33 @@ describe('local private-service gateway topology', () => {
 			'sample.ts:20 (do, braced)',
 			'sample.ts:29 (if, split)',
 			'sample.ts:30 (if, unbraced multi-line)'
+		])
+	})
+
+	test.each([
+		{ inventory: 'gateway-owned', paths: gatewayOwnedSourcePaths },
+		{ inventory: 'gateway effort', paths: gatewayEffortSourcePaths }
+	])('$inventory source inventory cannot omit the OTP or client-IP boundary tests', ({ paths }) => {
+		expect(missingSecurityBoundaryTests(paths)).toEqual([])
+		for (const omitted of securityBoundaryTestPaths) {
+			const incomplete = paths.filter((path) => path !== omitted)
+			expect(missingSecurityBoundaryTests(incomplete)).toEqual([omitted])
+		}
+	})
+
+	test('source standards reject the original OTP helper and split import-replacement loop', () => {
+		const source = [
+			"async function invokeOtp(state: ProbeState, email = 'person@example.test', otp = '654321') {}",
+			'for (const [dependency, replacement] of [',
+			"\t['better-auth', betterAuthUrl]",
+			'] as const)',
+			'\tsource = source.replaceAll(dependency, replacement)'
+		].join('\n')
+		expect(positionalParameterFindings('original-otp.ts', source)).toEqual([
+			'original-otp.ts:1 3 positional parameters'
+		])
+		expect(inlineControlBodyFindings('original-otp.ts', source)).toEqual([
+			'original-otp.ts:5 (for-of, split)'
 		])
 	})
 

@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { generateAuthService } from '../../src/generators/services/auth.js'
 import type { GvKitConfig } from '../../src/schema/config.js'
 
@@ -139,8 +139,7 @@ export function emailOTP(options) { ${stateReference}.options = options; return 
 		['@repo/db/client', dbUrl],
 		['@repo/mailer', mailerUrl],
 		['./lib/utils.js', utilsUrl]
-	] as const)
-		source = source.replaceAll(`"${dependency}"`, `"${replacement}"`)
+	] as const) source = source.replaceAll(`"${dependency}"`, `"${replacement}"`)
 
 	const previous = Object.fromEntries(
 		[...ENVIRONMENT_NAMES, 'NODE_ENV'].map((name) => [name, process.env[name]])
@@ -164,24 +163,19 @@ export function emailOTP(options) { ${stateReference}.options = options; return 
 	return state
 }
 
-async function invokeOtp(
-	state: ProbeState,
-	email = 'person@example.test',
-	otp = '654321'
-): Promise<{ error: Error | undefined; logs: string[] }> {
+async function invokeOtp(state: ProbeState): Promise<{ error: Error | undefined; logs: string[] }> {
 	const logs: string[] = []
-	const previousLog = console.log
-	console.log = (...values: unknown[]) => logs.push(values.map(String).join(' '))
+	const logSpy = spyOn(console, 'log').mockImplementation((...values: unknown[]) => logs.push(values.map(String).join(' ')))
 	let error: Error | undefined
 	try {
 		await state.options!.sendVerificationOTP(
-			{ email, otp },
+			{ email: 'person@example.test', otp: '654321' },
 			{ request: { headers: new Headers({ 'x-locale': 'it-IT' }) } }
 		)
 	} catch (cause) {
 		error = cause instanceof Error ? cause : new Error(String(cause))
 	} finally {
-		console.log = previousLog
+		logSpy.mockRestore()
 	}
 	return { error, logs }
 }
@@ -271,8 +265,7 @@ async function invokeProviderFailureThroughBetterAuth({
 		['@repo/db/client', dbUrl],
 		['@repo/mailer', mailerUrl],
 		['./lib/utils.js', utilsUrl]
-	] as const)
-		source = source.replaceAll(`"${dependency}"`, `"${replacement}"`)
+	] as const) source = source.replaceAll(`"${dependency}"`, `"${replacement}"`)
 
 	const runtimeEnvironment = {
 		...environment,
@@ -287,17 +280,12 @@ async function invokeProviderFailureThroughBetterAuth({
 	Object.assign(process.env, runtimeEnvironment, { NODE_ENV: 'production' })
 	const generatedUrl = URL.createObjectURL(new Blob([source], { type: 'text/javascript' }))
 	const diagnostics: string[] = []
-	const previousConsole = {
-		error: console.error,
-		log: console.log,
-		warn: console.warn
-	}
-	const capture = (...values: unknown[]) => {
+	const capture = (values: unknown[]) => {
 		diagnostics.push(values.map(diagnosticText).join(' '))
 	}
-	console.error = capture
-	console.log = capture
-	console.warn = capture
+	const errorSpy = spyOn(console, 'error').mockImplementation((...values: unknown[]) => capture(values))
+	const logSpy = spyOn(console, 'log').mockImplementation((...values: unknown[]) => capture(values))
+	const warnSpy = spyOn(console, 'warn').mockImplementation((...values: unknown[]) => capture(values))
 	try {
 		const module = (await import(generatedUrl)) as {
 			auth?: { handler(request: Request): Promise<Response> }
@@ -331,9 +319,9 @@ async function invokeProviderFailureThroughBetterAuth({
 			status: response.status
 		}
 	} finally {
-		console.error = previousConsole.error
-		console.log = previousConsole.log
-		console.warn = previousConsole.warn
+		errorSpy.mockRestore()
+		logSpy.mockRestore()
+		warnSpy.mockRestore()
 		URL.revokeObjectURL(generatedUrl)
 		Reflect.deleteProperty(globalThis, key)
 		for (const [name, value] of Object.entries(previousEnvironment)) {

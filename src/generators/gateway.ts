@@ -732,8 +732,7 @@ function httpTarget(origin: string): GatewayTarget {
 							headers.append(name, raw[index + 1]!)
 						}
 						const status = upstreamMessage.statusCode ?? 502
-						// 204, 205, and 304 forbid a body; wrapping their connection in a stream
-						// makes the Response constructor throw and turns a valid status into 502.
+						// Even an empty stream makes Response reject bodyless statuses.
 						if (request.method === 'HEAD' || status === 204 || status === 205 || status === 304) {
 							// HEAD and 304 may retain the representation length without carrying its body.
 							upstreamMessage.resume()

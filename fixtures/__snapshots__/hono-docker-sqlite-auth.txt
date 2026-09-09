@@ -40,7 +40,7 @@ apps/api/package.json  72bede691c0be1f4
 apps/api/scripts/compose-openapi.ts  28f44c8f214f7e7c
 apps/api/src/app.ts  a8a07c2772a7478d
 apps/api/src/client-ip.ts  090073318f9920c2
-apps/api/src/index.ts  6ef6989613223ffd
+apps/api/src/index.ts  3654fa37741eca5d
 apps/api/tsconfig.json  69f2df8e361aa93a
 apps/web/.env.example  646963ee18746a11
 apps/web/.gitignore  83d28c3cd52008f4

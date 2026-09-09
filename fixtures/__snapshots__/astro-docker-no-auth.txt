@@ -14,7 +14,7 @@ apps/api/package.json  f6d5e7c871773838
 apps/api/scripts/compose-openapi.ts  b924206f497f598e
 apps/api/src/app.ts  a8a07c2772a7478d
 apps/api/src/client-ip.ts  090073318f9920c2
-apps/api/src/index.ts  6ef6989613223ffd
+apps/api/src/index.ts  3654fa37741eca5d
 apps/api/tsconfig.json  69f2df8e361aa93a
 apps/marketing/.env.example  2b2bdda87aa1e3a8
 apps/marketing/astro.config.mjs  b7f9b0e64d4e443d

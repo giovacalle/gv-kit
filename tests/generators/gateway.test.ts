@@ -29,6 +29,19 @@ function content(entries: ReturnType<typeof generateGateway>, path: string): str
 }
 
 describe('generateGateway', () => {
+	test('Node entry keeps bodyless response explanations on one line', () => {
+		const consecutiveComments = /^[\t ]*\/\/[^\n]*\n[\t ]*\/\//m
+		const originalExplanation = [
+			'// 204, 205, and 304 forbid a body; wrapping their connection in a stream',
+			'// makes the Response constructor throw and turns a valid status into 502.'
+		].join('\n')
+		expect(originalExplanation).toMatch(consecutiveComments)
+		for (const fixture of ['hono-skip-deploy', 'hono-docker-full']) {
+			const source = content(generateFixture(fixture), 'apps/api/src/index.ts')
+			expect(source, fixture).not.toMatch(consecutiveComments)
+		}
+	})
+
 	test('keeps apex-domain setup guidance in the Cloudflare README instead of Wrangler comments', () => {
 		const entries = generateFixture('hono-cf-workers-passwordless')
 		const wrangler = content(entries, 'apps/api/wrangler.jsonc')

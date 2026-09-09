@@ -4,7 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { generateDeploy } from '../../src/generators/deploy.js'
 import { runGenerators } from '../../src/generators/index.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
-import type { Choices, GvKitConfig } from '../../src/schema/config.js'
+import { type Choices, GvKitConfig } from '../../src/schema/config.js'
 
 const baseChoices: Choices = {
 	name: 'demo',
@@ -264,7 +264,89 @@ function databaseCleanupSource(provider: DatabaseProvider, project = 'demo'): st
 		.replaceAll('${{ steps.alias.outputs.alias }}', 'pr-123')
 }
 
+function previewPreparationPolicies(source: string): unknown[] {
+	const calls = source.split('\n').filter((line) => line.startsWith('prepare '))
+	if (calls.length === 0) throw new Error('Missing preview preparation calls')
+	return calls.map((line) => {
+		const match = /^prepare '(\{[^']*\})'$/.exec(line)
+		if (!match) throw new Error('Preview preparation requires one named policy object')
+		return JSON.parse(match[1]!)
+	})
+}
+
 describe('Cloudflare gateway preview contracts', () => {
+	test('publisher preparation carries one complete named policy per target', () => {
+		const authOptions: Choices['auth'][] = [[], ['emailOTP']]
+		for (const db of ['sqlite', 'postgres'] as const) {
+			for (const marketing of ['inside-web', 'astro'] as const) {
+				for (const auth of authOptions) {
+					const cfg = GvKitConfig.parse(
+						makeCfg({ db, marketing, auth, email: auth.length > 0 ? 'resend' : 'skip' })
+					)
+					const policies = previewPreparationPolicies(
+						entry(generateDeploy(cfg), 'scripts/publish-cloudflare-preview.sh')
+					)
+					expect(policies).toEqual([
+						{
+							directory: 'services/auth',
+							bundle: 'index.js',
+							databasePolicy: db === 'sqlite' && auth.length > 0 ? 'exact-d1' : 'none',
+							routePolicy: 'none',
+							servicePolicy: 'none',
+							assetsPolicy: 'none'
+						},
+						{
+							directory: 'services/users',
+							bundle: 'index.js',
+							databasePolicy: db === 'sqlite' ? 'exact-d1' : 'none',
+							routePolicy: 'none',
+							servicePolicy: 'auth',
+							assetsPolicy: 'none'
+						},
+						{
+							directory: 'apps/api',
+							bundle: 'index.js',
+							databasePolicy: 'none',
+							routePolicy: 'api',
+							servicePolicy: 'gateway',
+							assetsPolicy: 'none'
+						},
+						...(marketing === 'astro'
+							? [
+									{
+										directory: 'apps/marketing',
+										bundle: 'no-op-worker.js',
+										databasePolicy: 'none',
+										routePolicy: 'marketing',
+										servicePolicy: 'none',
+										assetsPolicy: 'marketing'
+									}
+								]
+							: []),
+						{
+							directory: 'apps/web',
+							bundle: '_worker.js',
+							databasePolicy: 'none',
+							routePolicy: 'web',
+							servicePolicy: 'gateway-binding',
+							assetsPolicy: 'web'
+						}
+					])
+				}
+			}
+		}
+	})
+
+	test('publisher policy coverage rejects positional calls and extra shell arguments', () => {
+		expect(() =>
+			previewPreparationPolicies('prepare "apps/api" "index.js" none api gateway none')
+		).toThrow('one named policy object')
+		expect(() => previewPreparationPolicies(`prepare '{"directory":"apps/api"}' extra`)).toThrow(
+			'one named policy object'
+		)
+		expect(() => previewPreparationPolicies('')).toThrow('Missing preview preparation calls')
+	})
+
 	test('the managed-domain gate runs before preview database provisioning', () => {
 		const workflow = Bun.YAML.parse(
 			entry(generateDeploy(makeCfg()), '.github/workflows/deploy-staging.yml')

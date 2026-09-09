@@ -355,7 +355,7 @@ function publishCloudflarePreviewScript(cfg: GvKitConfig): string {
 	const preparations = targets
 		.map(
 			({ directory, bundle, databasePolicy, routePolicy, servicePolicy, assetsPolicy }) =>
-				`prepare ${JSON.stringify(directory)} ${JSON.stringify(bundle)} ${databasePolicy} ${routePolicy} ${servicePolicy} ${assetsPolicy}`
+				`prepare '${JSON.stringify({ directory, bundle, databasePolicy, routePolicy, servicePolicy, assetsPolicy })}'`
 		)
 		.join('\n')
 	const deployments = targets
@@ -449,12 +449,13 @@ if [ "$worker_name_count" -ne ${cfg.choices.marketing === 'astro' ? '5' : '4'} ]
 fi
 
 prepare() {
-	directory=$1
-	bundle=$2
-	database_policy=$3
-	route_policy=$4
-	service_policy=$5
-	assets_policy=$6
+	policy=$1
+	directory=$(printf '%s' "$policy" | jq -er '.directory')
+	bundle=$(printf '%s' "$policy" | jq -er '.bundle')
+	database_policy=$(printf '%s' "$policy" | jq -er '.databasePolicy')
+	route_policy=$(printf '%s' "$policy" | jq -er '.routePolicy')
+	service_policy=$(printf '%s' "$policy" | jq -er '.servicePolicy')
+	assets_policy=$(printf '%s' "$policy" | jq -er '.assetsPolicy')
 	target_dir="$PREVIEW_ARTIFACT/$directory"
 	source_config="$target_dir/wrangler.staging.jsonc"
 	bundle_path=".preview-bundle/$bundle"

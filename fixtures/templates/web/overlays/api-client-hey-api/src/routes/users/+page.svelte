@@ -27,7 +27,7 @@
 		<p class="text-destructive">{profile.error.message}</p>
 	{:else if profile.data}
 		<dl class="grid grid-cols-[auto_1fr] gap-x-4 gap-y-1 text-sm">
-			<dt class="text-muted-foreground">ID</dt>
+			<dt class="text-muted-foreground"><!--@gvkit:if i18nParaglide-->{m.users_id_label()}<!--@gvkit:else-->ID<!--@gvkit:endif--></dt>
 			<dd>{profile.data.id}</dd>
 		</dl>
 	{/if}

@@ -66,7 +66,8 @@ const gatewayOwnedSourcePaths = [
 	'tests/contracts/generated-auth-otp.test.ts',
 	'tests/contracts/users-bindings.test.ts',
 	'tests/generators/gateway.test.ts',
-	'tests/generators/hono-topology.test.ts'
+	'tests/generators/hono-topology.test.ts',
+	'tests/generators/i18n.test.ts'
 ]
 
 const gatewayEffortSourcePaths = [
@@ -136,6 +137,7 @@ const gatewayEffortSourcePaths = [
 	'tests/generators/frontend-sveltekit.test.ts',
 	'tests/generators/gateway.test.ts',
 	'tests/generators/hono-topology.test.ts',
+	'tests/generators/i18n.test.ts',
 	'tests/generators/integrated-deploy.test.ts',
 	'tests/generators/marketing-astro.test.ts',
 	'tests/generators/openapi-client.test.ts',
@@ -150,8 +152,8 @@ const gatewayEffortGeneratedSourcePaths = [
 	'src/generated/web-templates.ts'
 ]
 const gatewayEffortLiveTypeScriptPathContract = {
-	count: 75,
-	digest: 'f14b7361a630d2a403f68e2fe28baf48ff4b7a462ee82935b87e262127122ba9'
+	count: 76,
+	digest: 'd3f2243a0c76f003d672cf9facb4f379af1bfe4467b20670a68da42024dfce2b'
 }
 
 const securityBoundaryTestPaths = [

@@ -140,6 +140,7 @@ function messagesEn({
 		base.users_title = 'Current user'
 		base.users_lede = 'Fetched client-side through the generated client, cached by TanStack Query.'
 		base.users_loading = 'Loading…'
+		base.users_id_label = 'ID'
 		base.users_name_label = 'Name'
 		base.users_email_label = 'Email'
 	}
@@ -266,6 +267,7 @@ function messagesIt({
 		base.users_lede =
 			'Recuperato lato client tramite il client generato, in cache con TanStack Query.'
 		base.users_loading = 'Caricamento…'
+		base.users_id_label = 'ID'
 		base.users_name_label = 'Nome'
 		base.users_email_label = 'Email'
 	}

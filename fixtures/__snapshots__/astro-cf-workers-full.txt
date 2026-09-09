@@ -107,7 +107,7 @@ apps/web/src/routes/me/+page.svelte  ec05e1786f90d379
 apps/web/src/routes/me/account/+page.server.ts  297140c71e8b3f40
 apps/web/src/routes/me/account/+page.svelte  e1ef2a994eb7205c
 apps/web/src/routes/users/+page.server.ts  6057e04cf1d96ea8
-apps/web/src/routes/users/+page.svelte  180b1e135da768a7
+apps/web/src/routes/users/+page.svelte  dae49dd35cd9b245
 apps/web/static/favicon.svg  0b4b302394834bcd
 apps/web/svelte.config.js  412749bb6a73fa86
 apps/web/tsconfig.json  5d63902c7bfd2935
@@ -142,8 +142,8 @@ packages/db/src/schema/sample.ts  88bf38dd19b23d2c
 packages/db/tsconfig.json  44481e7674309364
 packages/i18n/.gitignore  14a73daf0c44c981
 packages/i18n/README.md  97045908e5dede9e
-packages/i18n/messages/en.json  5ba2fc5c4656947e
-packages/i18n/messages/it.json  0991f328f3d3a505
+packages/i18n/messages/en.json  7213b763c0f82c53
+packages/i18n/messages/it.json  7c3f92a28ec010b8
 packages/i18n/package.json  619167a81a565fb7
 packages/i18n/project.inlang/settings.json  13fd811b7eadea9c
 packages/i18n/tsconfig.json  959d3eaf2e4b2f19

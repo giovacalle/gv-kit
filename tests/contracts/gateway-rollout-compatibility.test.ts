@@ -380,13 +380,7 @@ function publicRequest(name: string): PublicRequestFixture {
 	return fixture
 }
 
-function requestFromFixture({
-	fixture,
-	origin
-}: {
-	fixture: RequestFixture
-	origin?: string
-}): Request {
+function requestFromFixture(fixture: RequestFixture, origin?: string): Request {
 	const url = fixture.url ?? `${origin}${fixture.path}`
 	return new Request(url, {
 		method: fixture.method,
@@ -466,23 +460,17 @@ describe('adjacent-version gateway rollout compatibility', () => {
 		const webAlias = await loadCurrentWebAlias(gateway)
 		const authFixture = publicRequest('auth')
 		const auth = await webAlias.fetch(
-			requestFromFixture({ fixture: authFixture, origin: previousContract.webOrigin })
+			requestFromFixture(authFixture, previousContract.webOrigin)
 		)
 		const usersFixture = publicRequest('users')
 		const users = await webAlias.fetch(
-			requestFromFixture({ fixture: usersFixture, origin: previousContract.webOrigin })
+			requestFromFixture(usersFixture, previousContract.webOrigin)
 		)
 		const health = await webAlias.fetch(
-			requestFromFixture({
-				fixture: publicRequest('health'),
-				origin: previousContract.webOrigin
-			})
+			requestFromFixture(publicRequest('health'), previousContract.webOrigin)
 		)
 		const openApi = await webAlias.fetch(
-			requestFromFixture({
-				fixture: publicRequest('openapi'),
-				origin: previousContract.webOrigin
-			})
+			requestFromFixture(publicRequest('openapi'), previousContract.webOrigin)
 		)
 
 		expect(auth.status).toBe(307)
@@ -546,7 +534,7 @@ describe('adjacent-version gateway rollout compatibility', () => {
 		const authApp = authModule.default
 		if (!authApp) throw new Error('current auth service app is missing')
 		const authFixture = previousContract.oldGatewayRequests.auth
-		const auth = await authApp.fetch(requestFromFixture({ fixture: authFixture }))
+		const auth = await authApp.fetch(requestFromFixture(authFixture))
 		const expectedAuth = previousContract.currentServiceResponses.AUTH
 
 		expect(auth.status).toBe(expectedAuth.status)
@@ -558,7 +546,7 @@ describe('adjacent-version gateway rollout compatibility', () => {
 		if (!usersApp) throw new Error('current users service app is missing')
 		let sessionRequest: Request | undefined
 		const usersFixture = previousContract.oldGatewayRequests.users
-		const users = await usersApp.fetch(requestFromFixture({ fixture: usersFixture }), {
+		const users = await usersApp.fetch(requestFromFixture(usersFixture), {
 			AUTH: {
 				async fetch(request: Request) {
 					sessionRequest = request

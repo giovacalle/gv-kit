@@ -53,7 +53,7 @@ function replaceRequired({
 	return source.replace(expected, replacement)
 }
 
-async function previewNames({ entries }: { entries: GeneratedEntry[] }): Promise<PreviewNames> {
+async function previewNames(entries: GeneratedEntry[]): Promise<PreviewNames> {
 	let source = entry(entries, 'scripts/cloudflare-preview-name.mjs')
 	source = replaceRequired({
 		source,
@@ -117,13 +117,7 @@ function memoryFilesystem(initialEntries: GeneratedEntry[]) {
 	}
 }
 
-async function runPreviewPreparation({
-	cfg,
-	overrideEnv = {}
-}: {
-	cfg: GvKitConfig
-	overrideEnv?: Record<string, string>
-}) {
+async function runPreviewPreparation(cfg: GvKitConfig, overrideEnv: Record<string, string> = {}) {
 	const entries = runGenerators(cfg)
 	const materializedPaths = [
 		'apps/api/wrangler.jsonc',
@@ -139,7 +133,7 @@ async function runPreviewPreparation({
 			content: JSON.stringify({ name: `${cfg.choices.name}-dependency-worker` })
 		}
 	])
-	const names = await previewNames({ entries })
+	const names = await previewNames(entries)
 	let source = entry(entries, 'scripts/prepare-cloudflare-preview.mjs')
 	source = replaceRequired({
 		source,
@@ -389,7 +383,7 @@ describe('Cloudflare gateway preview contracts', () => {
 			CLOUDFLARE_PREVIEW_API_DOMAIN: 'api.example.com',
 			CLOUDFLARE_PREVIEW_ZONE_NAME: 'example.com'
 		}
-		const verify = async ({ missingWildcard }: { missingWildcard?: string } = {}) => {
+		const verify = async (missingWildcard?: string) => {
 			const output: string[] = []
 			const requests: string[] = []
 			await new execute(
@@ -427,16 +421,16 @@ describe('Cloudflare gateway preview contracts', () => {
 		}
 
 		expect(await verify()).toContain('Managed Cloudflare preview ingress prerequisites verified.')
-		expect(verify({ missingWildcard: '*.api.example.com' })).rejects.toThrow(
+		expect(verify('*.api.example.com')).rejects.toThrow(
 			'Missing proxied shared wildcard DNS record: *.api.example.com'
 		)
 	})
 
 	test('one alias gives the gateway direct managed-domain routes and keeps private boundaries', async () => {
-		const result = await runPreviewPreparation({ cfg: makeCfg() })
+		const result = await runPreviewPreparation(makeCfg())
 		expect(result.exitCode, result.stderr).toBe(0)
 		const configs = result.configs!
-		const names = await previewNames({ entries: result.entries })
+		const names = await previewNames(result.entries)
 		expect(configs.gateway.name).toBe(names.cloudflarePreviewName('demo-api', 'pr-123'))
 		expect(configs.web.name).toBe(names.cloudflarePreviewName('demo-web', 'pr-123'))
 		expect(configs.auth.name).toBe(names.cloudflarePreviewName('demo-auth', 'pr-123'))
@@ -509,10 +503,7 @@ describe('Cloudflare gateway preview contracts', () => {
 	})
 
 	test('preview preparation fails closed before writing configs when managed domains are absent', async () => {
-		const result = await runPreviewPreparation({
-			cfg: makeCfg(),
-			overrideEnv: { CLOUDFLARE_PREVIEW_WEB_DOMAIN: '' }
-		})
+		const result = await runPreviewPreparation(makeCfg(), { CLOUDFLARE_PREVIEW_WEB_DOMAIN: '' })
 		expect(result.exitCode).not.toBe(0)
 		expect(result.stderr).toContain('CLOUDFLARE_PREVIEW_WEB_DOMAIN is required')
 		expect(result.stdout).toBe('')
@@ -521,7 +512,7 @@ describe('Cloudflare gateway preview contracts', () => {
 
 	test('preview Worker names remain bounded for cleanup', async () => {
 		const project = 'a'.repeat(55)
-		const result = await runPreviewPreparation({ cfg: makeCfg({ name: project }) })
+		const result = await runPreviewPreparation(makeCfg({ name: project }))
 		expect(result.exitCode, result.stderr).toBe(0)
 		const previewNames = Object.values(result.configs!).flatMap((config) =>
 			config && typeof config.name === 'string' ? [config.name] : []
@@ -534,7 +525,7 @@ describe('Cloudflare gateway preview contracts', () => {
 	})
 
 	test('Astro preview uses a managed hostname covered by the shared web wildcard', async () => {
-		const result = await runPreviewPreparation({ cfg: makeCfg({ marketing: 'astro' }) })
+		const result = await runPreviewPreparation(makeCfg({ marketing: 'astro' }))
 		expect(result.exitCode, result.stderr).toBe(0)
 		expect(result.configs?.marketing?.routes).toEqual([
 			{ pattern: 'pr-123-marketing.app.example.com/*', zone_name: 'example.com' }
@@ -677,7 +668,7 @@ describe('Cloudflare gateway preview contracts', () => {
 	test('cleanup inventories topology drift, rejects unsafe names, and reports partial failures', async () => {
 		const generated = generateDeploy(makeCfg())
 		const cleanup = entry(generated, 'scripts/cleanup-cloudflare-preview-workers.sh')
-		const names = await previewNames({ entries: generated })
+		const names = await previewNames(generated)
 		const driftedWorkers = ['demo-billing', 'demo-members', 'demo-users'].map((productionName) =>
 			names.cloudflarePreviewName(productionName, 'pr-123')
 		)

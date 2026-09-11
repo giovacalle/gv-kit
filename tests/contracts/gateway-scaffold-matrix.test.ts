@@ -249,6 +249,19 @@ describe('gateway generated-workspace verification matrix', () => {
 		}
 	})
 
+	test('D1 migration validation trusts only the reviewed JSONC step', async () => {
+		const matrixEntry = cloudflareMatrixEntry('sqlite')
+		const { production, staging } = generatedCloudflareWorkflows(matrixEntry)
+		await expect(validateCloudflareWorkflowStructure({ production, staging }, matrixEntry)).resolves.toBeDefined()
+		expect(staging.split('wrangler.preview-migrations.jsonc')).toHaveLength(3)
+		const legacyNames = staging.replaceAll('wrangler.preview-migrations.jsonc', 'wrangler.preview-migrations.json')
+		const alteredTool = staging.replace('npx wrangler@4.125.0 d1 migrations apply', 'npx wrangler@latest d1 migrations apply')
+		for (const altered of [legacyNames, alteredTool]) {
+			expect(altered).not.toBe(staging)
+			await expect(validateCloudflareWorkflowStructure({ production, staging: altered }, matrixEntry)).rejects.toThrow('deploy exposes provider credentials to an untrusted step')
+		}
+	})
+
 	test('workflow validation rejects credentials and active deploys in the untrusted build', async () => {
 		const matrixEntry = cloudflareMatrixEntry()
 		const { production, staging } = generatedCloudflareWorkflows(matrixEntry)

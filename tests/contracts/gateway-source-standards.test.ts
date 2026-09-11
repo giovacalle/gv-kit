@@ -189,7 +189,72 @@ function generatedHonoRootEnvironmentExamples() {
 		})
 }
 
+function helperArgumentFindings(source: string, names: string[]): string[] {
+	const sourceFile = ts.createSourceFile('helpers.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+	const found = new Set<string>()
+	const findings: string[] = []
+	function check(name: string, parameters: ts.NodeArray<ts.ParameterDeclaration>): void {
+		if (!names.includes(name)) return
+		found.add(name)
+		const first = parameters[0]?.name
+		const named = parameters.length === 1 && first && ts.isObjectBindingPattern(first)
+		const valid = named ? first.elements.length >= 3 : parameters.length <= 2 && parameters.every((parameter) => ts.isIdentifier(parameter.name))
+		if (!valid) findings.push(name)
+	}
+	function visit(node: ts.Node): void {
+		if (ts.isFunctionDeclaration(node) && node.name) check(node.name.text, node.parameters)
+		if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.initializer && (ts.isArrowFunction(node.initializer) || ts.isFunctionExpression(node.initializer))) check(node.name.text, node.initializer.parameters)
+		ts.forEachChild(node, visit)
+	}
+	visit(sourceFile)
+	for (const name of names) if (!found.has(name)) throw new Error(`Missing helper coverage: ${name}`)
+	return findings
+}
+
+function nonJsoncWranglerConfigNames(source: string): string[] {
+	return source.match(/\bwrangler(?:\.[a-z-]+)*\.json\b/g) ?? []
+}
+
 describe('gateway source standards', () => {
+	test('temporary Wrangler config filenames retain the JSONC convention at every boundary', () => {
+		for (const fixture of readdirSync(fixturesDirectory).filter((name) => name.endsWith('.jsonc'))) {
+			const cfg = GvKitConfig.parse(parseJsonc(readFileSync(join(fixturesDirectory, fixture), 'utf8')))
+			for (const file of generateDeploy(cfg)) expect(nonJsoncWranglerConfigNames(file.content), `${fixture}:${file.path}`).toEqual([])
+		}
+		const verifier = readFileSync(join(repositoryRoot, 'scripts/verify-gateway-preview-security.ts'), 'utf8')
+		expect(nonJsoncWranglerConfigNames(verifier)).toEqual([])
+	})
+
+	test('temporary config filename coverage rejects either original JSON name', () => {
+		for (const name of ['wrangler.publish.json', 'wrangler.preview-migrations.json']) expect(nonJsoncWranglerConfigNames(`--config ${name}`)).toEqual([name])
+		expect(nonJsoncWranglerConfigNames('wrangler.jsonc wrangler.publish.jsonc wrangler.preview-migrations.jsonc manifest.json')).toEqual([])
+	})
+
+	test('publisher and preview test helpers follow the positional-input boundary', () => {
+		const sources = [
+			{ path: 'src/generators/deploy.ts', names: ['writeStagingWranglerConfigStep', 'honoPreviewIngressGateJob', 'deployStagingWorkflow'] },
+			{ path: 'tests/contracts/gateway-preview-workflows.test.ts', names: ['previewNames', 'runPreviewPreparation', 'verify', 'replaceRequired'] },
+			{ path: 'tests/contracts/gateway-rollout-compatibility.test.ts', names: ['requestFromFixture'] }
+		]
+		for (const { path, names } of sources) expect(helperArgumentFindings(readFileSync(join(repositoryRoot, path), 'utf8'), names), path).toEqual([])
+	})
+
+	test('helper argument coverage rejects original small bags without banning domain values', () => {
+		const originals = [
+			'function writeStagingWranglerConfigStep({ db }: { db: string }) {}',
+			'function honoPreviewIngressGateJob({ publicKeys }: { publicKeys: string[] }) {}',
+			'async function previewNames({ entries }: { entries: Entry[] }) {}',
+			'async function runPreviewPreparation({ cfg, overrideEnv = {} }: { cfg: Config; overrideEnv?: object }) {}',
+			'const verify = async ({ missingWildcard }: { missingWildcard?: string } = {}) => {}',
+			'function requestFromFixture({ fixture, origin }: { fixture: Fixture; origin?: string }) {}'
+		]
+		const names = ['writeStagingWranglerConfigStep', 'honoPreviewIngressGateJob', 'previewNames', 'runPreviewPreparation', 'verify', 'requestFromFixture']
+		for (const [index, source] of originals.entries()) expect(helperArgumentFindings(source, [names[index]!])).toEqual([names[index]!])
+		expect(helperArgumentFindings('function domain(config: Config) {}\nfunction named({ a, b, c }: Inputs) {}\nconst optional = (value?: string) => {}', ['domain', 'named', 'optional'])).toEqual([])
+		expect(helperArgumentFindings('function positional(a: string, b: string, c: string) {}', ['positional'])).toEqual(['positional'])
+		expect(() => helperArgumentFindings('', ['missing'])).toThrow('Missing helper coverage: missing')
+	})
+
 	test('Docker verifier cleans up before propagating verification failures', () => {
 		const source = readFileSync(dockerVerifierPath, 'utf8')
 		const capturedFailure = source.indexOf('verificationError = error')

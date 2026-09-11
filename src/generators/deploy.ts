@@ -459,7 +459,7 @@ prepare() {
 	target_dir="$PREVIEW_ARTIFACT/$directory"
 	source_config="$target_dir/wrangler.staging.jsonc"
 	bundle_path=".preview-bundle/$bundle"
-	publish_config="$target_dir/wrangler.publish.json"
+	publish_config="$target_dir/wrangler.publish.jsonc"
 	if [ ! -f "$source_config" ] || [ ! -f "$target_dir/$bundle_path" ]; then
 		echo "Preview artifact is incomplete for $directory." >&2
 		exit 1
@@ -555,13 +555,13 @@ publish() {
 	shift 2
 	target_dir="$PREVIEW_ARTIFACT/$directory"
 	bundle_path=".preview-bundle/$bundle"
-	if [ ! -f "$target_dir/wrangler.publish.json" ]; then
+	if [ ! -f "$target_dir/wrangler.publish.jsonc" ]; then
 		echo "Trusted preview publish config is missing for $directory." >&2
 		exit 1
 	fi
 	(
 		cd "$target_dir"
-		npx wrangler@${WRANGLER_VERSION} deploy "$bundle_path" --no-bundle --config wrangler.publish.json "$@"
+		npx wrangler@${WRANGLER_VERSION} deploy "$bundle_path" --no-bundle --config wrangler.publish.jsonc "$@"
 	)
 }
 
@@ -1059,12 +1059,12 @@ function deployStagingWorkflow({
 	const previewPublicKeys = cfg.choices.auth.includes('emailOTP')
 		? ['PUBLIC_TURNSTILE_SITE_KEY']
 		: []
-	const previewIngressGate = honoPreviewIngressGateJob({ publicKeys: previewPublicKeys })
+	const previewIngressGate = honoPreviewIngressGateJob(previewPublicKeys)
 	const previewDbJob = (db === 'sqlite' ? d1PreviewDbJob() : neonPreviewDbJob()).replace(
 		'  preview-db:\n',
 		'  preview-db:\n    needs: preview-ingress\n'
 	)
-	const stagingConfigStep = writeStagingWranglerConfigStep({ db })
+	const stagingConfigStep = writeStagingWranglerConfigStep(db)
 	const buildTargets = [
 		{
 			packageName: honoPackageIdentity(project, AUTH_SERVICE),
@@ -1294,7 +1294,7 @@ ${privateSecretsStep}
 `
 }
 
-function writeStagingWranglerConfigStep({ db }: { db: GvKitConfig['choices']['db'] }): string {
+function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): string {
 	const envLines =
 		db === 'sqlite'
 			? `          PREVIEW_DB_KIND: d1
@@ -1319,7 +1319,7 @@ function trustedPreviewMigrationStep(db: GvKitConfig['choices']['db']): string {
 		return `      - name: Apply preview D1 migrations with a trusted pinned tool
         run: |
           set -euo pipefail
-          cat > trusted-source/packages/db/wrangler.preview-migrations.json <<'JSON'
+          cat > trusted-source/packages/db/wrangler.preview-migrations.jsonc <<'JSON'
           {
             "name": "preview-migrations",
             "compatibility_date": "2026-08-24",
@@ -1331,7 +1331,7 @@ function trustedPreviewMigrationStep(db: GvKitConfig['choices']['db']): string {
             }]
           }
           JSON
-          npx wrangler@${WRANGLER_VERSION} d1 migrations apply "\${{ needs.preview-db.outputs.d1_database_name }}" --remote --config trusted-source/packages/db/wrangler.preview-migrations.json
+          npx wrangler@${WRANGLER_VERSION} d1 migrations apply "\${{ needs.preview-db.outputs.d1_database_name }}" --remote --config trusted-source/packages/db/wrangler.preview-migrations.jsonc
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
@@ -1354,7 +1354,7 @@ function trustedPreviewMigrationStep(db: GvKitConfig['choices']['db']): string {
           PREVIEW_MIGRATIONS: \${{ github.workspace }}/trusted-source/packages/db/migrations`
 }
 
-function honoPreviewIngressGateJob({ publicKeys }: { publicKeys: string[] }): string {
+function honoPreviewIngressGateJob(publicKeys: string[]): string {
 	const publicVariableValidation =
 		publicKeys.length === 0
 			? ''

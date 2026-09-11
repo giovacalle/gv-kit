@@ -789,7 +789,7 @@ test "$2" = 'deploy'
 test "$3" = ".preview-bundle/$bundle"
 test "$4" = '--no-bundle'
 test "$5" = '--config'
-test "$6" = 'wrangler.publish.json'
+test "$6" = 'wrangler.publish.jsonc'
 if [ -n "$secret" ]; then
 	test "$#" -eq 8
 	test "$7" = '--secrets-file'
@@ -797,11 +797,11 @@ if [ -n "$secret" ]; then
 else
 	test "$#" -eq 6
 fi
-jq -e --arg main ".preview-bundle/$bundle" '.main == $main and .workers_dev == false and .preview_urls == false' wrangler.publish.json >/dev/null
+jq -e --arg main ".preview-bundle/$bundle" '.main == $main and .workers_dev == false and .preview_urls == false' wrangler.publish.jsonc >/dev/null
 case "$assets" in
-	none) jq -e 'has("assets") | not' wrangler.publish.json >/dev/null ;;
-	web) jq -e '.assets == {binding: "ASSETS", directory: ".svelte-kit/cloudflare"}' wrangler.publish.json >/dev/null ;;
-	marketing) jq -e '.assets == {directory: "./dist/", not_found_handling: "404-page", html_handling: "auto-trailing-slash"}' wrangler.publish.json >/dev/null ;;
+	none) jq -e 'has("assets") | not' wrangler.publish.jsonc >/dev/null ;;
+	web) jq -e '.assets == {binding: "ASSETS", directory: ".svelte-kit/cloudflare"}' wrangler.publish.jsonc >/dev/null ;;
+	marketing) jq -e '.assets == {directory: "./dist/", not_found_handling: "404-page", html_handling: "auto-trailing-slash"}' wrangler.publish.jsonc >/dev/null ;;
 esac
 printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 `,

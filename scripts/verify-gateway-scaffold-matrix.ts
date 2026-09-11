@@ -1019,7 +1019,7 @@ const TRUSTED_CREDENTIAL_STEP_HASHES: Record<string, string[]> = {
 	'Create or reuse Neon preview branch': ['ae00d992be77dd4bc616b66bfd0689fdecfd5590bb5e2954884ca26b1a3e9725'],
 	'Create or reuse D1 preview database': ['7fb92cb9e04ec7c618382a9c7fbb3b299c80b0c9b23320ab3780fd04a2cac5b2'],
 	'Apply preview Neon migrations with a trusted pinned tool': ['97131c2f2e1a9ba00fb6368da22b37f1471d87733031c3fca6d82a8d96f86417'],
-	'Apply preview D1 migrations with a trusted pinned tool': ['db0f90f9f13347ed6b8bca229915abcc884bd45c4086e393beffa75bf676d9d3'],
+	'Apply preview D1 migrations with a trusted pinned tool': ['c799e2b179a3db48d817066abc14d19beed53b6d95837a3efe06aa4edbe76dc0'],
 	'Write private Worker preview secret files from trusted code': [
 		'a90cfd3115298aca2981225685c4d8b733ed54f54dd2e17e38899a4471f71015',
 		'445114b3d91476f2316409a2150c942a57c08299cf09fc51213e339a9932e49f',

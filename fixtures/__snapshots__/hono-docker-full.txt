@@ -51,7 +51,7 @@ apps/web/prettier.config.js  76a534fdcb4541a5
 apps/web/src/app.css  a3dacc626273bfe3
 apps/web/src/app.d.ts  863b7099c0be781a
 apps/web/src/app.html  fca581317f9c072a
-apps/web/src/hooks.server.ts  3d5316e24cc86deb
+apps/web/src/hooks.server.ts  fd19d404032dca81
 apps/web/src/lib/auth/client.ts  0889bced7354a8dd
 apps/web/src/lib/components/layout/footer.svelte  7ada74173add1662
 apps/web/src/lib/components/layout/locale-switcher.svelte  0e595ee3cfa1c9fd

@@ -119,6 +119,13 @@ async function materialize(fixture: string, output: string): Promise<GeneratedPr
 		await mkdir(resolve(target, '..'), { recursive: true })
 		await writeFile(target, file.content, { encoding: 'utf8', mode: file.mode })
 	}
+	if (config.choices.deploy === 'cf-workers' && config.choices.auth.includes('emailOTP')) {
+		const authPackage = join(project, 'services/auth/package.json')
+		const manifest = JSON.parse(await readFile(authPackage, 'utf8')) as { scripts: { dev: string } }
+		// Capture is an explicit local CLI binding, never a deployment default.
+		manifest.scripts.dev += ' --var AUTH_OTP_CAPTURE:console'
+		await writeFile(authPackage, `${JSON.stringify(manifest, null, 2)}\n`)
+	}
 	const binPath = join(project, '.verify-bin')
 	await mkdir(binPath, { recursive: true })
 	await writeFile(join(binPath, 'pnpm'), `#!/bin/sh\nexec corepack pnpm@${PNPM_VERSION} "$@"\n`, {
@@ -424,11 +431,13 @@ async function verifyGatewayTopology({
 async function verifyCloudflareTopology({
 	project,
 	command,
-	authUrl
+	authUrl,
+	verifyUsersSsr
 }: {
 	project: string
 	command: RunningCommand
 	authUrl: string
+	verifyUsersSsr: boolean
 }) {
 	const gatewayHealth = await healthWhenReady(`${LOCAL_API_ORIGIN}/api/healthz`)
 	const openApiResponse = await requestWhenReady(`${LOCAL_API_ORIGIN}/api/openapi.json`)
@@ -438,7 +447,20 @@ async function verifyCloudflareTopology({
 	const authHealth = await healthWhenReady(`${authUrl}/healthz`)
 	const usersHealth = await healthWhenReady('http://127.0.0.1:8788/healthz')
 	const authSession = await localAuthWhenReady()
+	let usersSsr
+	if (verifyUsersSsr) {
+		const origin = 'http://localhost:5173'
+		const email = 'cloudflare-ssr@example.test'
+		const session = await requestOtpSession({ origin, email, command })
+		const setCookies = session.headers.getSetCookie()
+		if (setCookies.some((cookie) => /(?:^|;)\s*domain=/i.test(cookie))) throw new Error('Cloudflare OTP sign-in emitted a domain cookie')
+		// The local HTTP probe supplies the secure session cookie directly, without browser emulation.
+		const cookie = setCookies.map((cookie) => cookie.split(';')[0]).filter(Boolean).join('; ')
+		if (!cookie) throw new Error('Cloudflare OTP sign-in did not return a local session cookie')
+		usersSsr = { ...await verifyUsersServerProfile({ origin, cookie, email }), cookieTransport: 'synthetic header over loopback HTTP; browser Secure-cookie behavior not verified' }
+	}
 	const evidence = {
+		usersSsr,
 		project: '.',
 		processInventory: processInventory(command, 'cf-workers'),
 		health: {
@@ -613,16 +635,14 @@ function redactedBrowserCookies(cookies: BrowserCookie[]) {
 	}))
 }
 
-async function signInWithOtp({
+async function requestOtpSession({
 	origin,
 	email,
-	command,
-	store
+	command
 }: {
 	origin: string
 	email: string
 	command: RunningCommand
-	store: BrowserCookieStore
 }) {
 	const send = await postJson({
 		url: `${origin}/api/auth/email-otp/send-verification-otp`,
@@ -640,6 +660,21 @@ async function signInWithOtp({
 		const body = await signIn.text()
 		throw new Error(otpSignInFailureDiagnostic({ origin, status: signIn.status, body, otp }))
 	}
+	return signIn
+}
+
+async function signInWithOtp({
+	origin,
+	email,
+	command,
+	store
+}: {
+	origin: string
+	email: string
+	command: RunningCommand
+	store: BrowserCookieStore
+}) {
+	const signIn = await requestOtpSession({ origin, email, command })
 	const setCookies = responseCookiesIntoStore({ store, response: signIn, origin })
 	if (setCookies.length === 0 || !browserCookieHeader(store, origin)) throw new Error(`OTP sign-in for ${origin} did not set an applicable browser cookie`)
 	return setCookies
@@ -773,6 +808,38 @@ async function verifyOperationalRuntime(project: string) {
 	} finally {
 		server.stop(true)
 	}
+}
+
+export async function verifyUsersServerProfile({
+	origin,
+	cookie,
+	email
+}: {
+	origin: string
+	cookie: string
+	email: string
+}) {
+	const statuses: number[] = []
+	for (const authenticated of [false, true]) {
+		const response = await fetch(`${origin}/users/__data.json`, {
+			headers: authenticated ? { cookie } : {},
+			redirect: 'manual'
+		})
+		if (response.status !== 200) throw new Error(`Users server data returned ${response.status}`)
+		const result = await response.json() as { nodes?: Array<{ data?: unknown[] }> }
+		const data = result.nodes?.map((node) => node?.data).find((values) => {
+			const root = values?.[0]
+			return typeof root === 'object' && root !== null && 'serverProfile' in root
+		})
+		if (!data) throw new Error('Users server data omitted the generated serverProfile')
+		const root = data[0] as { serverProfile: number }
+		if (!Number.isInteger(root.serverProfile) || root.serverProfile < 0) throw new Error('Users server data has an invalid profile reference')
+		const profile = data[root.serverProfile] as { email?: number } | null | undefined
+		if (authenticated && (!profile || typeof profile.email !== 'number' || data[profile.email] !== email)) throw new Error('Authenticated users server loader lost the incoming page session')
+		if (!authenticated && profile !== null) throw new Error('Anonymous users server loader returned an authenticated profile')
+		statuses.push(response.status)
+	}
+	return { anonymousStatus: statuses[0], authenticatedStatus: statuses[1], serverProfileVerified: true }
 }
 
 async function waitForStructuredTrace(command: RunningCommand, requestId: string): Promise<void> {
@@ -943,12 +1010,18 @@ async function verifyDualOriginAuth({
 	})
 	const sdkSsrBody = await sdkSsr.text()
 	if (!sdkSsr.ok || !sdkSsrBody.includes(webEmail)) throw new Error('SSR flat client operation did not use the private gateway transport')
+	const usersSsr = await verifyUsersServerProfile({
+		origin: webOrigin,
+		cookie: browserCookieHeader(browserStore, `${webOrigin}/users`),
+		email: webEmail
+	})
 
 	const nativeTransport = deploy === 'cf-workers'
 		? undefined
 		: await verifyNativeIngresses([apiOrigin, webOrigin])
 	const operational = await verifyOperationalRuntime(project)
 	const evidence = {
+		usersSsr,
 		project: '.',
 		processInventory: processInventory(command, deploy),
 		ingress: {
@@ -1192,7 +1265,7 @@ async function main(): Promise<void> {
 	const webHooks = await readFile(join(generated.project, 'apps/web/src/hooks.server.ts'), 'utf8')
 	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)')) throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
 	const hasPrivateSsrTransport = generated.config.choices.deploy === 'cf-workers'
-		? webHooks.includes('gateway.fetch(request)') && !webHooks.includes('env.GATEWAY_URL')
+		? webHooks.includes('gateway.fetch(request.url, request)') && !webHooks.includes('env.GATEWAY_URL')
 		: webHooks.includes('env.GATEWAY_URL')
 	if (!webHooks.includes('export const handleFetch') || !hasPrivateSsrTransport) throw new Error('generated SvelteKit hooks omit the private SSR gateway transport')
 	const viteConfig = await readFile(join(generated.project, 'apps/web/vite.config.ts'), 'utf8')
@@ -1244,7 +1317,10 @@ async function main(): Promise<void> {
 	try {
 		const evidence =
 			generated.config.choices.deploy === 'cf-workers'
-				? await verifyCloudflareTopology({ project: generated.project, command: dev, authUrl })
+				? await verifyCloudflareTopology({
+					project: generated.project, command: dev, authUrl,
+					verifyUsersSsr: generated.config.choices.auth.includes('emailOTP') && generated.config.choices.apiClient === 'hey-api'
+				})
 				: hasAuth
 					? await verifyDualOriginAuth({
 							project: generated.project,

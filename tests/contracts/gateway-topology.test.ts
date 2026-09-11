@@ -1,12 +1,13 @@
 import { createHash } from 'node:crypto'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { Hono, type MiddlewareHandler } from 'hono'
 import ts from 'typescript'
 import { runGenerators } from '../../src/generators/index.js'
 import { parseJsonc } from '../../src/lib/jsonc.js'
 import { GvKitConfig } from '../../src/schema/config.js'
+import { verifyUsersServerProfile } from '../../scripts/verify-gateway-local.js'
 
 const fixturesDir = join(import.meta.dir, '..', '..', 'fixtures')
 const canonicalHonoQuickstart = `### First run
@@ -607,9 +608,19 @@ type GatewayModule = {
 	}
 }
 
+type SsrCredentialEvent = {
+	url: URL
+	request: Request
+	fetch(input: string | Request | URL, init?: RequestInit): Promise<Response>
+}
+
 type HandleFetchModule = {
+	handle: Array<(input: {
+		event: SsrCredentialEvent
+		resolve(event: SsrCredentialEvent): Promise<Response>
+	}) => Promise<Response>>
 	handleFetch(input: {
-		event: { url: URL; platform?: { env?: { GATEWAY?: GatewayTarget } } }
+		event: { url: URL; platform?: { env?: { GATEWAY?: { fetch(url: string, request: Request): Promise<Response> } } } }
 		request: Request
 		fetch(request: Request): Promise<Response>
 	}): Promise<Response>
@@ -671,6 +682,51 @@ async function loadGeneratedHandleFetch(
 	const module = (await import(moduleUrl)) as HandleFetchModule
 	URL.revokeObjectURL(moduleUrl)
 	return module
+}
+
+async function captureGeneratedSsrRequest({
+	fixture,
+	input,
+	init,
+	pageHeaders
+}: {
+	fixture: string
+	input: string | Request | URL
+	init?: RequestInit
+	pageHeaders: NonNullable<RequestInit['headers']>
+}): Promise<Request> {
+	const hooks = await loadGeneratedHandleFetch(fixture)
+	const requests: Request[] = []
+	const receive = async (request: Request) => {
+		requests.push(request)
+		return new Response('private response')
+	}
+	const gateway = {
+		async fetch(url: string, request: Request) {
+			expect(url).toBe(request.url)
+			return receive(request)
+		}
+	}
+	const event: SsrCredentialEvent = {
+		url: new URL('https://app.example/account'),
+		request: new Request('https://app.example/account', { headers: pageHeaders }),
+		async fetch(input, init) {
+			return hooks.handleFetch({
+				event: {
+					url: event.url,
+					...(fixture.startsWith('cf-') ? { platform: { env: { GATEWAY: gateway } } } : {})
+				},
+				request: input instanceof Request ? input : new Request(new URL(input, event.url).href, init),
+				fetch: receive
+			})
+		}
+	}
+	const resolve = (event: SsrCredentialEvent) => event.fetch(input, init)
+	expect(hooks.handle.length).toBeLessThanOrEqual(1)
+	if (hooks.handle[0]) await hooks.handle[0]({ event, resolve })
+	else await resolve(event)
+	expect(requests).toHaveLength(1)
+	return requests[0]!
 }
 
 describe('local private-service gateway topology', () => {
@@ -1251,6 +1307,124 @@ describe('local private-service gateway topology', () => {
 		expect(hooks?.content).not.toContain('gateway.fetch(event.request)')
 	})
 
+	test.each(['cf-workers-no-auth-postgres', 'hono-skip-deploy', 'hono-docker-no-client'])(
+		'SSR inherits page credentials before private transport: %s',
+		async (fixture) => {
+			const request = await captureGeneratedSsrRequest({
+				fixture,
+				input: '/api/v1/users/me',
+				pageHeaders: { cookie: 'session=synthetic-page', authorization: 'synthetic-page-auth' }
+			})
+			expect(request.headers.get('cookie')).toBe('session=synthetic-page')
+			expect(request.headers.get('authorization')).toBe('synthetic-page-auth')
+		}
+	)
+
+	test.each(['cf-workers-no-auth-postgres', 'hono-skip-deploy', 'hono-docker-no-client'])(
+		'SSR credential inheritance respects caller options and the public API boundary: %s',
+		async (fixture) => {
+			const pageHeaders = { cookie: 'session=synthetic-page', authorization: 'synthetic-page-auth' }
+			for (const credentials of ['same-origin', 'include', 'omit'] as const) {
+				for (const input of ['/api', '/api?query=one', '/api/v1/users/me?query=two']) {
+					const request = await captureGeneratedSsrRequest({ fixture, input, init: { credentials }, pageHeaders })
+					expect(request.headers.get('cookie')).toBe(credentials === 'omit' ? null : pageHeaders.cookie)
+					expect(request.headers.get('authorization')).toBe(credentials === 'omit' ? null : pageHeaders.authorization)
+					expect(new URL(request.url).pathname + new URL(request.url).search).toBe(input)
+				}
+			}
+			for (const input of ['https://unrelated.example/api/v1/users/me', '/apiary', '/account']) {
+				const request = await captureGeneratedSsrRequest({ fixture, input, pageHeaders })
+				expect(request.headers.get('cookie')).toBeNull()
+				expect(request.headers.get('authorization')).toBeNull()
+				expect(request.url).toBe(new URL(input, 'https://app.example').href)
+			}
+			for (const credentials of ['include', 'omit'] as const) {
+				const headers = { cookie: 'session=synthetic-explicit', authorization: 'synthetic-explicit-auth' }
+				const request = await captureGeneratedSsrRequest({
+					fixture, input: new URL('https://app.example/api/v1/users/me'),
+					init: { credentials, headers, method: 'POST', body: 'unchanged payload' }, pageHeaders
+				})
+				expect(request.headers.get('cookie')).toBe(headers.cookie)
+				expect(request.headers.get('authorization')).toBe(headers.authorization)
+				expect(request.method).toBe('POST')
+				expect(await request.text()).toBe('unchanged payload')
+			}
+			for (const credentials of ['include', 'omit'] as const) {
+				const input = new Request('https://app.example/api/v1/users/me', { credentials })
+				// Bun discards this option; Node retains it on the Request.
+				Object.defineProperty(input, 'credentials', { value: credentials })
+				const request = await captureGeneratedSsrRequest({ fixture, input, pageHeaders })
+				expect(request.headers.get('cookie')).toBe(credentials === 'omit' ? null : pageHeaders.cookie)
+				expect(request.headers.get('authorization')).toBe(credentials === 'omit' ? null : pageHeaders.authorization)
+			}
+			const shared = new Request('https://app.example/api/v1/users/me')
+			for (const user of ['first', 'second']) {
+				const request = await captureGeneratedSsrRequest({
+					fixture, input: shared,
+					pageHeaders: { cookie: `session=${user}`, authorization: `auth-${user}` }
+				})
+				expect(request.headers.get('cookie')).toBe(`session=${user}`)
+				expect(request.headers.get('authorization')).toBe(`auth-${user}`)
+				expect(shared.headers.get('cookie')).toBeNull()
+				expect(shared.headers.get('authorization')).toBeNull()
+			}
+			const bodyRequest = await captureGeneratedSsrRequest({
+				fixture,
+				input: new Request('https://app.example/api/v1/users/me?unchanged=true', { method: 'POST', body: 'original request body' }),
+				pageHeaders
+			})
+			expect(bodyRequest.method).toBe('POST')
+			expect(await bodyRequest.text()).toBe('original request body')
+			expect(new URL(bodyRequest.url).search).toBe('?unchanged=true')
+			const overridden = await captureGeneratedSsrRequest({
+				fixture,
+				input: new Request('https://app.example/api/v1/users/me'),
+				init: { credentials: 'omit' },
+				pageHeaders
+			})
+			expect(overridden.headers.get('cookie')).toBeNull()
+			expect(overridden.headers.get('authorization')).toBeNull()
+			const explicitInit = await captureGeneratedSsrRequest({
+				fixture,
+				input: new Request('https://app.example/api/v1/users/me', { headers: { cookie: 'session=old-input' } }),
+				init: { headers: { cookie: 'session=explicit-init', authorization: 'explicit-init-auth' } },
+				pageHeaders
+			})
+			expect(explicitInit.headers.get('cookie')).toBe('session=explicit-init')
+			expect(explicitInit.headers.get('authorization')).toBe('explicit-init-auth')
+			const anonymous = await captureGeneratedSsrRequest({ fixture, input: '/api/v1/users/me', pageHeaders: {} })
+			expect(anonymous.headers.get('cookie')).toBeNull()
+			expect(anonymous.headers.get('authorization')).toBeNull()
+		}
+	)
+
+	test('SSR verification checks the users loader data instead of an email elsewhere in the layout', async () => {
+		const email = 'ssr-control@example.test'
+		for (const profile of [null, { email: 'wrong@example.test' }, { email }]) {
+			const requests: { url: string; cookie: string | null }[] = []
+			const fetchServerData = async (input: Parameters<typeof fetch>[0], init?: Parameters<typeof fetch>[1]) => {
+				const cookie = new Headers(init?.headers).get('cookie')
+				requests.push({ url: String(input), cookie })
+				return Response.json({ nodes: [
+					{ data: [{ user: 1 }, { email: 2 }, email] },
+					{ data: cookie && profile ? [{ serverProfile: 1 }, { email: 2 }, profile.email] : [{ serverProfile: 1 }, null] }
+				] })
+			}
+			const request = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(fetchServerData, { preconnect: globalThis.fetch.preconnect }))
+			try {
+				const result = verifyUsersServerProfile({ origin: 'https://app.example', cookie: 'session=synthetic', email })
+				if (profile?.email === email) await expect(result).resolves.toEqual({ anonymousStatus: 200, authenticatedStatus: 200, serverProfileVerified: true })
+				else await expect(result).rejects.toThrow('Authenticated users server loader lost the incoming page session')
+				expect(requests).toEqual([
+					{ url: 'https://app.example/users/__data.json', cookie: null },
+					{ url: 'https://app.example/users/__data.json', cookie: 'session=synthetic' }
+				])
+			} finally {
+				request.mockRestore()
+			}
+		}
+	})
+
 	test('Cloudflare SSR rejects a missing gateway binding without HTTP fallback', async () => {
 		const { handleFetch } = await loadGeneratedHandleFetch('cf-workers-no-auth-postgres', {
 			GATEWAY_URL: 'https://unexpected.example',
@@ -1291,7 +1465,8 @@ describe('local private-service gateway topology', () => {
 				platform: {
 					env: {
 						GATEWAY: {
-							async fetch(request: Request) {
+							async fetch(url: string, request: Request) {
+								expect(url).toBe(request.url)
 								gatewayRequests.push(request)
 								return new Response('gateway')
 							}
@@ -1349,7 +1524,8 @@ describe('local private-service gateway topology', () => {
 				platform: {
 					env: {
 						GATEWAY: {
-							async fetch(incoming) {
+							async fetch(url, incoming) {
+								expect(url).toBe(request.url)
 								forwarded.push(incoming)
 								return response
 							}

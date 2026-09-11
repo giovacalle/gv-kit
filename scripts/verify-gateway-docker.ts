@@ -11,6 +11,7 @@ import {
 	writeSanitizedArtifact
 } from './gateway-verification-evidence.js'
 import { installUsersStreamingProbe, verifyNativeIngresses } from './gateway-native-probes.js'
+import { verifyUsersServerProfile } from './verify-gateway-local.js'
 
 const PNPM_VERSION = '11.1.1'
 let webOrigin = 'http://localhost:3000'
@@ -646,8 +647,12 @@ async function verifyRuntime({
 	const ssr = await fetch(webOrigin, { headers: { cookie: webJar.header } })
 	const ssrBody = await ssr.text()
 	if (!ssr.ok || !ssrBody.includes(webEmail)) throw new Error('Web SSR did not load the session through the private gateway URL')
+	const usersSsr = config.choices.apiClient === 'hey-api'
+		? await verifyUsersServerProfile({ origin: webOrigin, cookie: webJar.header, email: webEmail })
+		: undefined
 
 	return {
+		usersSsr,
 		project: '.',
 		inventory,
 		streaming,

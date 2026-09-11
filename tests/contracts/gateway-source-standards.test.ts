@@ -230,11 +230,12 @@ describe('gateway source standards', () => {
 		expect(nonJsoncWranglerConfigNames('wrangler.jsonc wrangler.publish.jsonc wrangler.preview-migrations.jsonc manifest.json')).toEqual([])
 	})
 
-	test('publisher and preview test helpers follow the positional-input boundary', () => {
+	test('publisher and gateway test helpers follow the positional-input boundary', () => {
 		const sources = [
 			{ path: 'src/generators/deploy.ts', names: ['writeStagingWranglerConfigStep', 'honoPreviewIngressGateJob', 'deployStagingWorkflow'] },
 			{ path: 'tests/contracts/gateway-preview-workflows.test.ts', names: ['previewNames', 'runPreviewPreparation', 'verify', 'replaceRequired'] },
-			{ path: 'tests/contracts/gateway-rollout-compatibility.test.ts', names: ['requestFromFixture'] }
+			{ path: 'tests/contracts/gateway-rollout-compatibility.test.ts', names: ['requestFromFixture'] },
+			{ path: 'tests/contracts/gateway-topology.test.ts', names: ['generatedGatewaySources'] }
 		]
 		for (const { path, names } of sources) expect(helperArgumentFindings(readFileSync(join(repositoryRoot, path), 'utf8'), names), path).toEqual([])
 	})
@@ -246,9 +247,10 @@ describe('gateway source standards', () => {
 			'async function previewNames({ entries }: { entries: Entry[] }) {}',
 			'async function runPreviewPreparation({ cfg, overrideEnv = {} }: { cfg: Config; overrideEnv?: object }) {}',
 			'const verify = async ({ missingWildcard }: { missingWildcard?: string } = {}) => {}',
-			'function requestFromFixture({ fixture, origin }: { fixture: Fixture; origin?: string }) {}'
+			'function requestFromFixture({ fixture, origin }: { fixture: Fixture; origin?: string }) {}',
+			'function generatedGatewaySources({ includeSharedBackendAndCloudflareTypes = false, includeAuthSchemaAndCleanup = false }: { includeSharedBackendAndCloudflareTypes?: boolean; includeAuthSchemaAndCleanup?: boolean } = {}) {}'
 		]
-		const names = ['writeStagingWranglerConfigStep', 'honoPreviewIngressGateJob', 'previewNames', 'runPreviewPreparation', 'verify', 'requestFromFixture']
+		const names = ['writeStagingWranglerConfigStep', 'honoPreviewIngressGateJob', 'previewNames', 'runPreviewPreparation', 'verify', 'requestFromFixture', 'generatedGatewaySources']
 		for (const [index, source] of originals.entries()) expect(helperArgumentFindings(source, [names[index]!])).toEqual([names[index]!])
 		expect(helperArgumentFindings('function domain(config: Config) {}\nfunction named({ a, b, c }: Inputs) {}\nconst optional = (value?: string) => {}', ['domain', 'named', 'optional'])).toEqual([])
 		expect(helperArgumentFindings('function positional(a: string, b: string, c: string) {}', ['positional'])).toEqual(['positional'])

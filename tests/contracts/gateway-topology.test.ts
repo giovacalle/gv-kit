@@ -362,13 +362,10 @@ function dynamicSourceParameterFindings(path: string, source: string): string[] 
 	return findings
 }
 
-function generatedGatewaySources({
+function generatedGatewaySources(
 	includeSharedBackendAndCloudflareTypes = false,
 	includeAuthSchemaAndCleanup = false
-}: {
-	includeSharedBackendAndCloudflareTypes?: boolean
-	includeAuthSchemaAndCleanup?: boolean
-} = {}): Array<{
+): Array<{
 	path: string
 	content: string
 }> {
@@ -954,10 +951,9 @@ describe('local private-service gateway topology', () => {
 	})
 
 	test('generated gateway, service, schema, preview, cleanup, and Cloudflare type comments stay concise', () => {
-		const findings = generatedGatewaySources({
-			includeSharedBackendAndCloudflareTypes: true,
-			includeAuthSchemaAndCleanup: true
-		}).flatMap(({ path, content }) => generatedCommentFindings(path, content))
+		const findings = generatedGatewaySources(true, true).flatMap(({ path, content }) =>
+			generatedCommentFindings(path, content)
+		)
 		expect(findings).toEqual([])
 	})
 

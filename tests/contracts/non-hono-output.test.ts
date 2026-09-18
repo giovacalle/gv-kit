@@ -9,9 +9,9 @@ import { GvKitConfig } from '../../src/schema/config.js'
 // Only package.json and pnpm-workspace.yaml changed for the dependency security policy.
 const fixtureBaselines = {
 	'inside-frontend-docker-postgres.jsonc':
-		'739a2f98b8f00edae36e9f2f27f11a5286664b3ffeb46dfa4ac016ecbccd7c95',
+		'8c49f63ee1e642e53e84854fbbb285eaf1180110e122f1e5b1a84eda0d99caf6',
 	'inside-frontend-docker-sqlite.jsonc':
-		'ab8fdc195353f811b0d49db0716666ff92a91ea068d6404f6ee369942b1d7995'
+		'19605245a859f6a795cf0229c33453466c6b53ef56e4a4a9b7b988c50f793aca'
 } as const
 
 function loadPlan(fixtureName: string): FileEntry[] {

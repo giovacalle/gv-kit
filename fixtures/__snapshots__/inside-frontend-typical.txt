@@ -28,12 +28,12 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  00ccef47c63de1e9
-CLAUDE.md  ffda38869db1999c
+AGENTS.md  45a2964fe842c901
 LICENSE  508a77d2e7b51d98
 README.md  21bea5853f529a9e
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  e761472bcc14996d
+apps/web/AGENTS.md  e761472bcc14996d
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  98726569aca10c3e
 apps/web/prettier.config.js  76a534fdcb4541a5

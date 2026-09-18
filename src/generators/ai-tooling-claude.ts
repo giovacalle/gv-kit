@@ -10,16 +10,17 @@ import {
 } from './hono-topology.js'
 
 /**
- * Emits Claude-specific artifacts: `CLAUDE.md`, `.claude/settings.json`,
+ * Emits Claude-specific artifacts: `.claude/settings.json`,
  * `.claude/stack.json`, the always-on agents under `.claude/agents/`
  * (from fixture templates), plus the conditional `service-architect` agent.
  *
- * Rule bodies are NOT emitted here — they live in `.ai/rules/*.md` (see
- * `generateAiToolingRules`). `CLAUDE.md` references them via `@imports`.
+ * No `CLAUDE.md` is emitted. `AGENTS.md` (emitted by `ai-tooling.ts`) is the
+ * single canonical instructions file; Claude Code ≥ 2.1.277 reads `AGENTS.md`
+ * natively when no `CLAUDE.md` exists, so a separate Claude file would only
+ * be a second copy to keep in sync.
  */
 export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 	const entries: FileEntry[] = [
-		{ path: 'CLAUDE.md', content: renderClaudeMd(cfg) },
 		{ path: '.claude/settings.json', content: renderClaudeSettings(cfg) },
 		{ path: '.claude/stack.json', content: renderStackManifest(cfg) }
 	]
@@ -57,145 +58,6 @@ export function generateAiToolingClaude(cfg: GvKitConfig): FileEntry[] {
 /* ------------------------------------------------------------------ */
 /*  Stack summary + layout                                              */
 /* ------------------------------------------------------------------ */
-
-function renderStackSummary(cfg: GvKitConfig): string {
-	const lines: string[] = []
-	lines.push('- Frontend: SvelteKit (Svelte 5, runes)')
-	if (cfg.choices.marketing === 'astro') lines.push('- Marketing: Astro static site (`apps/marketing`)')
-	if (cfg.choices.backend === 'hono') {
-		const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'private workers' : 'private services'
-		lines.push(`- Backend: Hono gateway (\`apps/api\`) with ${privateRuntime} under \`services/\``)
-	}
-	else lines.push('- Backend: SvelteKit endpoints (single deploy unit)')
-	lines.push(`- Database: ${databaseLabel(cfg)} via Drizzle (\`packages/db\`)`)
-	if (cfg.choices.auth.length > 0) lines.push(`- Auth: better-auth (${cfg.choices.auth.join(', ')})`)
-	if (cfg.choices.i18n === 'paraglide') lines.push('- i18n: Paraglide v2')
-	if (cfg.choices.email !== 'skip') lines.push(`- Email: ${cfg.choices.email}`)
-	if (cfg.choices.monitoring.length > 0) lines.push(`- Analytics: ${cfg.choices.monitoring.join(', ')}`)
-	if (cfg.choices.deploy !== 'skip') {
-		const label = cfg.choices.deploy === 'cf-workers' ? 'Cloudflare Workers' : 'Docker'
-		lines.push(`- Deploy: ${label}`)
-	}
-	if (cfg.choices.apiClient === 'hey-api') lines.push('- API client: Hey API + TanStack Query (`packages/openapi-client`)')
-	return lines.join('\n')
-}
-
-function renderLayoutTree(cfg: GvKitConfig): string {
-	const lines: string[] = []
-	if (cfg.choices.marketing === 'astro') lines.push('- `apps/marketing/` — static Astro public site')
-	lines.push('- `apps/web/` — SvelteKit app')
-	if (cfg.choices.backend === 'hono') {
-		lines.push('- `apps/api/` — public Hono API gateway')
-		const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'Hono Workers' : 'Hono services'
-		lines.push(`- \`services/<service>/\` — independently deployable private ${privateRuntime}`)
-	}
-	lines.push('- `packages/db/` — Drizzle schema + client factory')
-	lines.push(
-		'- `packages/backend/` — shared backend application/core layer (data access, use cases, types, helpers, middleware)'
-	)
-	if (cfg.choices.i18n === 'paraglide') {
-		lines.push(
-			'- `packages/i18n/` — Paraglide messages + compiled runtime (`@repo/i18n/messages`, `@repo/i18n/runtime`, `@repo/i18n/server`)'
-		)
-	}
-	if (cfg.choices.apiClient === 'hey-api') lines.push('- `packages/openapi-client/` — flat client generated from the gateway contract')
-	return lines.join('\n')
-}
-
-/* ------------------------------------------------------------------ */
-/*  CLAUDE.md — lean orientation, @imports the .ai/rules tree           */
-/* ------------------------------------------------------------------ */
-
-function renderClaudeMd(cfg: GvKitConfig): string {
-	const specialists: string[] = []
-	if (cfg.choices.backend === 'hono') {
-		const privateRuntime = cfg.choices.deploy === 'cf-workers' ? 'Hono Worker' : 'Hono service'
-		specialists.push(
-			`- \`service-architect\` — scaffolds a new private \`services/<svc>/\` ${privateRuntime}`
-		)
-	}
-	if (cfg.choices.marketing === 'astro') specialists.push('- `astro-marketer` — edits the static public site within its app boundary')
-
-	const specialistsBlock =
-		specialists.length > 0
-			? `\nSpecialists (added when the stack creates a domain that needs one):\n\n${specialists.join('\n')}\n`
-			: ''
-
-	const ruleImports: string[] = [
-		'@.ai/rules/core-stack.md',
-		'@.ai/rules/api-backend.md',
-		'@.ai/rules/db-drizzle.md',
-		'@.ai/rules/core-style.md',
-		'@.ai/rules/core-errors.md',
-		'@.ai/rules/core-dates.md',
-		'@.ai/rules/core-testing.md',
-		'@.ai/rules/core-workflow.md',
-		'@.ai/rules/web-svelte.md',
-		'@.ai/rules/web-forms.md',
-		'@.ai/rules/web-tailwind.md',
-		'@.ai/rules/web-ui.md'
-	]
-
-	if (cfg.choices.backend === 'hono') ruleImports.push('@.ai/rules/web-api.md')
-	if (cfg.choices.auth.length > 0) ruleImports.push('@.ai/rules/auth-flow.md')
-	if (cfg.choices.deploy === 'cf-workers') ruleImports.push('@.ai/rules/deploy-cf-workers.md')
-	if (cfg.choices.email !== 'skip') ruleImports.push('@.ai/rules/email-templates.md')
-	if (cfg.choices.apiClient === 'hey-api') ruleImports.push('@.ai/rules/web-query.md')
-	if (cfg.choices.marketing === 'astro') ruleImports.push('@.ai/rules/marketing-astro.md')
-
-	const importsBlock = ruleImports.join('\n')
-
-	return `# ${cfg.choices.name}
-
-Type-safe full-stack monorepo.
-
-## Stack
-
-${renderStackSummary(cfg)}
-
-## Layout
-
-${renderLayoutTree(cfg)}
-
-## Workflow
-
-Four agnostic agents live under \`.claude/agents/\`. Use them as the lifecycle of any change:
-
-1. \`plan\` — design the change. Read-only. Surfaces trade-offs.
-2. \`implement\` — execute a plan or a small direct change.
-3. \`polish\` — naming, dead code, duplication.
-4. \`review\` — quality + security audit. Read-only.
-${specialistsBlock}
-See \`.ai/rules/core-workflow.md\` for the full flow and when to skip steps.
-
-## Rules
-
-All conventions live in \`.ai/rules/\`. The imports below load them into context at session start:
-
-${importsBlock}
-
-## Stack manifest
-
-User choices are recorded at \`.claude/stack.json\`. Agents read it to know which rules apply without inferring from the filesystem. Keep it in sync when the stack evolves.
-
-## Common commands
-
-| Command | What it does |
-|---------|--------------|
-| \`pnpm dev\` | Start every app and service in watch mode |
-| \`pnpm build\` | Build every workspace package |
-| \`pnpm test\` | Run all tests |
-| \`pnpm typecheck\` | TypeScript check across the workspace |
-| \`pnpm lint\` | ESLint across the workspace |
-| \`pnpm format\` | Format with Prettier |
-
-## Conventions
-
-- All output (code, comments, commits, docs) in English
-- TypeScript pinned via \`tsconfig.base.json\`
-${cfg.choices.deploy === 'cf-workers' ? '- Wrangler config is always `wrangler.jsonc` — never `wrangler.toml`\n' : ''}- Tailwind 4: theme via CSS \`@theme\` directive only (no \`tailwind.config.js\`)
-`
-}
 
 /* ------------------------------------------------------------------ */
 /*  .claude/stack.json                                                  */
@@ -423,7 +285,3 @@ ${cloudflareConfig}
 `
 }
 
-function databaseLabel(cfg: GvKitConfig): string {
-	if (cfg.choices.db === 'postgres') return cfg.choices.deploy === 'cf-workers' ? 'PostgreSQL (Neon)' : 'PostgreSQL'
-	return cfg.choices.deploy === 'cf-workers' ? 'SQLite (Cloudflare D1)' : 'SQLite'
-}

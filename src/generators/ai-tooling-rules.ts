@@ -16,7 +16,7 @@ import {
  * Canonical source of rule bodies. Emits `.ai/rules/*.md`, the neutral
  * location consumed by every supported AI tooling integration:
  *
- * - Claude reads them via `@.ai/rules/<name>.md` imports from CLAUDE.md.
+ * - Claude Code (≥ 2.1.277) reads AGENTS.md natively and follows the rules index.
  * - opencode loads them via `instructions: [".ai/rules/*.md"]` in opencode.json.
  * - Codex receives a router AGENTS.md that points at them.
  */

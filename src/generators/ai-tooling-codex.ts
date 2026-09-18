@@ -2,13 +2,12 @@ import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
 
 /**
- * Emits `AGENTS.md` at the repo root as a thin router that points Codex at
- * the canonical `.ai/rules/*.md` tree. Rule bodies are NOT inlined here —
- * the agent reads them on demand. This keeps AGENTS.md small (well under
- * Codex's 32 KiB cap) and removes drift between Claude/Codex/opencode views.
+ * Codex-specific extras. The canonical `AGENTS.md` is emitted by the
+ * orchestrator (`ai-tooling.ts`) via `renderAgentsMd` — this generator only
+ * adds tool-specific artifacts (e.g. the Astro marketer TOML agent).
  */
 export function generateAiToolingCodex(cfg: GvKitConfig): FileEntry[] {
-	const entries: FileEntry[] = [{ path: 'AGENTS.md', content: renderAgentsMd(cfg) }]
+	const entries: FileEntry[] = []
 	if (cfg.choices.marketing === 'astro') {
 		entries.push({
 			path: '.codex/agents/astro-marketer.toml',
@@ -88,11 +87,23 @@ export function renderAgentsMd(cfg: GvKitConfig): string {
 	lines.push('Run typecheck + lint before reporting a task complete.')
 	lines.push('')
 
+	lines.push('## Conventions')
+	lines.push('')
+	lines.push('- All output (code, comments, commits, docs) in English')
+	lines.push('- TypeScript pinned via `tsconfig.base.json`')
+	if (cfg.choices.deploy === 'cf-workers') lines.push('- Wrangler config is always `wrangler.jsonc` — never `wrangler.toml`')
+	lines.push('- Tailwind 4: theme via CSS `@theme` directive only (no `tailwind.config.js`)')
+	lines.push('')
+
 	if (cfg.choices.aiTooling.includes('claude')) {
 		lines.push('## Workflow agents (Claude Code only)')
 		lines.push('')
 		lines.push(
-			'Four agnostic agents live under `.claude/agents/` (markdown descriptors). They are Claude-specific. If you are running under Codex, ignore this section — read the rules above directly.'
+			'Four agnostic agents live under `.claude/agents/`. They are Claude-specific. If you are running under another tool, ignore this section — read the rules above directly.'
+		)
+		lines.push('')
+		lines.push(
+			'User choices are recorded at `.claude/stack.json`. Keep it in sync when the stack evolves.'
 		)
 		lines.push('')
 		lines.push('1. `plan` — design the change. Read-only.')

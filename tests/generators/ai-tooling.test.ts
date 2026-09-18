@@ -198,15 +198,15 @@ describe('generateAiTooling — decision matrix', () => {
 		expect(entries).toHaveLength(0)
 	})
 
-	test('[claude] emits .ai/rules + CLAUDE.md + .claude/* (no AGENTS.md, no opencode.json)', () => {
+	test('[claude] emits .ai/rules + AGENTS.md + .claude/* (no CLAUDE.md, no opencode.json)', () => {
 		const p = paths(generateAiTooling(makeCfg(['claude'])))
 		expect(p).toContain('.ai/rules/core-stack.md')
 		expect(p).toContain('.ai/rules/api-backend.md')
-		expect(p).toContain('CLAUDE.md')
+		expect(p).toContain('AGENTS.md')
 		expect(p).toContain('.claude/settings.json')
 		expect(p).toContain('.claude/stack.json')
 		expect(p).toContain('.claude/agents/service-architect.md')
-		expect(p).not.toContain('AGENTS.md')
+		expect(p).not.toContain('CLAUDE.md')
 		expect(p).not.toContain('opencode.json')
 	})
 
@@ -219,11 +219,11 @@ describe('generateAiTooling — decision matrix', () => {
 		expect(p.some((x) => x.startsWith('.claude/'))).toBe(false)
 	})
 
-	test('[opencode] emits .ai/rules + opencode.json (NO AGENTS.md, no CLAUDE.md, no .claude/*)', () => {
+	test('[opencode] emits .ai/rules + AGENTS.md + opencode.json (no CLAUDE.md, no .claude/*)', () => {
 		const p = paths(generateAiTooling(makeCfg(['opencode'])))
 		expect(p).toContain('.ai/rules/core-stack.md')
 		expect(p).toContain('opencode.json')
-		expect(p).not.toContain('AGENTS.md')
+		expect(p).toContain('AGENTS.md')
 		expect(p).not.toContain('CLAUDE.md')
 		expect(p.some((x) => x.startsWith('.claude/'))).toBe(false)
 	})
@@ -231,18 +231,18 @@ describe('generateAiTooling — decision matrix', () => {
 	test('[claude, codex] emits both, .ai/rules only once', () => {
 		const entries = generateAiTooling(makeCfg(['claude', 'codex']))
 		const p = paths(entries)
-		expect(p).toContain('CLAUDE.md')
+		expect(p).not.toContain('CLAUDE.md')
 		expect(p).toContain('AGENTS.md')
 		expect(p).not.toContain('opencode.json')
 		const rules = p.filter((x) => x === '.ai/rules/core-stack.md')
 		expect(rules).toHaveLength(1)
 	})
 
-	test('[claude, opencode] emits claude + opencode (no AGENTS.md)', () => {
+	test('[claude, opencode] emits claude + opencode + canonical AGENTS.md', () => {
 		const p = paths(generateAiTooling(makeCfg(['claude', 'opencode'])))
-		expect(p).toContain('CLAUDE.md')
+		expect(p).not.toContain('CLAUDE.md')
 		expect(p).toContain('opencode.json')
-		expect(p).not.toContain('AGENTS.md')
+		expect(p).toContain('AGENTS.md')
 	})
 
 	test('[codex, opencode] emits AGENTS.md + opencode.json (no CLAUDE.md, no .claude/*)', () => {
@@ -256,7 +256,7 @@ describe('generateAiTooling — decision matrix', () => {
 	test('[claude, codex, opencode] emits everything, .ai/rules only once', () => {
 		const entries = generateAiTooling(makeCfg(['claude', 'codex', 'opencode']))
 		const p = paths(entries)
-		expect(p).toContain('CLAUDE.md')
+		expect(p).not.toContain('CLAUDE.md')
 		expect(p).toContain('AGENTS.md')
 		expect(p).toContain('opencode.json')
 		expect(p).toContain('.claude/agents/service-architect.md')
@@ -543,7 +543,7 @@ describe('generated Hono gateway guidance', () => {
 			const entries = runGenerators(
 				makeCfg(['claude', 'codex', 'opencode'], { deploy })
 			)
-			const webInstructions = content(entries, 'apps/web/CLAUDE.md')
+			const webInstructions = content(entries, 'apps/web/AGENTS.md')
 			const webApiRule = content(entries, '.ai/rules/web-api.md')
 			const runtimeGuidance = markdownGuidance(entries)
 			const webPackage = JSON.parse(content(entries, 'apps/web/package.json')) as {
@@ -602,7 +602,7 @@ describe('generated Hono gateway guidance', () => {
 
 					expect(guidance, label).not.toMatch(NODE_TARGET_RUNTIME_GUIDANCE)
 					if (backend === 'hono') {
-						expect(content(entries, 'apps/web/CLAUDE.md'), label).toContain(
+						expect(content(entries, 'apps/web/AGENTS.md'), label).toContain(
 							'Node.js via `@sveltejs/adapter-node`'
 						)
 					}
@@ -627,7 +627,7 @@ describe('generated Hono gateway guidance', () => {
 
 			expect(entries.some(({ path }) => path.startsWith('.ai/rules/')), marketing).toBe(false)
 			expect(markdownGuidance(entries), marketing).not.toContain('.ai/rules/')
-			expect(content(entries, 'apps/web/CLAUDE.md'), marketing).toContain(
+			expect(content(entries, 'apps/web/AGENTS.md'), marketing).toContain(
 				'Follow the workspace root guidance and the conventions in this file.'
 			)
 		}
@@ -639,7 +639,7 @@ describe('generated Hono gateway guidance', () => {
 			const coreRule = content(entries, '.ai/rules/core-stack.md')
 			const backendRule = content(entries, '.ai/rules/api-backend.md')
 			const webRule = content(entries, '.ai/rules/web-svelte.md')
-			const webInstructions = content(entries, 'apps/web/CLAUDE.md')
+			const webInstructions = content(entries, 'apps/web/AGENTS.md')
 			const rootReadme = content(entries, 'README.md')
 			const guidance = entries
 				.filter(
@@ -647,7 +647,7 @@ describe('generated Hono gateway guidance', () => {
 						entry.path.endsWith('.md') &&
 						(entry.path === 'AGENTS.md' ||
 							entry.path === 'CLAUDE.md' ||
-							entry.path === 'apps/web/CLAUDE.md' ||
+							entry.path === 'apps/web/AGENTS.md' ||
 							entry.path.startsWith('.ai/rules/') ||
 							entry.path.startsWith('.claude/agents/') ||
 							entry.path.startsWith('.opencode/agents/'))
@@ -937,12 +937,12 @@ describe('generateAiTooling — content gating', () => {
 		expect(agents).not.toContain('## Schema location')
 	})
 
-	test('CLAUDE.md uses @.ai/rules imports', () => {
+	test('AGENTS.md indexes .ai/rules for every tool', () => {
 		const entries = generateAiTooling(makeCfg(['claude']))
-		const claude = content(entries, 'CLAUDE.md')
-		expect(claude).toContain('@.ai/rules/core-stack.md')
-		expect(claude).toContain('@.ai/rules/api-backend.md')
-		expect(claude).toContain('@.ai/rules/db-drizzle.md')
+		const agents = content(entries, 'AGENTS.md')
+		expect(agents).toContain('.ai/rules/core-stack.md')
+		expect(agents).toContain('.ai/rules/api-backend.md')
+		expect(agents).toContain('.ai/rules/db-drizzle.md')
 	})
 
 	test('opencode.json points at .ai/rules glob', () => {

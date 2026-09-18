@@ -18,7 +18,7 @@ apps/api/src/index.ts  3654fa37741eca5d
 apps/api/tsconfig.json  69f2df8e361aa93a
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  d0fdb5f1926819f0
+apps/web/AGENTS.md  d0fdb5f1926819f0
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  fcc23f0edf9afdd1
 apps/web/prettier.config.js  76a534fdcb4541a5

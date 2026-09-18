@@ -38,8 +38,7 @@
 .husky/pre-commit  41ceea3ad087b3b4
 .opencode/agents/astro-marketer.md  9156f94a4c52c941
 .prettierignore  e6a7d108df20b155
-AGENTS.md  9371d73aa741b46b
-CLAUDE.md  2592486cbf8aa151
+AGENTS.md  5065ce2d63947874
 LICENSE  508a77d2e7b51d98
 README.md  34959ec58e92570c
 apps/api/README.md  017caab0f87ecef0
@@ -72,7 +71,7 @@ apps/marketing/tsconfig.json  bf116ae4200916ac
 apps/marketing/wrangler.jsonc  298da9136d06af2b
 apps/web/.env.example  646963ee18746a11
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  d86f689fbfa35d12
+apps/web/AGENTS.md  d86f689fbfa35d12
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  31c18faeb84348ce
 apps/web/prettier.config.js  76a534fdcb4541a5

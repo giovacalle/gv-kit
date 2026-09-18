@@ -119,7 +119,7 @@ export async function collect(): Promise<{ choices: Choices }> {
 	const aiTooling = await multiselect({
 		message: 'AI tooling configs (select zero or more)',
 		options: [
-			{ value: 'claude', label: 'Claude (CLAUDE.md, .claude/)' },
+			{ value: 'claude', label: 'Claude (.claude/, reads AGENTS.md)' },
 			{ value: 'codex', label: 'Codex (AGENTS.md)' },
 			{ value: 'opencode', label: 'Opencode (AGENTS.md)' }
 		],

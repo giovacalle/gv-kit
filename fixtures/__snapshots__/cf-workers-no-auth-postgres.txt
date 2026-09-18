@@ -32,7 +32,7 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  e6a7d108df20b155
-CLAUDE.md  c8a063747849c21b
+AGENTS.md  2022003c4d267d79
 LICENSE  508a77d2e7b51d98
 README.md  83a917bd92861a8a
 apps/api/README.md  017caab0f87ecef0
@@ -46,7 +46,7 @@ apps/api/worker-configuration.bootstrap.d.ts  507135d967c03624
 apps/api/wrangler.jsonc  022e0418ce8dc766
 apps/web/.env.example  e3b0c44298fc1c14
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  5922de74350ba6be
+apps/web/AGENTS.md  5922de74350ba6be
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  eb505d7e226d2800
 apps/web/prettier.config.js  76a534fdcb4541a5

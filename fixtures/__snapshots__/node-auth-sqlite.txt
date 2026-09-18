@@ -30,7 +30,7 @@
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  e6a7d108df20b155
-CLAUDE.md  80eae5bfa9938852
+AGENTS.md  af5ef89e38357222
 Dockerfile  6ad0b5db68f05a7d
 LICENSE  508a77d2e7b51d98
 README.md  3b5d1b5973e680b3
@@ -44,7 +44,7 @@ apps/api/src/index.ts  3654fa37741eca5d
 apps/api/tsconfig.json  69f2df8e361aa93a
 apps/web/.env.example  646963ee18746a11
 apps/web/.gitignore  83d28c3cd52008f4
-apps/web/CLAUDE.md  928d580b8ba29087
+apps/web/AGENTS.md  928d580b8ba29087
 apps/web/eslint.config.js  cfd85b071f7c820c
 apps/web/package.json  6a2961326cbbdca1
 apps/web/prettier.config.js  76a534fdcb4541a5

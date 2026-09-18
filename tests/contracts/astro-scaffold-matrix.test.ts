@@ -117,8 +117,8 @@ describe('Astro generated-project verification matrix', () => {
 			expect(Boolean(marketingPackage.dependencies?.['posthog-js'])).toBe(
 				entry.config.choices.monitoring.includes('posthog')
 			)
-			expect(paths.has('AGENTS.md')).toBe(entry.config.choices.aiTooling.includes('codex'))
-			expect(paths.has('CLAUDE.md')).toBe(entry.config.choices.aiTooling.includes('claude'))
+			expect(paths.has('AGENTS.md')).toBe(entry.config.choices.aiTooling.length > 0)
+			expect(paths.has('CLAUDE.md')).toBe(false)
 			expect(paths.has('opencode.json')).toBe(entry.config.choices.aiTooling.includes('opencode'))
 		}
 	})

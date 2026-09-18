@@ -20,8 +20,7 @@ const WRANGLER_4_125_OWNERSHIP_MARKERS = [
 ] as const
 const repositoryTopologyGuidance = [
 	'AGENTS.md',
-	'CLAUDE.md',
-	'.claude/rules/service-architecture.md',
+'.claude/rules/service-architecture.md',
 	'.claude/rules/api-client.md',
 	'.claude/rules/generators.md',
 	'README.md',
@@ -366,7 +365,7 @@ describe('Cloudflare gateway production topology', () => {
 
 	test('generated guidance preserves the private gateway topology', () => {
 		const entries = planFixture('hono-cf-workers-passwordless')
-		const claude = entry(entries, 'CLAUDE.md')
+		const claude = entry(entries, 'AGENTS.md')
 		const serviceArchitect = entry(entries, '.claude/agents/service-architect.md')
 		const coreWorkflow = entry(entries, '.ai/rules/core-workflow.md')
 		const webRule = entry(entries, '.ai/rules/web-api.md')
@@ -374,14 +373,13 @@ describe('Cloudflare gateway production topology', () => {
 		const completeGuidance = entries
 			.filter(
 				(candidate) =>
-					candidate.path === 'CLAUDE.md' ||
 					candidate.path.startsWith('.ai/rules/') ||
 					candidate.path.startsWith('.claude/agents/')
 			)
 			.map((candidate) => candidate.content)
 			.join('\n')
 
-		expect(claude).toContain('private workers under `services/`')
+		expect(claude).toMatch(/private [Ww]orkers under `services\//)
 		expect(claude).not.toContain('apps/api/<service>')
 
 		expect(serviceArchitect).toContain('services/<svc>/')

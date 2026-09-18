@@ -9,11 +9,15 @@ export function generateI18n(cfg: GvKitConfig): FileEntry[] {
 	const includeAuth = cfg.choices.auth.length > 0
 	const includeApiClient = cfg.choices.apiClient === 'hey-api'
 	const includeMarketing = cfg.choices.marketing === 'astro'
+	const packageCompiledOutput = cfg.choices.backend === 'hono' && cfg.choices.deploy === 'docker'
 
 	return [
-		{ path: 'packages/i18n/package.json', content: PACKAGE_JSON },
+		{ path: 'packages/i18n/package.json', content: packageJson(packageCompiledOutput) },
 		{ path: 'packages/i18n/tsconfig.json', content: TSCONFIG },
 		{ path: 'packages/i18n/.gitignore', content: GITIGNORE },
+		...(packageCompiledOutput
+			? [{ path: 'packages/i18n/.npmignore', content: NPMIGNORE }]
+			: []),
 		{ path: 'packages/i18n/project.inlang/settings.json', content: INLANG_SETTINGS },
 		{
 			path: 'packages/i18n/messages/en.json',
@@ -136,6 +140,7 @@ function messagesEn({
 		base.users_title = 'Current user'
 		base.users_lede = 'Fetched client-side through the generated client, cached by TanStack Query.'
 		base.users_loading = 'Loading…'
+		base.users_id_label = 'ID'
 		base.users_name_label = 'Name'
 		base.users_email_label = 'Email'
 	}
@@ -262,6 +267,7 @@ function messagesIt({
 		base.users_lede =
 			'Recuperato lato client tramite il client generato, in cache con TanStack Query.'
 		base.users_loading = 'Caricamento…'
+		base.users_id_label = 'ID'
 		base.users_name_label = 'Nome'
 		base.users_email_label = 'Email'
 	}
@@ -277,33 +283,41 @@ function messagesIt({
 	return JSON.stringify(base, null, 2) + '\n'
 }
 
-const PACKAGE_JSON =
-	JSON.stringify(
-		{
-			name: '@repo/i18n',
-			version: '0.0.0',
-			private: true,
-			type: 'module',
-			exports: {
-				'./messages': './src/paraglide/messages.js',
-				'./runtime': './src/paraglide/runtime.js',
-				'./server': './src/paraglide/server.js'
+function packageJson(packageCompiledOutput: boolean): string {
+	const build =
+		'paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --emit-ts-declarations' +
+		(packageCompiledOutput
+			? ` && node -e "require('node:fs').writeFileSync('src/paraglide/.npmignore', '')"`
+			: '')
+
+	return (
+		JSON.stringify(
+			{
+				name: '@repo/i18n',
+				version: '0.0.0',
+				private: true,
+				type: 'module',
+				exports: {
+					'./messages': './src/paraglide/messages.js',
+					'./runtime': './src/paraglide/runtime.js',
+					'./server': './src/paraglide/server.js'
+				},
+				scripts: {
+					build,
+					dev: 'paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --emit-ts-declarations --watch'
+				},
+				dependencies: {
+					'@inlang/paraglide-js': '^2.0.0'
+				},
+				devDependencies: {
+					'@repo/tooling-typescript': 'workspace:*'
+				}
 			},
-			scripts: {
-				build:
-					'paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --emit-ts-declarations',
-				dev: 'paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --emit-ts-declarations --watch'
-			},
-			dependencies: {
-				'@inlang/paraglide-js': '^2.0.0'
-			},
-			devDependencies: {
-				'@repo/tooling-typescript': 'workspace:*'
-			}
-		},
-		null,
-		2
-	) + '\n'
+			null,
+			2
+		) + '\n'
+	)
+}
 
 const TSCONFIG = `{
 	"extends": "@repo/tooling-typescript/library.json",
@@ -314,6 +328,9 @@ const TSCONFIG = `{
 
 const GITIGNORE = `src/paraglide/
 node_modules/
+`
+
+const NPMIGNORE = `node_modules/
 `
 
 // Paraglide v2 uses `baseLocale` + `locales` (not v1's `sourceLanguageTag` + `languageTags`).

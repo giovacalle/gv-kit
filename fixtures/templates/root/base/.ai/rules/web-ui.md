@@ -156,7 +156,7 @@ Use `@lucide/svelte`, one icon per import path:
 <Loader2Icon class="size-4 animate-spin" />
 ```
 
-Per-icon imports keep the Worker bundle small. Don't import from `'@lucide/svelte'` root.
+Per-icon imports keep the client bundle small. Don't import from `'@lucide/svelte'` root.
 
 ## Class merging
 

@@ -34,7 +34,7 @@ export function runGenerators(cfg: GvKitConfig): FileEntry[] {
 		...generateDeploy(cfg),
 		...generateAiTooling(cfg),
 		{
-			path: 'gv-kit.config.jsonc',
+			path: 'project.config.jsonc',
 			content: renderConfigJsonc(cfg)
 		}
 	]
@@ -57,8 +57,7 @@ function renderConfigJsonc(cfg: GvKitConfig): string {
 		deploy
 	} = cfg.choices
 	const arr = (xs: readonly string[]) => `[${xs.map((x) => JSON.stringify(x)).join(', ')}]`
-	return `// Re-run: gv-kit new <out-dir> --config gv-kit.config.jsonc
-{
+	return `{
 \t"configVersion": ${cfg.configVersion},
 \t"choices": {
 \t\t"name": ${JSON.stringify(name)},

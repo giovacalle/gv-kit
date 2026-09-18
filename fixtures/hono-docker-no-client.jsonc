@@ -1,0 +1,17 @@
+{
+	"configVersion": 2,
+	"choices": {
+		"name": "hono-docker-no-client",
+		"frontend": "sveltekit",
+		"marketing": "astro",
+		"backend": "hono",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "skip",
+		"auth": [],
+		"email": "skip",
+		"aiTooling": ["claude", "codex", "opencode"],
+		"deploy": "docker"
+	}
+}

@@ -1,9 +1,7 @@
 import type { FileEntry } from '../lib/files.js'
 import type { GvKitConfig } from '../schema/config.js'
+import { AUTH_SERVICE } from './hono-topology.js'
 
-/**
- * Generator for `packages/backend/` — horizontal helpers, core types, and Hono middleware.
- */
 export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 	const isHono = cfg.choices.backend === 'hono'
 	const isCf = cfg.choices.deploy === 'cf-workers'
@@ -20,9 +18,7 @@ export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 		{ path: 'packages/backend/src/helpers/index.test.ts', content: HELPERS_TEST }
 	]
 
-	// users DAO + use-cases require the better-auth `user` table emitted by
-	// `@repo/db`, which is only present when at least one auth provider was
-	// chosen. Skip these emissions otherwise so the package still typechecks.
+	// The users core requires Better Auth's user table, which is absent without a provider.
 	if (hasAuth) {
 		entries.push(
 			{ path: 'packages/backend/src/core/types.ts', content: CORE_TYPES },
@@ -35,7 +31,10 @@ export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 		entries.push(
 			{ path: 'packages/backend/src/middleware/index.ts', content: MIDDLEWARE_INDEX },
 			{ path: 'packages/backend/src/middleware/logger.ts', content: MIDDLEWARE_LOGGER },
-			{ path: 'packages/backend/src/middleware/error-handler.ts', content: MIDDLEWARE_ERROR_HANDLER },
+			{
+				path: 'packages/backend/src/middleware/error-handler.ts',
+				content: MIDDLEWARE_ERROR_HANDLER
+			},
 			{ path: 'packages/backend/src/middleware/auth/index.ts', content: MIDDLEWARE_AUTH_INDEX },
 			{ path: 'packages/backend/src/middleware/auth/client.ts', content: MIDDLEWARE_AUTH_CLIENT },
 			{ path: 'packages/backend/src/middleware/auth/require.ts', content: MIDDLEWARE_AUTH_REQUIRE }
@@ -44,10 +43,6 @@ export function generateBackend(cfg: GvKitConfig): FileEntry[] {
 
 	return entries
 }
-
-/* ------------------------------------------------------------------ */
-/*  package.json                                                       */
-/* ------------------------------------------------------------------ */
 
 function renderPackageJson({
 	isHono,
@@ -77,7 +72,7 @@ function renderPackageJson({
 		'drizzle-orm': '^0.45.0',
 		zod: '^4.3.0'
 	}
-	// users DAO + use-cases import the better-auth `user` table from `@repo/db`.
+	// Only authenticated scaffolds emit the @repo/db table imported by the users core.
 	if (hasAuth) dependencies['@repo/db'] = 'workspace:*'
 	if (isHono) dependencies.hono = '^4.12.0'
 
@@ -107,14 +102,14 @@ function renderPackageJson({
 	return JSON.stringify(pkg, null, 2) + '\n'
 }
 
-/* ------------------------------------------------------------------ */
-/*  tsconfig.json                                                      */
-/* ------------------------------------------------------------------ */
-
-function renderTsconfig({ isCf, isSqlite: _isSqlite }: { isCf: boolean; isSqlite: boolean }): string {
-	// Inherit the shared compiler base from `@repo/tooling-typescript` so every
-	// package agrees on strictness + module resolution. cf-workers consumers
-	// pick up `@cloudflare/workers-types`; everything else picks up `node`.
+function renderTsconfig({
+	isCf,
+	isSqlite: _isSqlite
+}: {
+	isCf: boolean
+	isSqlite: boolean
+}): string {
+	// Workers need Cloudflare globals; other runtimes need Node globals.
 	const base = isCf ? '@repo/tooling-typescript/workers.json' : '@repo/tooling-typescript/node.json'
 
 	return `{
@@ -127,10 +122,6 @@ function renderTsconfig({ isCf, isSqlite: _isSqlite }: { isCf: boolean; isSqlite
 }
 `
 }
-
-/* ------------------------------------------------------------------ */
-/*  src/helpers/index.ts                                               */
-/* ------------------------------------------------------------------ */
 
 const HELPERS_INDEX = `export class HttpError extends Error {
 	constructor(
@@ -182,24 +173,40 @@ describe('errors', () => {
 })
 `
 
-/* ------------------------------------------------------------------ */
-/*  src/middleware/* (hono-only)                                       */
-/* ------------------------------------------------------------------ */
-
 const MIDDLEWARE_INDEX = `export { logger } from './logger.js'
 export { errorHandler } from './error-handler.js'
 `
 
 const MIDDLEWARE_LOGGER = `import type { MiddlewareHandler } from 'hono'
 
-export function logger(): MiddlewareHandler {
+const REQUEST_ID_HEADER = 'x-request-id'
+const REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/
+
+function requestId(value: string | undefined): string {
+	return value && REQUEST_ID_PATTERN.test(value) ? value : crypto.randomUUID()
+}
+
+export function logger(
+	service: string,
+	writeLog: (line: string) => void = (line) => console.log(line)
+): MiddlewareHandler {
 	return async (c, next) => {
-		const start = Date.now()
+		const id = requestId(c.req.header(REQUEST_ID_HEADER))
+		const startedAt = Date.now()
+		c.header(REQUEST_ID_HEADER, id)
 		await next()
-		const ms = Date.now() - start
-		const { method } = c.req
-		const path = new URL(c.req.url).pathname
-		console.log(\`\${method} \${path} \${c.res.status} \${ms}ms\`)
+		c.header(REQUEST_ID_HEADER, id)
+		writeLog(
+			JSON.stringify({
+				event: 'service_request_completed',
+				requestId: id,
+				service,
+				method: c.req.method,
+				path: new URL(c.req.url).pathname,
+				status: c.res.status,
+				durationMs: Date.now() - startedAt
+			})
+		)
 	}
 }
 `
@@ -225,12 +232,6 @@ export function errorHandler(): MiddlewareHandler {
 	}
 }
 `
-
-/* ------------------------------------------------------------------ */
-/*  src/core/types.ts                                                  */
-/*  src/core/data-access/users.ts                                      */
-/*  src/core/use-cases/users.ts                                        */
-/* ------------------------------------------------------------------ */
 
 const CORE_TYPES = `import { authSchema } from '@repo/db'
 
@@ -261,10 +262,6 @@ export async function getMeUseCase(db: Db, userId: UserId) {
 }
 `
 
-/* ------------------------------------------------------------------ */
-/*  src/middleware/auth/* (hono-only)                                  */
-/* ------------------------------------------------------------------ */
-
 const MIDDLEWARE_AUTH_CLIENT = `export type SessionLike = {
 	userId: string
 	sessionId: string
@@ -272,8 +269,8 @@ const MIDDLEWARE_AUTH_CLIENT = `export type SessionLike = {
 }
 
 type AuthEnv = {
-	AUTH?: { fetch: (req: Request) => Promise<Response> }
-	AUTH_URL?: string
+	${AUTH_SERVICE.internalTarget}?: { fetch: (req: Request) => Promise<Response> }
+	${AUTH_SERVICE.transport.node.targetEnvironmentVariable}?: string
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -286,15 +283,21 @@ export async function getSession<TBindings extends Record<string, any>>(
 	if (cookie) headers.set('cookie', cookie)
 	const authorization = request.headers.get('authorization')
 	if (authorization) headers.set('authorization', authorization)
+	const requestId = request.headers.get('x-request-id')
+	if (requestId) headers.set('x-request-id', requestId)
+	const forwardedHost = request.headers.get('x-forwarded-host') ?? new URL(request.url).host
+	headers.set('x-forwarded-host', forwardedHost)
+	const forwardedProto =
+		request.headers.get('x-forwarded-proto') ?? new URL(request.url).protocol.slice(0, -1)
+	headers.set('x-forwarded-proto', forwardedProto)
 
 	const path = '/internal/session'
 	const e = env as unknown as AuthEnv
 
 	let res: Response
-	if ('AUTH' in env && e.AUTH) {
-		res = await e.AUTH.fetch(new Request(\`https://internal\${path}\`, { headers }))
-	} else {
-		const base = e.AUTH_URL
+	if ('${AUTH_SERVICE.internalTarget}' in env && e.${AUTH_SERVICE.internalTarget}) res = await e.${AUTH_SERVICE.internalTarget}.fetch(new Request(\`https://internal\${path}\`, { headers }))
+	else {
+		const base = e.${AUTH_SERVICE.transport.node.targetEnvironmentVariable}
 		if (!base) return null
 		res = await fetch(\`\${base}\${path}\`, { headers })
 	}

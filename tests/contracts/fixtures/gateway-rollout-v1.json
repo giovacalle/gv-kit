@@ -1,0 +1,143 @@
+{
+	"fixtureVersion": "gateway-http-contract-v1",
+	"webOrigin": "https://app.previous.example.test",
+	"apiOrigin": "https://api.previous.example.test",
+	"publicRequests": [
+		{
+			"name": "auth",
+			"target": "AUTH",
+			"method": "POST",
+			"path": "/api/auth/sign-in/email-otp",
+			"headers": {
+				"content-type": "application/json",
+				"cookie": "session=previous-web-session",
+				"x-locale": "en",
+				"x-request-id": "previous-web-auth"
+			},
+			"body": "{\"email\":\"previous@example.test\",\"otp\":\"123456\"}"
+		},
+		{
+			"name": "users",
+			"target": "USERS",
+			"method": "GET",
+			"path": "/api/v1/users/me?include=session",
+			"headers": {
+				"accept": "application/json",
+				"cookie": "session=previous-web-session",
+				"x-request-id": "previous-web-users"
+			}
+		},
+		{
+			"name": "health",
+			"method": "GET",
+			"path": "/api/healthz",
+			"headers": {
+				"x-request-id": "previous-web-health"
+			}
+		},
+		{
+			"name": "openapi",
+			"method": "GET",
+			"path": "/api/openapi.json",
+			"headers": {
+				"accept": "application/json",
+				"x-request-id": "previous-web-openapi"
+			}
+		}
+	],
+	"oldServiceResponses": {
+		"AUTH": {
+			"status": 307,
+			"statusText": "Temporary Redirect",
+			"headers": [
+				["content-type", "text/plain;charset=UTF-8"],
+				["location", "/api/auth/verify-email"],
+				["set-cookie", "session=next-auth-session; Path=/; HttpOnly; SameSite=Lax"],
+				["x-auth-contract", "previous"]
+			],
+			"chunks": ["auth-", "redirect"]
+		},
+		"USERS": {
+			"status": 206,
+			"statusText": "Partial Content",
+			"headers": [
+				["content-type", "application/x-ndjson"],
+				["etag", "previous-users-response"],
+				["x-users-contract", "previous"]
+			],
+			"chunks": ["{\"id\":\"previous-user\"}\n", "{\"complete\":true}\n"]
+		}
+	},
+	"oldGatewayRequests": {
+		"auth": {
+			"method": "GET",
+			"url": "https://auth.private/api/auth/get-session",
+			"headers": {
+				"cookie": "session=previous-gateway-session",
+				"x-forwarded-host": "app.previous.example.test",
+				"x-forwarded-proto": "https",
+				"x-request-id": "previous-gateway-auth"
+			}
+		},
+		"users": {
+			"method": "GET",
+			"url": "https://users.private/api/v1/users/me",
+			"headers": {
+				"accept": "application/json",
+				"cookie": "session=previous-gateway-session",
+				"x-forwarded-host": "app.previous.example.test",
+				"x-forwarded-proto": "https",
+				"x-request-id": "previous-gateway-users"
+			}
+		}
+	},
+	"oldAuthSessionResponse": {
+		"status": 200,
+		"headers": [
+			["content-type", "application/json"],
+			["x-auth-contract", "previous"]
+		],
+		"body": {
+			"userId": "previous-user",
+			"sessionId": "previous-session",
+			"expiresAt": "2026-09-01T00:00:00.000Z"
+		}
+	},
+	"currentServiceDependencies": {
+		"usersMe": {
+			"id": "previous-user",
+			"name": "Previous User",
+			"email": "previous@example.test",
+			"emailVerified": true,
+			"image": null,
+			"createdAt": "2026-08-01T00:00:00.000Z",
+			"updatedAt": "2026-08-20T00:00:00.000Z"
+		}
+	},
+	"currentServiceResponses": {
+		"AUTH": {
+			"status": 200,
+			"headers": [
+				["content-type", "application/json"],
+				["x-request-id", "previous-gateway-auth"]
+			],
+			"body": null
+		},
+		"USERS": {
+			"status": 200,
+			"headers": [
+				["content-type", "application/json"],
+				["x-request-id", "previous-gateway-users"]
+			],
+			"body": {
+				"id": "previous-user",
+				"name": "Previous User",
+				"email": "previous@example.test",
+				"emailVerified": true,
+				"image": null,
+				"createdAt": "2026-08-01T00:00:00.000Z",
+				"updatedAt": "2026-08-20T00:00:00.000Z"
+			}
+		}
+	}
+}

@@ -56,6 +56,29 @@ describe('config migration compatibility', () => {
 			buildScaffoldPlan(legacy).some((entry) => entry.path.startsWith('apps/marketing/'))
 		).toBe(false)
 	})
+
+	test('valid Hono v2 input automatically plans the gateway topology', () => {
+		const config = GvKitConfig.parse(
+			parseJsonc(readFileSync(join(fixturesDir, 'astro-cf-workers-full.jsonc'), 'utf8'))
+		)
+		const paths = buildScaffoldPlan(config).map((entry) => entry.path)
+
+		expect(config.configVersion).toBe(2)
+		expect('gateway' in config.choices).toBe(false)
+		expect(paths).toContain('apps/api/package.json')
+		expect(paths).toContain('services/auth/package.json')
+		expect(paths).toContain('services/users/package.json')
+	})
+
+	test('inside-frontend plans remain free of gateway and private-service packages', () => {
+		const config = GvKitConfig.parse(
+			parseJsonc(readFileSync(join(fixturesDir, 'v2-inside-web-minimal.jsonc'), 'utf8'))
+		)
+		const paths = buildScaffoldPlan(config).map((entry) => entry.path)
+
+		expect(paths).not.toContain('apps/api/package.json')
+		expect(paths.some((path) => path.startsWith('services/'))).toBe(false)
+	})
 })
 
 function hash(s: string): string {

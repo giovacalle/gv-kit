@@ -6,7 +6,23 @@ Test runner: **`vitest`**. Tests live in `tests/` next to the package or app the
 
 1. **Domain logic** — use-cases under `packages/backend/src/core/use-cases/`. Pure functions that take a DB and return data; trivial to set up.
 2. **Route handlers** — hit the Hono app with `app.request('/me', { … })` and assert on the response.
+<!--@gvkit:if hono-->
+<!--@gvkit:if auth-->
+<!--@gvkit:if cfWorkers-->
+3. **Boundary contracts** — when a service depends on another Service Binding (e.g. `AUTH`), assert that the binding name in code matches the one declared in `wrangler.jsonc`. Mismatches surface as runtime errors otherwise.
+<!--@gvkit:else-->
+3. **Boundary contracts** — when a service depends on a private target URL (e.g. `AUTH_URL`), assert that the environment name in code matches the generated runtime configuration. Mismatches surface as runtime errors otherwise.
+<!--@gvkit:endif-->
+<!--@gvkit:else-->
+3. **Boundary contracts** — assert that runtime environment names in code match the generated deployment configuration. Mismatches surface as runtime errors otherwise.
+<!--@gvkit:endif-->
+<!--@gvkit:else-->
+<!--@gvkit:if auth-->
 3. **Boundary contracts** — when a service depends on another service binding (e.g. `AUTH`), assert that the binding name in code matches the one declared in `wrangler.jsonc`. Mismatches surface as runtime errors otherwise.
+<!--@gvkit:else-->
+3. **Boundary contracts** — assert that runtime environment names in code match the generated deployment configuration. Mismatches surface as runtime errors otherwise.
+<!--@gvkit:endif-->
+<!--@gvkit:endif-->
 
 ## Conventions
 

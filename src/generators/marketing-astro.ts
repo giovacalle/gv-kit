@@ -1,6 +1,7 @@
+import { cloudflareProductionWorkerName } from '../lib/cloudflare-worker-name.js'
 import type { FileEntry } from '../lib/files.js'
 import { renderTemplate } from '../lib/template-renderer.js'
-import { WORKERS_COMPAT_DATE } from '../lib/workers.js'
+import { HONO_WORKERS_COMPAT_DATE, WORKERS_COMPAT_DATE } from '../lib/workers.js'
 import type { GvKitConfig } from '../schema/config.js'
 
 /** Generate the optional static Astro marketing surface under `apps/marketing`. */
@@ -14,11 +15,18 @@ export function generateMarketingAstro(cfg: GvKitConfig): FileEntry[] {
 			monitoringUmami: cfg.choices.monitoring.includes('umami'),
 			monitoringPosthog: cfg.choices.monitoring.includes('posthog'),
 			deployCfWorkers: cfg.choices.deploy === 'cf-workers',
-			deployDocker: cfg.choices.deploy === 'docker'
+			deployDocker: cfg.choices.deploy === 'docker',
+			honoCfWorkers:
+				cfg.choices.backend === 'hono' && cfg.choices.deploy === 'cf-workers'
 		},
 		vars: {
 			__PROJECT__: cfg.choices.name,
-			__COMPAT_DATE__: WORKERS_COMPAT_DATE
+			__CLOUDFLARE_MARKETING_WORKER__: cloudflareProductionWorkerName({
+				project: cfg.choices.name,
+				service: 'marketing'
+			}),
+			__COMPAT_DATE__:
+				cfg.choices.backend === 'hono' ? HONO_WORKERS_COMPAT_DATE : WORKERS_COMPAT_DATE
 		}
 	})
 }

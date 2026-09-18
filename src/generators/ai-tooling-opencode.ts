@@ -4,8 +4,8 @@ import type { GvKitConfig } from '../schema/config.js'
 /**
  * Emits `opencode.json` at the repo root. opencode's `instructions` field
  * supports globs, so we point it at the canonical `.ai/rules/*.md` tree
- * shared with Claude. No AGENTS.md is emitted from this generator — when
- * `codex` is also selected the codex generator owns AGENTS.md.
+ * shared with every tool. AGENTS.md itself is emitted by `ai-tooling.ts`,
+ * never here.
  */
 export function generateAiToolingOpencode(cfg: GvKitConfig): FileEntry[] {
 	const entries: FileEntry[] = [{ path: 'opencode.json', content: renderOpencodeConfig() }]

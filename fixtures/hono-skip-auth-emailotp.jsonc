@@ -1,0 +1,16 @@
+{
+	"configVersion": 1,
+	"choices": {
+		"name": "hono-skip-auth-emailotp",
+		"frontend": "sveltekit",
+		"backend": "hono",
+		"i18n": "skip",
+		"monitoring": [],
+		"db": "sqlite",
+		"apiClient": "hey-api",
+		"auth": ["emailOTP"],
+		"email": "resend",
+		"aiTooling": ["claude"],
+		"deploy": "skip"
+	}
+}

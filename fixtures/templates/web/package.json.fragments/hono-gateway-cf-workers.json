@@ -1,0 +1,13 @@
+{
+	"scripts": {
+		"cf-typegen": "wrangler types --include-runtime=false && rm -f worker-configuration.bootstrap.d.ts",
+		"build": "vite build",
+		"typecheck": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+		"deploy:production": "pnpm cf-typegen && wrangler deploy",
+		"deploy:staging": "pnpm cf-typegen && test -n \"$STAGING_ALIAS\" && wrangler deploy --config \"${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}\""
+	},
+	"devDependencies": {
+		"@cloudflare/workers-types": "^5.20260825.1",
+		"wrangler": "^4.125.0"
+	}
+}

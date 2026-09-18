@@ -1,10 +1,10 @@
 # gv-kit
 
-Scaffolding CLI for Turborepo monorepos targeting SvelteKit + Hono on Cloudflare Workers. Primary AI tooling reference for Codex, Opencode, and other non-Claude AI assistants.
+Scaffolding CLI for Turborepo monorepos targeting SvelteKit + Hono on Cloudflare Workers. Canonical AI tooling reference for all coding assistants (Claude Code reads this file natively since 2.1.277; `.claude/rules/` carries deeper conventions).
 
 ## Architecture
 
-User answers prompts → choices validated by Zod → pure generators emit `FileEntry[]` → user confirms → files written + `pnpm install` + `git init`.
+User answers prompts → choices validated by Zod → pure generators emit `FileEntry[]` → user confirms → files written + `pnpm install` + `pnpm run format` + `git init`.
 
 Pipeline stages: `collect` → `validate` → `plan` → `confirm` → `execute`. Generators are pure functions `(config) => FileEntry[]`. No I/O inside generators.
 
@@ -34,9 +34,20 @@ Pipeline stages: `collect` → `validate` → `plan` → `confirm` → `execute`
 - All output (code/comments/commits/docs) in English
 - TypeScript pinned to `~5.9.0`; Zod `^4.3.0` with workspace override
 - Wrangler config is always `wrangler.jsonc` — never `wrangler.toml`
+- See `.claude/rules/` for pipeline, generator, schema, fixture, service, api-client, and testing conventions
 - Read files before editing in batch
 - After cleanup/refactor: run `grep -ri <pattern>` to catch residue
 - Snapshot regen is an explicit step on every generator change
+
+## ⚠️ Easy mistakes
+
+Read before changing core paths.
+
+- **Generators are PURE.** No `Bun.write`, `fs`, `child_process`, `Math.random()`, or `Date.now()` inside `src/generators/`. Side effects live ONLY in the `execute` stage of the pipeline.
+- **Schema is the single source of truth** (`src/schema/config.ts`). Generators must NOT redefine choice unions locally — import from the schema.
+- **Emitted templates are someone else's repo.** Never reference gv-kit-internal paths (`fixtures/`, `src/generators/`, `.plans/`) or terms (`FileEntry`, "the scaffolder", "this CLI") inside content emitted by a generator. See `.claude/rules/scaffolded-content.md`.
+- **Snapshots are intentional.** When you change a generator, run `bun run snap` and *read* the diff before committing — the diff IS the change.
+- **Single-line if + throw, no braces.** Project style. Multi-line bodies use braces.
 
 ## Pipeline rules (summary)
 
@@ -44,7 +55,7 @@ Pipeline stages: `collect` → `validate` → `plan` → `confirm` → `execute`
 2. `validate` parses raw input via Zod schemas — NO ad-hoc checks elsewhere
 3. `plan` calls each generator and concatenates the resulting `FileEntry[]`, sorted by path
 4. `confirm` prints summary; bypassed by `--yes` and `--dry-run`
-5. `execute` writes files, runs `pnpm install` if a root `package.json` exists, then `git init`
+5. `execute` writes files, runs `pnpm install` if a root `package.json` exists, then `pnpm run format` (non-fatal), then `git init`
 
 ## Generator rules (summary)
 
@@ -55,7 +66,9 @@ Pipeline stages: `collect` → `validate` → `plan` → `confirm` → `execute`
 
 ## Service architecture
 
-`apps/api` is a container of services. Auth is served only by `apps/api/auth`. Other services call it via inline `fetch` (~10 LOC). NO cross-service infra in `packages/backend`. Same rule applies to scaffolded projects — emit a copy of `service-architecture.md` into the generated `.claude/rules/`.
+`packages/backend` is the shared backend application/core layer. It may contain reusable data access, use cases, types, helpers, and middleware. Deployable `services/<service>` packages are transport/runtime adapters and may import the application modules they need from `@repo/backend`.
+
+`apps/api` is the only public Hono API application. The web origin's `/api/*` alias and canonical API origin reach the same gateway. Better Auth stays under `/api/auth/*`; domain routes use `/api/v1/*`. Private workers live under `services/<service>`; auth is served only by `services/auth`. The gateway handles ingress, routing, operational middleware, OpenAPI delivery, and transparent forwarding. It does not import application use cases or orchestrate business workflows. The gateway composes service-defined OpenAPI fragments into `apps/api/openapi.json`, and `packages/openapi-client` exposes one flat client for that public contract. Browser traffic stays same-origin; web SSR uses only the `GATEWAY` Service Binding on Cloudflare. Private services resolve sessions through the deploy-aware `@repo/backend/middleware/auth` transport and explicit private bindings such as `AUTH`. Never import a service app into the gateway or route internal calls back through it. Keep generated `.ai/rules/` aligned with this topology.
 
 ## Testing
 

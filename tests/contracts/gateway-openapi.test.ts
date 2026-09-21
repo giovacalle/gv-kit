@@ -166,6 +166,77 @@ function compose(
 	})
 }
 
+function securityFragments(): OpenApiFragment[] {
+	const operation = (operationId: string) => ({
+		operationId,
+		responses: { 200: { description: 'ok' } }
+	})
+	return [
+		fragment('example', {
+			...document(),
+			security: [{ oauth: ['write', 'read'], cookieAuth: [] }, { apiKey: [] }, {}],
+			components: {
+				securitySchemes: {
+					cookieAuth: { type: 'apiKey', in: 'cookie', name: 'session' },
+					apiKey: { type: 'apiKey', in: 'header', name: 'X-API-Key' },
+					oauth: {
+						type: 'oauth2',
+						flows: {
+							clientCredentials: {
+								tokenUrl: 'https://identity.example.test/token',
+								scopes: { read: 'Read records', write: 'Write records', admin: 'Administer records' }
+							}
+						}
+					}
+				}
+			},
+			paths: {
+				'/api/v1/example': {
+					summary: 'Shared resource',
+					'x-metadata': { description: 'Not an operation' },
+					get: operation('exampleGet'),
+					head: operation('exampleHead'),
+					options: operation('exampleOptions'),
+					trace: operation('exampleTrace'),
+					post: { ...operation('exampleCreate'), security: [] },
+					put: { ...operation('exampleReplace'), security: [{ oauth: ['admin'] }] }
+				}
+			}
+		}),
+		fragment('other', {
+			...document(),
+			security: [{ bearerAuth: [] }],
+			components: { securitySchemes: { bearerAuth: { type: 'http', scheme: 'bearer' } } },
+			paths: { '/api/v1/example': { delete: operation('otherDelete') } }
+		}),
+		fragment('public', {
+			...document(),
+			paths: { '/api/v1/example': { patch: operation('publicPatch') } }
+		}),
+		fragment('open', {
+			...document({ path: '/api/v1/open', operationId: 'openGet' }),
+			security: []
+		})
+	]
+}
+
+function expectSecurityRequirements(composed: OpenApiDocument): void {
+	const shared = composed.paths['/api/v1/example']!
+	for (const method of ['get', 'head', 'options', 'trace']) {
+		expect(shared[method]).toMatchObject({
+			security: [{ oauth: ['write', 'read'], cookieAuth: [] }, { apiKey: [] }, {}]
+		})
+	}
+	expect(shared.post).toMatchObject({ security: [] })
+	expect(shared.put).toMatchObject({ security: [{ oauth: ['admin'] }] })
+	expect(shared.delete).toMatchObject({ security: [{ bearerAuth: [] }] })
+	expect(shared.patch).not.toHaveProperty('security')
+	expect(shared.summary).toBe('Shared resource')
+	expect(shared['x-metadata']).toEqual({ description: 'Not an operation' })
+	expect(composed.paths['/api/v1/open']!.get).toMatchObject({ security: [] })
+	expect(composed).not.toHaveProperty('security')
+}
+
 async function loadGeneratedComposer() {
 	const source = entry('apps/api/scripts/compose-openapi.ts')
 	const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
@@ -217,6 +288,39 @@ describe('gateway OpenAPI composition', () => {
 		expect(stringifyOpenApi(forward)).toContain('usersGetMe')
 		expect(stringifyOpenApi(forward)).not.toContain('/api/auth')
 		expect(forward.servers).toBeUndefined()
+	})
+
+	test('inherits fragment security without changing explicit operation overrides', () => {
+		const secured = fragment('example', {
+			...document(),
+			security: [{ cookieAuth: [] }],
+			components: {
+				securitySchemes: {
+					cookieAuth: { type: 'apiKey', in: 'cookie', name: 'session' },
+					bearerAuth: { type: 'http', scheme: 'bearer' }
+				}
+			}
+		})
+		secured.document.paths['/api/v1/example']!.post = {
+			operationId: 'exampleCreate',
+			security: [],
+			responses: { 200: { description: 'ok' } }
+		}
+		secured.document.paths['/api/v1/example']!.delete = {
+			operationId: 'exampleDelete',
+			security: [{ bearerAuth: [] }],
+			responses: { 200: { description: 'ok' } }
+		}
+		const before = structuredClone(secured)
+		const composed = compose([secured])
+
+		expect(composed.paths['/api/v1/example']).toMatchObject({
+			get: { security: [{ cookieAuth: [] }] },
+			post: { security: [] },
+			delete: { security: [{ bearerAuth: [] }] }
+		})
+		expect(composed).not.toHaveProperty('security')
+		expect(secured).toEqual(before)
 	})
 
 	test('validates each fragment path against every prefix owned by its service', () => {
@@ -407,6 +511,36 @@ describe('gateway OpenAPI composition', () => {
 		).toThrow('component collision at components.parameters.Shared')
 	})
 
+	test('the generated composer preserves independent security defaults and overrides on a shared path', async () => {
+		const composeGenerated = await loadGeneratedComposer()
+		expectSecurityRequirements(composeGenerated(securityFragments()))
+	})
+
+	for (const composer of ['scaffold', 'emitted'] as const) {
+		test(`${composer} composition preserves security, input bytes, and deterministic output`, async () => {
+			const composeDocument = composer === 'scaffold' ? compose : await loadGeneratedComposer()
+			const fragments = securityFragments()
+			const before = JSON.stringify(fragments)
+			const composed = composeDocument(fragments)
+			const reordered = structuredClone(fragments).reverse()
+			for (const item of reordered) {
+				const paths = item.document.paths
+				for (const [path, pathItem] of Object.entries(paths)) paths[path] = Object.fromEntries(Object.entries(pathItem).reverse())
+			}
+
+			expectSecurityRequirements(composed)
+			expect(JSON.stringify(composeDocument(reordered))).toBe(JSON.stringify(composed))
+			expect(JSON.stringify(composeDocument(fragments))).toBe(JSON.stringify(composed))
+			expect(JSON.stringify(fragments)).toBe(before)
+			expect(composed.components?.securitySchemes).toMatchObject({
+				cookieAuth: { type: 'apiKey', in: 'cookie', name: 'session' },
+				bearerAuth: { type: 'http', scheme: 'bearer' },
+				apiKey: { type: 'apiKey', in: 'header', name: 'X-API-Key' },
+				oauth: { type: 'oauth2' }
+			})
+		})
+	}
+
 	test('the generated command rejects operation, method, parameter, and component collisions', async () => {
 		const composeGenerated = await loadGeneratedComposer()
 		const duplicateOperation = {
@@ -509,6 +643,24 @@ describe('gateway OpenAPI composition', () => {
 })
 
 describe('gateway runtime OpenAPI', () => {
+	for (const composer of ['scaffold', 'emitted'] as const) {
+		test(`delivers the ${composer} contract with inherited and overridden security unchanged`, async () => {
+			const composeDocument = composer === 'scaffold' ? compose : await loadGeneratedComposer()
+			const checked = composeDocument(securityFragments())
+			const before = JSON.stringify(checked)
+			const { createGateway } = await loadGeneratedGateway()
+			const canonicalApiOrigin = 'https://api.example.test'
+			const gateway = createGateway({}, { openApiDocument: checked, canonicalApiOrigin })
+			const response = await gateway.fetch(new Request(`${canonicalApiOrigin}/api/openapi.json`))
+			expect(response.status).toBe(200)
+			const runtime = (await response.json()) as OpenApiDocument
+
+			expectSecurityRequirements(runtime)
+			expect(runtime).toEqual({ ...checked, servers: [{ url: canonicalApiOrigin }] })
+			expect(JSON.stringify(checked)).toBe(before)
+		})
+	}
+
 	test('adds exactly one configured canonical server and rejects unknown public hosts', async () => {
 		const { createGateway } = await loadGeneratedGateway()
 		const checked = JSON.parse(entry('apps/api/openapi.json')) as OpenApiDocument

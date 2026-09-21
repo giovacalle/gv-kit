@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { posix as path } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { isDeepStrictEqual, parseEnv } from 'node:util'
 import { describe, expect, test } from 'bun:test'
 import { generateDeploy } from '../../src/generators/deploy.js'
 import { runGenerators } from '../../src/generators/index.js'
@@ -269,6 +271,168 @@ function previewPreparationPolicies(source: string): unknown[] {
 }
 
 describe('Cloudflare gateway preview contracts', () => {
+	test('emitted package staging deployment rejects altered destinations before invoking Wrangler', async () => {
+		for (const db of ['sqlite', 'postgres'] as const) {
+			for (const auth of [[], ['emailOTP']] satisfies Choices['auth'][]) {
+				const prepared = await runPreviewPreparation(makeCfg({ db, auth, marketing: 'astro' }))
+				expect(prepared.exitCode).toBe(0)
+				const names = await previewNames(prepared.entries)
+				const source = entry(prepared.entries, 'scripts/deploy-cloudflare-staging.mjs')
+					.replace(/^import .+\n/gm, '')
+					.replace('import.meta.url', 'scriptUrl')
+				const execute = new Function('dependencies', `const { readFileSync, statSync, mkdtempSync, writeFileSync, rmSync, tmpdir, parseEnv, spawnSync, path, fileURLToPath, isDeepStrictEqual, cloudflarePreviewName, validateCloudflarePreviewAlias, process, scriptUrl } = dependencies\n${source}`)
+				for (const directory of ['apps/api', 'apps/web', 'services/auth', 'services/users', 'apps/marketing']) {
+					const original = JSON.parse(prepared.files.get(`${directory}/wrangler.staging.jsonc`)!)
+					const needsSecrets = directory === 'services/auth' ? auth.length > 0 : directory === 'services/users' && db === 'postgres'
+					const cases = [
+						{ name: 'prepared', config: original, allowed: true },
+						{ name: 'production worker', config: { ...original, name: 'demo-api' } },
+						{ name: 'production route', config: { ...original, routes: [{ pattern: 'production.example.com/*' }] } },
+						{ name: 'other preview binding', config: { ...original, services: [{ binding: 'AUTH', service: names.cloudflarePreviewName('demo-auth', 'pr-124') }] } },
+						{ name: 'public development URL', config: { ...original, workers_dev: true } },
+						{ name: 'unexpected resource', config: { ...original, kv_namespaces: [{ binding: 'PRODUCTION', id: 'production' }] } },
+						{ name: 'missing configuration', config: original, missing: true },
+						{ name: 'command override', config: original, args: ['--name', 'production'] },
+						{ name: 'absent secret file', config: original, noSecrets: true, allowed: !needsSecrets }
+					]
+					for (const scenario of cases) {
+						const calls: Array<{ executable: string; args: string[] }> = []
+						let exitCode: number | undefined
+						let failure: unknown
+						try {
+							execute({
+								path, fileURLToPath, isDeepStrictEqual, parseEnv, ...names,
+								scriptUrl: 'file:///project/scripts/deploy-cloudflare-staging.mjs',
+								tmpdir: () => '/tmp',
+								mkdtempSync: () => '/tmp/staging-test',
+								writeFileSync: () => undefined,
+								rmSync: () => undefined,
+								readFileSync: (file: string) => {
+									if (file === '.env' || file === '.env.local') throw Object.assign(new Error('Not found'), { code: 'ENOENT' })
+									return JSON.stringify(scenario.config)
+								},
+								statSync: () => ({ isFile: () => true }),
+								spawnSync: (executable: string, args: string[]) => { calls.push({ executable, args }); return { status: 0 } },
+								process: {
+									argv: ['node', 'deploy-cloudflare-staging.mjs', ...(scenario.args ?? [])],
+									cwd: () => `/project/${directory}`,
+									exit: (code: number) => { exitCode = code },
+									env: {
+										STAGING_ALIAS: 'pr-123', STAGING_WRANGLER_CONFIG: scenario.missing ? '' : 'wrangler.staging.jsonc',
+										STAGING_SECRETS_FILE: scenario.noSecrets ? '' : 'private-secrets.json',
+										GITHUB_REPOSITORY_ID: '123456', STAGING_D1_DATABASE_NAME: 'preview-123456-d1-pr-123',
+										STAGING_D1_DATABASE_ID: '11111111-1111-4111-8111-111111111111',
+										CLOUDFLARE_PREVIEW_ZONE_NAME: 'example.com', CLOUDFLARE_PREVIEW_WEB_DOMAIN: 'app.example.com', CLOUDFLARE_PREVIEW_API_DOMAIN: 'api.example.com'
+									}
+								}
+							})
+						} catch (error) { failure = error }
+						const label = `${db}/${auth.length}/${directory}/${scenario.name}`
+						if (scenario.allowed) {
+							expect(failure, label).toBeUndefined()
+							expect(exitCode, label).toBe(0)
+							expect(calls, label).toEqual([{ executable: 'wrangler', args: ['deploy', '--config', 'wrangler.staging.jsonc', ...(needsSecrets ? ['--secrets-file', 'private-secrets.json'] : []), '--env', '', '--env-file', '/tmp/staging-test/empty.env'] }])
+						} else {
+							expect(failure, label).toBeDefined()
+							expect(calls, label).toEqual([])
+						}
+					}
+				}
+			}
+		}
+	})
+
+	test('automatic CI provides public inputs to every consuming step without credentials', () => {
+		for (const auth of [[], ['emailOTP']] as Choices['auth'][]) {
+			const entries = generateDeploy(makeCfg({ auth }))
+			const workflow = Bun.YAML.parse(entry(entries, '.github/workflows/check-pr.yml')) as { jobs: { check: { env: Record<string, string>; steps: Array<{ run?: string; env?: Record<string, string> }> } } }
+			const job = workflow.jobs.check
+			for (const task of ['typecheck', 'lint', 'build']) {
+				const step = job.steps.find((candidate) => candidate.run === 'pnpm ' + task)
+				expect(step).toBeDefined()
+				const env = { ...job.env, ...step?.env }
+				expect(env.PUBLIC_TURNSTILE_SITE_KEY).toBe(auth.length ? '${{ vars.PUBLIC_TURNSTILE_SITE_KEY }}' : undefined)
+				expect(JSON.stringify(env)).not.toMatch(/secrets\.|TOKEN|PASSWORD/)
+			}
+		}
+	})
+
+	test('Hono database setup names protected preview credentials without legacy staging instructions', () => {
+		for (const db of ['sqlite', 'postgres'] as const) {
+			const readme = entry(runGenerators(makeCfg({ db })), 'README.md')
+			const setup = readme.slice(readme.indexOf('Cloudflare ' + (db === 'postgres' ? 'Postgres uses Neon.' : 'SQLite uses D1.'))).split('\n## ')[0]!
+			expect(setup).toContain('`cloudflare-preview`')
+			expect(setup).toContain('`PREVIEW_CLOUDFLARE_API_TOKEN`')
+			expect(setup).toContain('`PREVIEW_CLOUDFLARE_ACCOUNT_ID`')
+			expect(setup).toContain('before installing')
+			expect(setup).not.toContain('Secret: `NEON_API_KEY`')
+			expect(setup).not.toContain('Configure `CLOUDFLARE_API_TOKEN` and')
+			if (db === 'postgres') {
+				expect(setup).toContain('`PREVIEW_NEON_API_KEY`')
+				expect(setup).toContain('`NEON_PROJECT_ID`')
+				expect(setup).toContain('`production`')
+			}
+		}
+	})
+
+	test('manual authorization carries one immutable identity through the workflow', () => {
+		const entries = runGenerators(makeCfg({ db: 'postgres' }))
+		const workflow = Bun.YAML.parse(entry(entries, '.github/workflows/deploy-staging.yml')) as {
+			on: Record<string, { inputs: Record<string, { required: boolean; type: string }> }>
+			jobs: Record<string, { needs?: string | string[]; environment?: string; env?: Record<string, string>; permissions?: Record<string, string>; steps: Array<{ id?: string; uses?: string; run?: string; with?: Record<string, unknown> }> }>
+		}
+		expect(Object.keys(workflow.on)).toEqual(['workflow_dispatch'])
+		for (const name of ['pr_number', 'head_sha']) expect(workflow.on.workflow_dispatch?.inputs[name]).toMatchObject({ required: true, type: 'string' })
+		const ci = Bun.YAML.parse(entry(entries, '.github/workflows/check-pr.yml')) as { on: Record<string, unknown>; permissions: Record<string, string>; jobs: Record<string, unknown> }
+		expect(ci.on).toHaveProperty('pull_request')
+		expect(ci.permissions).toEqual({ contents: 'read' })
+		expect(JSON.stringify(ci.jobs)).not.toMatch(/secrets\.|pull_request_target|deploy:staging/)
+		const build = workflow.jobs['build-preview']!
+		expect(build.permissions).toEqual({ contents: 'read' })
+		expect(build.env).toBeUndefined()
+		expect(build.environment).toBeUndefined()
+		expect(workflow.jobs.authorize?.environment).toBeUndefined()
+		expect(workflow.jobs.authorize?.env?.PREVIEW_POLICY_TOKEN).toBe('${{ secrets.PREVIEW_POLICY_TOKEN }}')
+		expect(build.steps[0]?.with).toMatchObject({ repository: '${{ needs.authorize.outputs.head_repository }}', ref: '${{ needs.authorize.outputs.head_sha }}', 'persist-credentials': false })
+		const upload = build.steps.find((step) => step.uses === 'actions/upload-artifact@v4')
+		const download = workflow.jobs.deploy?.steps.find((step) => step.uses === 'actions/download-artifact@v4')
+		expect(upload?.with?.name).toBe(download?.with?.name)
+		expect(upload?.with?.name).toContain('needs.authorize.outputs.head_sha')
+		for (const name of ['preview-ingress', 'preview-db', 'deploy']) {
+			const job = workflow.jobs[name]!
+			expect(job.environment).toBe('cloudflare-preview')
+			expect([job.needs].flat()).toContain('authorize')
+			expect(job.env?.AUTHORIZED_REVISION).toBe('${{ needs.authorize.outputs.revision }}')
+			expect(job.steps.some((step) => step.run?.includes('authorize-cloudflare-preview.mjs --recheck'))).toBe(true)
+		}
+		const readme = entry(entries, 'README.md')
+		expect(readme).toContain('operator-safe preview values')
+		expect(readme).toContain('metadata only')
+		expect(readme).toContain('--check-protection')
+		expect(readme).toContain('PREVIEW_CLOUDFLARE_API_TOKEN')
+		expect(readme).toContain('No second approver is required')
+		expect(readme).toContain('Self-approval is')
+		expect(readme).not.toContain('temporary connection strings into generated staging Wrangler configs')
+	})
+
+	test('preview credentials have no legacy fallback and cleanup shares the protected environment', () => {
+		for (const db of ['sqlite', 'postgres'] as const) {
+			const entries = generateDeploy(makeCfg({ db }))
+			for (const path of ['.github/workflows/deploy-staging.yml', '.github/workflows/cleanup-staging.yml']) {
+				const source = entry(entries, path)
+				const references = [...source.matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1]!)
+				expect(references.length).toBeGreaterThan(0)
+				for (const key of references) expect(key.startsWith('PREVIEW_')).toBe(true)
+			}
+			const cleanup = Bun.YAML.parse(entry(entries, '.github/workflows/cleanup-staging.yml')) as { jobs: { cleanup: { environment: string; steps: Array<{ id?: string; run?: string }> } } }
+			expect(cleanup.jobs.cleanup.environment).toBe('cloudflare-preview')
+			const steps = cleanup.jobs.cleanup.steps
+			expect(steps.findIndex(({ id }) => id === 'credential_policy')).toBeLessThan(steps.findIndex(({ id }) => id === 'alias'))
+			expect(steps.find(({ id }) => id === 'credential_policy')?.run).toBe('node scripts/verify-cloudflare-preview-policy.mjs --verify')
+			expect(entry(entries, 'scripts/authorize-cloudflare-preview.mjs')).toContain('await verifyPreviewCredentialPolicy()')
+		}
+	})
+
 	test('publisher preparation carries one complete named policy per target', () => {
 		const authOptions: Choices['auth'][] = [[], ['emailOTP']]
 		for (const db of ['sqlite', 'postgres'] as const) {
@@ -348,18 +512,19 @@ describe('Cloudflare gateway preview contracts', () => {
 			jobs: Record<
 				string,
 				{
-					needs?: string
+					needs?: string | string[]
 					steps?: Array<{ name?: string; run?: string; env?: Record<string, string> }>
 				}
 			>
 		}
-		expect(workflow.jobs['preview-db']?.needs).toBe('preview-ingress')
+		expect(workflow.jobs['preview-db']?.needs).toEqual(['authorize', 'preview-ingress'])
+		expect(workflow.jobs['preview-ingress']?.needs).toBe('authorize')
 		const gate = workflow.jobs['preview-ingress']?.steps?.find(
 			(step) => step.name === 'Verify managed preview ingress'
 		)
 		expect(gate?.run).toContain('verify-cloudflare-preview-ingress.mjs')
 		expect(gate?.env).toEqual({
-			CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
+			CLOUDFLARE_API_TOKEN: '${{ secrets.PREVIEW_CLOUDFLARE_API_TOKEN }}',
 			CLOUDFLARE_PREVIEW_WEB_DOMAIN: '${{ vars.CLOUDFLARE_PREVIEW_WEB_DOMAIN }}',
 			CLOUDFLARE_PREVIEW_API_DOMAIN: '${{ vars.CLOUDFLARE_PREVIEW_API_DOMAIN }}',
 			CLOUDFLARE_PREVIEW_ZONE_NAME: '${{ vars.CLOUDFLARE_PREVIEW_ZONE_NAME }}'
@@ -620,7 +785,7 @@ describe('Cloudflare gateway preview contracts', () => {
 		const cleanup = entry(entries, '.github/workflows/cleanup-staging.yml')
 
 		expect(staging).toContain(
-			'group: staging-pr-${{ github.event.pull_request.number || github.run_id }}'
+			'group: staging-pr-${{ inputs.pr_number }}'
 		)
 		expect(cleanup).toContain(
 			"group: staging-${{ inputs.alias || format('pr-{0}', github.event.pull_request.number) }}"
@@ -660,10 +825,34 @@ describe('Cloudflare gateway preview contracts', () => {
 		expect(cleanup).not.toContain('contents: write')
 		expect(cleanup).not.toContain('git push')
 		expect(cleanup).toContain('.name == "deploy-staging"')
-		expect(cleanup).toContain('.conclusion == "success"')
+		expect(cleanup).not.toContain('.conclusion == "success"')
 		expect(cleanup).toContain('Preview inventory artifact count exceeds the cleanup bound.')
 		expect(cleanup).toContain('[ "$artifact_name" != "$expected_artifact_name" ]')
 	})
+
+	for (const db of ['sqlite', 'postgres'] as const) {
+		test(`${db} schedules independent cleanup after inventory failure but not failed trusted setup`, () => {
+			const workflow = Bun.YAML.parse(entry(generateDeploy(makeCfg({ db })), '.github/workflows/cleanup-staging.yml')) as {
+				jobs: { cleanup: { steps: Array<{ id?: string; if?: string; env?: Record<string, string> }> } }
+			}
+			const steps = workflow.jobs.cleanup.steps
+			for (const id of ['trusted_checkout', 'trusted_inventory', 'node_setup', 'credential_policy', 'alias']) expect(steps.some((step) => step.id === id), id).toBe(true)
+			for (const cleanupId of ['worker_cleanup', 'database_cleanup']) {
+				const condition = steps.find(({ id }) => id === cleanupId)?.if ?? 'success()'
+				for (const failed of ['none', 'preview_inventories', 'worker_cleanup', 'trusted_checkout', 'trusted_inventory', 'node_setup', 'credential_policy', 'alias']) {
+					for (const outcome of ['failure', 'cancelled', 'skipped']) {
+						let expression = condition.replaceAll('always()', 'true').replaceAll('success()', String(failed === 'none'))
+						expression = expression.replace(/steps\.([a-z_]+)\.outcome/g, (_, id: string) => JSON.stringify(id === failed ? outcome : 'success'))
+						if (!condition.includes('always()') && failed !== 'none') expression = 'false'
+						expect(new Function(`return (${expression})`)(), `${cleanupId}/${failed}/${outcome}`).toBe(['none', 'preview_inventories', 'worker_cleanup'].includes(failed))
+					}
+				}
+			}
+			expect(steps.find(({ id }) => id === 'database_cleanup')?.env?.PREVIEW_MANIFEST_DIR).toBe("${{ steps.preview_inventories.outcome == 'success' && format('{0}/cloudflare-preview-inventories', runner.temp) || '' }}")
+			expect(steps.find(({ id }) => id === 'cleanup_result')?.env?.INVENTORY_OUTCOME).toBe('${{ steps.preview_inventories.outcome }}')
+			expect(steps.find(({ id }) => id === 'cleanup_result')?.if).toBe('always()')
+		})
+	}
 
 	test('cleanup inventories topology drift, rejects unsafe names, and reports partial failures', async () => {
 		const generated = generateDeploy(makeCfg())
@@ -697,7 +886,7 @@ describe('Cloudflare gateway preview contracts', () => {
 		const workflow = entry(generated, '.github/workflows/cleanup-staging.yml')
 		expect(workflow).toContain('preview cleanup cannot inventory resources')
 		expect(workflow).not.toContain('|| true')
-		expect(workflow).toContain("if: always() && steps.alias.outcome == 'success'")
+		expect(workflow).toContain("steps.credential_policy.outcome == 'success' && steps.alias.outcome == 'success'")
 		expect(workflow).toContain('Preview cleanup completed with $failures failed resource group(s).')
 	})
 
@@ -763,13 +952,17 @@ describe('Cloudflare gateway preview contracts', () => {
 					}
 				>
 			}
-			expect(source).toContain('pull_request_target:')
+			expect(source).not.toContain('pull_request_target:')
 			expect(source).toContain(
-				"if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
+				"if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)"
 			)
-			expect(source).toContain('trusted-source/packages/db/')
+			expect(source).toContain('node trusted-source/scripts/migrate-cloudflare-preview.mjs')
 			expect(source).not.toContain('preview-artifact/packages/db/')
-			if (db === 'postgres') expect(source).toContain('trusted-source/packages/db/migrations')
+			expect(source).not.toContain('trusted-source/packages/db/migrations')
+			const migration = entry(entries, 'scripts/migrate-cloudflare-preview.mjs')
+			expect(migration).toContain("github('commits/' + revision.headSha)")
+			expect(migration).toContain("'4.125.0'")
+			expect(migration).toContain("'0.31.8'")
 			const build = workflow.jobs['build-preview']!
 			expect(JSON.stringify(build)).not.toMatch(/secrets\.(?:CLOUDFLARE|NEON)/)
 			expect(JSON.stringify(build)).not.toContain('database_url')
@@ -780,7 +973,7 @@ describe('Cloudflare gateway preview contracts', () => {
 				for (const step of job.steps) {
 					if (step.uses === 'actions/checkout@v4') {
 						expect(step.with?.ref, jobName).toBe(
-							'${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}'
+							'${{ needs.authorize.outputs.trusted_sha }}'
 						)
 					}
 					expect(step.run ?? '', jobName).not.toMatch(
@@ -841,10 +1034,7 @@ describe('Cloudflare gateway preview contracts', () => {
 		for (const deployScript of [
 			authPackage.scripts['deploy:staging'],
 			usersPackage.scripts['deploy:staging']
-		]) {
-			expect(deployScript).toContain('test -n "$STAGING_SECRETS_FILE"')
-			expect(deployScript).toContain('--secrets-file "$STAGING_SECRETS_FILE"')
-		}
+		]) expect(deployScript).toContain('node ../../scripts/deploy-cloudflare-staging.mjs')
 		expect(secretFiles).toContain('["DATABASE_URL","STAGING_DATABASE_URL"]')
 		expect(secretFiles).toContain("writeSecrets('auth.json'")
 		expect(secretFiles).toContain("writeSecrets('users.json'")

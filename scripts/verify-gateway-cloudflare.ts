@@ -13,7 +13,7 @@ import {
 	assertPermittedWranglerInvocation,
 	writeSanitizedArtifact
 } from './gateway-verification-evidence.js'
-import { verifyPreviewSecurityContracts } from './verify-gateway-preview-security.js'
+import { verifyAutomaticPullRequestChecks, verifyPreviewAuthorization, verifyPreviewSecurityContracts } from './verify-gateway-preview-security.js'
 
 const PNPM_VERSION = '11.1.1'
 const CORE_WORKERS = [
@@ -477,6 +477,7 @@ async function main(): Promise<void> {
 		.catch(() => false)
 	const workers: WorkerTarget[] = [...CORE_WORKERS, ...(hasMarketing ? [MARKETING_WORKER] : [])]
 	console.log(`[gateway-cloudflare] generated project: ${project}`)
+	console.log('[gateway-cloudflare] authorization scenarios:', await verifyPreviewAuthorization(project))
 	const generatedInputs = await generatedInputSnapshot(project, workers)
 	const webHooks = await readFile(join(project, 'apps/web/src/hooks.server.ts'), 'utf8')
 	if (webHooks.includes('forwardApiAlias') || webHooks.includes('gateway.fetch(event.request)')) throw new Error('generated SvelteKit hooks contain an inbound browser API proxy')
@@ -490,6 +491,7 @@ async function main(): Promise<void> {
 		logPath: join(project, 'install.log')
 	})
 
+	console.log('[gateway-cloudflare] automatic PR checks:', await verifyAutomaticPullRequestChecks(project))
 	const workspaceChecks: CommandResult[] = []
 	const workspacePublicEnv = hasMarketing
 		? {
@@ -560,7 +562,7 @@ async function main(): Promise<void> {
 		join(project, '.github/workflows/cleanup-staging.yml'),
 		'utf8'
 	)
-	if ( !stagingWorkflow.includes('preview-db:\n    needs: preview-ingress') || stagingWorkflow.indexOf('preview-ingress:') > stagingWorkflow.indexOf('preview-db:') || !stagingWorkflow.includes('node scripts/verify-cloudflare-preview-ingress.mjs') ) throw new Error('managed preview ingress is not verified before database provisioning')
+	if ( !stagingWorkflow.includes('preview-db:\n    environment: cloudflare-preview\n    needs: [authorize, preview-ingress]') || stagingWorkflow.indexOf('preview-ingress:') > stagingWorkflow.indexOf('preview-db:') || !stagingWorkflow.includes('node scripts/verify-cloudflare-preview-ingress.mjs') ) throw new Error('managed preview ingress is not verified before database provisioning')
 	for (const marker of [
 		'workflow_dispatch:',
 		'alias:',
@@ -575,16 +577,16 @@ async function main(): Promise<void> {
 	const parsedStaging = Bun.YAML.parse(stagingWorkflow) as {
 		jobs: Record<string, { steps: Array<{ uses?: string; run?: string; with?: Record<string, string> }> }>
 	}
-	if (!stagingWorkflow.includes('pull_request_target:')) throw new Error('preview deployment does not use a trusted workflow definition')
-	if ( !stagingWorkflow.includes("if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)") ) throw new Error('manual preview deployment can run an untrusted workflow ref')
-	if ( stagingWorkflow.includes('preview-artifact/packages/db/') || !stagingWorkflow.includes('trusted-source/packages/db/') ) throw new Error('provider credentials can apply PR-controlled migration input')
+	if (stagingWorkflow.includes('pull_request_target:') || !stagingWorkflow.includes('authorize-cloudflare-preview.mjs --authorize')) throw new Error('preview deployment does not require exact-head authorization')
+	if ( !stagingWorkflow.includes("if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)") ) throw new Error('manual preview deployment can run an untrusted workflow ref')
+	if ( stagingWorkflow.includes('preview-artifact/packages/db/') || !stagingWorkflow.includes('node trusted-source/scripts/migrate-cloudflare-preview.mjs') ) throw new Error('preview migrations do not use the trusted exact-revision runner')
 	const untrustedBuild = JSON.stringify(parsedStaging.jobs['build-preview'])
 	if (/secrets\.(?:CLOUDFLARE|NEON)|database_url/.test(untrustedBuild)) throw new Error('PR-controlled preview build receives provider credentials')
 	for (const [jobName, job] of Object.entries(parsedStaging.jobs)) {
 		const serialized = JSON.stringify(job)
 		if (!/secrets\.(?:CLOUDFLARE|NEON)|needs\.preview-db\.outputs\.database_url/.test(serialized)) continue
 		for (const step of job.steps) {
-			if ( step.uses === 'actions/checkout@v4' && step.with?.ref !== '${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}' ) throw new Error(`${jobName} checks out PR-controlled source with provider credentials`)
+			if ( step.uses === 'actions/checkout@v4' && step.with?.ref !== '${{ needs.authorize.outputs.trusted_sha }}' ) throw new Error(`${jobName} checks out PR-controlled source with provider credentials`)
 			if (/pnpm (?:install|turbo|--filter)|scripts\/prepare-cloudflare-preview|db:migrate:production/.test(step.run ?? '')) throw new Error(`${jobName} runs a PR-controlled process with provider credentials`)
 		}
 	}
@@ -1142,7 +1144,7 @@ printf '%s\\n' "$DATABASE_CLEANUP_INVENTORY"
 				rejected: rejectedAliases
 			},
 			lifecycle: {
-				prDeployTrigger: 'pull_request_target',
+				prDeployTrigger: 'workflow_dispatch.exact-head',
 				prCleanupTrigger: 'pull_request_target.closed',
 				manualCleanupTrigger: 'workflow_dispatch.inputs.alias',
 				manualCleanupInvocation: 'gh workflow run cleanup-staging.yml -f alias=<canonical alias>',

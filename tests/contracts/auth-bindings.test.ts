@@ -44,16 +44,16 @@ describe('auth-worker bindings', () => {
 				const authPackage = JSON.parse(
 					entries.find((e) => e.path === 'services/auth/package.json')!.content
 				) as { scripts: Record<string, string> }
+				expect(authPackage.scripts['deploy:staging']).toContain('node ../../scripts/deploy-cloudflare-staging.mjs')
 				if (cfg.choices.auth.length === 0) {
 					expect(parsed.d1_databases).toBeUndefined()
 					expect(parsed.vars).toBeUndefined()
-					expect(authPackage.scripts['deploy:staging']).not.toContain('STAGING_SECRETS_FILE')
 					const staging = entries.find(
 						(e) => e.path === '.github/workflows/deploy-staging.yml'
 					)!.content
 					expect(staging).not.toContain('BETTER_AUTH_SECRET')
 					expect(staging).not.toContain('preview_secrets.outputs.auth_file')
-				} else expect(authPackage.scripts['deploy:staging']).toContain('STAGING_SECRETS_FILE')
+				}
 
 				expect(entries.find((e) => e.path === 'services/auth/.dev.vars')).toBeUndefined()
 			})

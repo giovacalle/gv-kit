@@ -216,6 +216,18 @@ function nonJsoncWranglerConfigNames(source: string): string[] {
 }
 
 describe('gateway source standards', () => {
+	test('gateway generator helpers use positional inputs below the three-input boundary', () => {
+		const source = readFileSync(gatewayGeneratorPath, 'utf8')
+		expect(helperArgumentFindings(source, [
+			'generateGatewayForTopology',
+			'renderGatewayPackageJson',
+			'renderGatewayAppSource',
+			'renderGatewayEntrySource',
+			'renderGatewayReadme',
+			'renderGatewayWranglerConfig'
+		])).toEqual([])
+	})
+
 	test('temporary Wrangler config filenames retain the JSONC convention at every boundary', () => {
 		for (const fixture of readdirSync(fixturesDirectory).filter((name) => name.endsWith('.jsonc'))) {
 			const cfg = GvKitConfig.parse(parseJsonc(readFileSync(join(fixturesDirectory, fixture), 'utf8')))

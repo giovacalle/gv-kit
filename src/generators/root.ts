@@ -38,7 +38,7 @@ export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 function renderRootPackageJson(cfg: GvKitConfig): string {
 	const scripts: Record<string, string> = {
 		dev: cfg.choices.backend === 'hono' ? 'node scripts/local.mjs dev' : 'turbo run dev',
-		build: 'turbo run build',
+		build: cfg.choices.backend === 'hono' ? 'pnpm openapi:check && turbo run build' : 'turbo run build',
 		test: 'turbo run test',
 		typecheck: 'turbo run typecheck',
 		lint: 'turbo run lint',
@@ -170,7 +170,16 @@ function renderTurboJson(cfg: GvKitConfig): string {
 			cache: false,
 			persistent: true
 		},
-		...(cfg.choices.backend === 'hono' ? renderHonoDevTasks(cfg) : {})
+		...(cfg.choices.backend === 'hono'
+			? {
+				...renderHonoDevTasks(cfg),
+				[`${honoPackageIdentity(cfg.choices.name, HONO_GATEWAY)}#build`]: {
+					dependsOn: ['^build'],
+					inputs: ['$TURBO_DEFAULT$', '$TURBO_ROOT$/services/*/openapi.json'],
+					outputs: buildOutputs
+				}
+			}
+			: {})
 	}
 
 	if (cfg.choices.deploy === 'cf-workers') {
@@ -632,16 +641,77 @@ Cleanup removes the preview Workers and database resources, then deletes the PR 
 
 ## Cloudflare deployment
 
-Configure these GitHub Actions repository settings before enabling the generated deployment workflows.
+${cfg.choices.backend === 'hono' ? 'Configure the protected GitHub Actions environments below before enabling deployment. Do not store provider or application credentials in repository or shared organization secrets.' : 'Configure these GitHub Actions repository settings before enabling the generated deployment workflows.'}
 ${credentialScope}${
 		cfg.choices.backend === 'hono'
 			? ' It also needs Zone Read and DNS Read for managed preview ingress validation.'
 			: ''
 	}
 
-### Secrets
+${cfg.choices.backend === 'hono' ? `### Production environment secrets
 
-${markdownList(secrets)}
+Keep production values only in the existing \`production\` environment, separately protected against
+branch/PR execution. Never copy them into preview settings. Restrict every credential-bearing
+environment to trusted default-branch execution, including existing environments with other names.
+
+${markdownList(secrets.filter((key) => ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'DATABASE_URL'].includes(key)))}
+
+### Preview environment secrets
+
+Store exactly these preview-only names in \`cloudflare-preview\`, not repository or organization secrets:
+
+${markdownList(secrets.filter((key) => key !== 'DATABASE_URL').map((key) => 'PREVIEW_' + key))}
+
+The workflows map these names to the provider and application variables at execution time.
+There is no legacy-name fallback. Preview connection strings come from the preview database job.
+
+### Required external credential protection
+
+An environment name alone is not a security boundary. Before installing any preview values:
+
+1. Use an organization repository and a GitHub plan that supports environment secrets, selected
+   deployment branches, and protected-branch push restrictions. Unsupported plans or personal
+   repositories fail closed. This verifier supports classic branch protection, not rulesets alone.
+2. Audit and trust the default-branch workflow history before activation. On the default branch,
+   enforce protection for administrators, disable force pushes and deletion, and restrict pushes
+   to an explicit list of built-in maintain/admin users. No teams or apps are supported. GitHub
+   administrators retain control of these settings and are trusted operators. Do not allow writers
+   to merge or push changes to trusted workflow code. Review it before merging.
+3. Create an empty \`cloudflare-preview\` environment. Choose selected deployment branches and add
+   exactly the literal default branch as a branch rule. Do not add tags, wildcards, PR refs, or
+   select "protected branches only". No second approver is required; maintainers may self-authorize.
+4. Remove all repository and shared organization secrets except \`PREVIEW_POLICY_TOKEN\`. Move
+   production values to the separately protected \`production\` environment. Remove accessible
+   copies from other environments, rotate formerly exposed credentials, and cancel old queued
+   runs before activation. A source-code check cannot protect secrets left in an unsafe scope.
+5. Create a repository-scoped fine-grained read-only token with Administration, Environments,
+   Secrets, and Metadata read access. Store it as repository secret \`PREVIEW_POLICY_TOKEN\`.
+   Do not use a classic PAT or grant write, provider, application, or secret-value access. Writers
+   can read this token; it must expose metadata only. The ordinary workflow token cannot be
+   assumed to have the administration/secret-metadata permissions needed for this audit.
+6. From audited default-branch source, supply \`PREVIEW_POLICY_TOKEN\`, \`GITHUB_REPOSITORY\`,
+   \`GITHUB_REPOSITORY_ID\`, and \`GITHUB_REF=refs/heads/<default-branch>\` in a private local
+   environment. Run \`node scripts/verify-cloudflare-preview-policy.mjs --check-protection\`.
+   This read-only check must pass before secret installation. Install the preview-only values
+   through your approved secret tool, then run the same script with \`--verify\`.
+
+Authorization and every privileged deployment recheck audit the live environment branch rules,
+default-branch push permissions, and complete secret-name inventories through GitHub. Missing,
+unsafe, revoked, incomplete, or unavailable checks deny work. The metadata token itself grants no
+preview credentials. GitHub, not branch-owned workflow code, withholds environment secrets from
+branch dispatches and same-repository PR jobs, even if a writer removes the authorization job or
+adds an independent job. Only trusted default-branch jobs can request the environment.
+
+Cleanup uses the same protected environment and prerequisite audit before alias validation. It
+retains automatic closed-PR cleanup from trusted default-branch code and manual default-branch
+cleanup. Cleanup does not require the PR to remain open or an earlier deployment actor to retain
+permission. Inventory and namespace checks still constrain deletion.
+
+Do not enable previews until the audit succeeds. Re-run it after any access or protection change.
+Changing external protections or leaving accessible credential copies can invalidate this boundary;
+workflow code cannot repair an administrator's unsafe secret installation.` : `### Secrets
+
+${markdownList(secrets)}`}
 
 ### Variables
 
@@ -699,6 +769,77 @@ and preview alias before deletion. Database cleanup combines bounded provider in
 90-day deployment records, including records from the earlier \`<project>-db-<alias>\` convention. It validates
 recorded names and provider IDs against the repository and preview alias before deletion. Preview
 builds run without provider credentials; trusted jobs apply migrations and upload passive bundles.
+
+Normal pull-request CI remains automatic and unprivileged. To publish a preview, a repository
+maintainer must run \`deploy-staging.yml\` on the default branch with \`pr_number\` and the full
+40-character \`head_sha\` they reviewed. This includes same-repository PRs. The actor must have the
+built-in repository \`maintain\` or \`admin\` role; write and custom roles are denied. Self-approval is
+allowed. Every credentialed phase checks the current PR head, repository identity, trusted workflow
+revision, and actor permission through GitHub. Missing or unavailable checks fail closed.
+
+Reruns are allowed only for the original actor, with the same actor ID, dispatch inputs, and pinned
+workflow SHA. Both GitHub's original actor and triggering actor must match. Revoked permission or a
+changed head blocks the rerun. New commits need a new dispatch; no check substitutes a newer head.
+A head or permission change cannot undo operations already completed before that change.
+
+Authorization permits the application code to read its configured preview credentials and database
+data. Exact configuration validation does not make arbitrary application code trustworthy. Use only
+operator-safe preview values, sandboxed integrations, and sanitized data. Never configure production
+credentials for previews. A cloned Neon branch is not automatically sanitized. Preview connection
+strings and auth secrets travel through private temporary secret files and runtime bindings, never
+Wrangler variables or build artifacts. The files are removed after publication.
+
+The \`authorize\` job emits a versioned \`revision\` JSON contract with repository and head repository
+IDs/names, PR number, head SHA, trusted SHA/ref, actor ID/name, run ID, and canonical \`pr-<number>\`
+alias. Downstream jobs compare this contract on each recheck; inventory records retain it for audit.
+The trusted migration runner fetches SQL and metadata directly from that immutable head through
+GitHub's Git objects API. It never reads migration files or scripts from the build workspace or falls
+back to base migrations. Commit generated \`packages/db/migrations/*.sql\` files before dispatch;
+Neon also requires the matching \`meta/_journal.json\`. Supported input is the flat numbered SQL
+layout emitted by Drizzle Kit 0.31, with optional JSON snapshots. Empty inputs, malformed metadata,
+symlinks, executable files, path escapes, truncated Git trees, and revision mismatches block publication.
+The runner accepts at most 256 migration files, 1 MiB per file, and 8 MiB total.
+
+Before invocation it verifies the repository/alias-scoped D1 name and ID against Cloudflare, or the
+non-default Neon branch name, ID, project, and connection hostname against its read-write endpoints.
+The preview Neon key needs read access to branch/endpoint metadata as well as provisioning access.
+The runner creates its own configuration and isolated temporary tool installation. Wrangler 4.125.0
+or Drizzle Kit 0.31.8 with Drizzle ORM 0.45.0 and postgres 3.4.7 runs before Worker publication.
+Installation disables lifecycle scripts and receives no provider credentials. Migration failures block
+publication; successful migrations are not rolled back if a later Worker publication fails. Use
+expand/contract migrations compatible with adjacent deployed versions. Temporary inputs and tooling
+are removed after the runner exits. No PR-owned package script or configuration runs with credentials.
+
+Package \`deploy:staging\` commands are for trusted operators, not an alternative authorization
+mechanism. Shared preview credentials still require the exact-SHA workflow above. Each command
+requires \`STAGING_ALIAS=pr-<positive integer>\` and an explicit \`STAGING_WRANGLER_CONFIG\` path,
+resolved from that package's directory. Use the JSON document emitted by
+\`node scripts/prepare-cloudflare-preview.mjs\`, normally \`wrangler.staging.jsonc\`. There is no
+production fallback and command-line overrides are rejected. Unset \`WRANGLER_CI_OVERRIDE_NAME\`
+and \`CLOUDFLARE_ENV\`, and remove those keys from the package's \`.env\` and \`.env.local\` files.
+Their presence is rejected even when empty or matching the preview. Wrangler receives an explicit
+top-level environment and an empty temporary dotenv file, removed after the command exits.
+Other dotenv values are not loaded. Supply provider authentication through the process environment,
+not dotenv files. Only standard Cloudflare authentication/account variables, OS execution paths,
+and \`CI\` are forwarded; legacy \`CF_*\` authentication names remain supported. Runtime secrets
+still come only from the selected secret file. Node options, API endpoint overrides, unrelated
+variables, and implicit Wrangler settings are not forwarded. Metrics and error reporting are disabled.
+
+Keep the preparation inputs available when invoking the package command:
+\`CLOUDFLARE_PREVIEW_ZONE_NAME\`, \`CLOUDFLARE_PREVIEW_WEB_DOMAIN\`, and
+\`CLOUDFLARE_PREVIEW_API_DOMAIN\`. Packages with a D1 binding also require
+\`GITHUB_REPOSITORY_ID\`, \`STAGING_D1_DATABASE_NAME=preview-<repository-id>-d1-<alias>\`, and
+\`STAGING_D1_DATABASE_ID\`. These must be operator-verified preview resource values. This local
+check compares configuration to the supplied ID; it does not query provider ownership. Auth-enabled
+auth packages and Postgres users packages require an existing private \`STAGING_SECRETS_FILE\`.
+Secret values and database contents remain the operator's responsibility.
+
+\`scripts/deploy-cloudflare-staging.mjs\` checks the complete package configuration against its
+embedded policy, with only the expected preview names, routes, bindings, and origins substituted.
+Unknown fields, public development URLs, and production or other-preview targets are rejected.
+If you intentionally change supported Worker configuration, review and update the embedded policy
+as well as the package configuration before preparing a preview. Production commands are unchanged.
+
 Deleting a preview Worker also removes its PR-scoped routes. Shared wildcard DNS records are
 prerequisites and remain in place.
 `
@@ -760,13 +901,24 @@ function renderCloudflareDatabaseSetup(cfg: GvKitConfig): string {
 	if (cfg.choices.db === 'postgres') {
 		return `
 
-Cloudflare Postgres uses Neon. Configure GitHub Actions before enabling staging deploys:
+Cloudflare Postgres uses Neon. ${cfg.choices.backend === 'hono' ? `Complete the required external credential protection audit below before installing
+preview-only secrets in the protected \`cloudflare-preview\` environment:
+
+- \`PREVIEW_NEON_API_KEY\`
+- \`PREVIEW_CLOUDFLARE_API_TOKEN\`
+- \`PREVIEW_CLOUDFLARE_ACCOUNT_ID\`
+
+Set the nonsecret GitHub Actions variable \`NEON_PROJECT_ID\` to an operator-safe preview project.
+Keep production \`DATABASE_URL\` only in the separately protected \`production\` environment.` : `Configure GitHub Actions before enabling staging deploys:
 
 - Secret: \`NEON_API_KEY\`
 - Variable: \`NEON_PROJECT_ID\`
 
-Production deploys use \`DATABASE_URL\`. Preview deploys create Neon branches and inject their
-temporary connection strings into generated staging Wrangler configs.${
+Production deploys use \`DATABASE_URL\`.`} Preview deploys create Neon branches and ${
+			cfg.choices.backend === 'hono'
+				? 'deliver temporary connection strings through private secret files to runtime bindings, never Wrangler configuration.'
+				: 'inject their\ntemporary connection strings into generated staging Wrangler configs.'
+		}${
 			cfg.choices.backend === 'hono'
 				? ' Apply non-secret production values only to the capability-specific destinations listed\nin the Cloudflare production and preview settings section.'
 				: ''
@@ -774,8 +926,11 @@ temporary connection strings into generated staging Wrangler configs.${
 	}
 	return `
 
-Cloudflare SQLite uses D1. Configure \`CLOUDFLARE_API_TOKEN\` and
-\`CLOUDFLARE_ACCOUNT_ID\` in GitHub Actions so staging can create preview D1 databases.${
+Cloudflare SQLite uses D1. ${cfg.choices.backend === 'hono' ? `Complete the required external credential protection audit below before installing
+\`PREVIEW_CLOUDFLARE_API_TOKEN\` and \`PREVIEW_CLOUDFLARE_ACCOUNT_ID\` in the protected
+\`cloudflare-preview\` environment so staging can create preview D1 databases.
+Keep production credentials only in the separately protected \`production\` environment.` : `Configure \`CLOUDFLARE_API_TOKEN\` and
+\`CLOUDFLARE_ACCOUNT_ID\` in GitHub Actions so staging can create preview D1 databases.`}${
 		cfg.choices.backend === 'hono'
 			? ' Apply non-secret production values only to the capability-specific destinations listed\nin the Cloudflare production and preview settings section.'
 			: ''

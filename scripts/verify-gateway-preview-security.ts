@@ -1,7 +1,11 @@
 import { spawn } from 'node:child_process'
 import { mkdir, readFile, rm, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
+import { runGenerators } from '../src/generators/index.js'
+import { GvKitConfig } from '../src/schema/config.js'
 import { parseJsonc } from '../src/lib/jsonc.js'
+import { verifyPreviewMigrations } from './verify-preview-migrations.js'
+import { verifyPreviewCleanup } from './verify-preview-cleanup.js'
 
 type WorkerTarget = { name: string; directory: string }
 type DatabaseProvider = 'd1' | 'neon'
@@ -16,6 +20,7 @@ type WranglerConfig = {
 
 type PublisherProbeMode =
 	| 'valid'
+	| 'hostile-auth'
 	| 'reordered-vars'
 	| 'd1-binding'
 	| 'route'
@@ -50,17 +55,20 @@ async function runProbe({
 	args,
 	cwd,
 	env = {},
-	input
+	input,
+	inheritEnvironment = true
 }: {
 	executable: string
 	args: string[]
 	cwd: string
 	env?: Record<string, string>
 	input?: string
+	inheritEnvironment?: boolean
 }): Promise<ProbeResult> {
 	const child = spawn(executable, args, {
 		cwd,
-		env: { ...process.env, ...env },
+		env: { ...(inheritEnvironment ? process.env : {}), ...env },
+		timeout: 120_000,
 		stdio: [input === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe']
 	})
 	if (input !== undefined) child.stdin!.end(input)
@@ -105,11 +113,13 @@ async function verifyLegacyInventoryAuthentication({
 	project,
 	source,
 	alias,
+	provider,
 	repositoryId
 }: {
 	project: string
 	source: string
 	alias: string
+	provider: DatabaseProvider
 	repositoryId: string
 }): Promise<string[]> {
 	const root = join(project, '.wrangler/verify-preview-inventory-authentication')
@@ -120,10 +130,11 @@ async function verifyLegacyInventoryAuthentication({
 		schemaVersion: 1,
 		project: 'verification',
 		alias,
+		workers: [],
 		database: {
-			kind: 'd1',
+			kind: provider,
 			name: `verification-db-${alias}`,
-			id: '55555555-5555-4555-8555-555555555555'
+			id: provider === 'd1' ? '55555555-5555-4555-8555-555555555555' : 'br-legacy'
 		}
 	})
 
@@ -240,7 +251,7 @@ unzip() {
 	requireRejected({
 		result: crossPr,
 		name: 'cross-PR preview inventory',
-		message: 'has no trusted successful deployment run.'
+		message: 'has no trusted completed deployment run.'
 	})
 	if (crossPr.requests.includes('/actions/artifacts/888/zip')) throw new Error('cross-PR preview inventory reached artifact download')
 
@@ -277,6 +288,7 @@ async function verifyCleanupResult({
 		cwd: project,
 		input: source,
 		env: {
+			INVENTORY_OUTCOME: 'success',
 			WORKER_CLEANUP_OUTCOME: 'success',
 			DATABASE_CLEANUP_OUTCOME: 'success',
 			AUTHENTICATED_INVENTORY_COUNT: '0',
@@ -885,7 +897,9 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 				]
 			}
 			await writeFile(join(target, 'wrangler.staging.jsonc'), JSON.stringify(config))
-			await writeFile(join(target, '.preview-bundle', bundle), 'export default {}\n')
+			await writeFile(join(target, '.preview-bundle', bundle), mode === 'hostile-auth' && worker.directory === 'services/auth'
+				? 'export default { fetch(request, env) { return new Response(env.BETTER_AUTH_SECRET) } }\n'
+				: 'export default {}\n')
 		}
 		const result = await runProbe({
 			executable: 'sh',
@@ -920,6 +934,18 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 	const valid = await probeTrustedPublisher('valid')
 	requirePassed(valid, 'trusted preview publisher')
 	if (valid.invocations.length !== workers.length) throw new Error('trusted preview publisher did not invoke Wrangler once per Worker')
+
+	const hostile = await probeTrustedPublisher('hostile-auth')
+	requirePassed(hostile, 'authorized hostile auth bundle with safe configuration')
+	if (hostile.invocations.length !== workers.length) throw new Error('hostile auth bundle did not reach passive publication')
+	if (publishAuthSecret) {
+		const secrets = JSON.parse(await readFile(join(previewSecretDirectory, 'auth.json'), 'utf8'))
+		const bundle = await import(join(artifact, 'services/auth/.preview-bundle/index.js'))
+		const response = await bundle.default.fetch(new Request('https://preview.example.test/api/auth/leak'), secrets)
+		if (await response.text() !== secrets.BETTER_AUTH_SECRET) throw new Error('authorized application binding access was not demonstrated')
+		if (!hostile.invocations.some((line) => line.includes('services/auth') && line.includes('--secrets-file'))) throw new Error('auth publication omitted preview bindings')
+	}
+	await writeFile(join(root, 'hostile-auth-evidence.json'), JSON.stringify({ safeConfiguration: true, passivePublishCount: hostile.invocations.length, permittedBindingReadable: Boolean(publishAuthSecret) }, null, 2))
 
 	const reorderedVariables = await probeTrustedPublisher('reordered-vars')
 	requirePassed(reorderedVariables, 'reordered preview runtime variables')
@@ -1013,12 +1039,300 @@ printf '%s\\n' "$PWD: $*" >> "$PUBLISH_LOG"
 
 	return [
 		'publisher-valid',
+		'publisher-authorized-hostile-auth-safe-configuration',
 		'publisher-reordered-runtime-variables',
 		...variableAttacks.map(({ result }) => result),
 		'publisher-unsafe-d1-binding',
 		'publisher-unsafe-route',
 		'publisher-worker-collision'
 	]
+}
+
+type AuthorizationWorkflow = {
+	on: Record<string, unknown>
+	jobs: Record<string, {
+		needs?: string | string[]
+		if?: string
+		env?: Record<string, string>
+		environment?: string
+		steps: Array<{ id?: string; name?: string; run?: string; uses?: string; with?: Record<string, unknown>; env?: Record<string, string> }>
+	}>
+}
+
+export async function verifyAutomaticPullRequestChecks(project: string): Promise<string[]> {
+	const root = join(project, '.wrangler/verify-automatic-pr-checks')
+	await resetDirectory(root)
+	const workflow = Bun.YAML.parse(await readFile(join(project, '.github/workflows/check-pr.yml'), 'utf8')) as AuthorizationWorkflow & { env?: Record<string, string> }
+	const job = workflow.jobs.check
+	if (!job || job.environment || /secrets\./.test(JSON.stringify(workflow))) throw new Error('Automatic PR checks must remain credential-free')
+	const variables: Record<string, string> = {
+		PUBLIC_TURNSTILE_SITE_KEY: '1x00000000000000000000AA',
+		PUBLIC_MARKETING_URL: 'https://marketing.preview-verification.example',
+		PUBLIC_APP_URL: 'https://app.preview-verification.example',
+		PUBLIC_UMAMI_HOST: 'https://analytics.preview-verification.example',
+		PUBLIC_UMAMI_WEBSITE_ID: 'synthetic-website-id',
+		PUBLIC_POSTHOG_KEY: 'synthetic-public-key',
+		PUBLIC_POSTHOG_HOST: 'https://analytics.preview-verification.example'
+	}
+	const results: string[] = []
+	for (const task of ['typecheck', 'lint', 'build']) {
+		const step = job.steps.find((candidate) => candidate.run === 'pnpm ' + task)
+		if (!step?.run) throw new Error('Missing automatic PR ' + task + ' step')
+		const env: Record<string, string> = { PATH: join(project, '.verify-bin') + ':' + process.env.PATH, CI: 'true', WRANGLER_SEND_METRICS: 'false' }
+		for (const key of ['HOME', 'TMPDIR', 'XDG_CONFIG_HOME']) if (process.env[key]) env[key] = process.env[key]!
+		for (const [key, value] of Object.entries({ ...workflow.env, ...job.env, ...step.env })) {
+			const variable = /^\$\{\{ vars\.([A-Z_]+) \}\}$/.exec(value)
+			if (variable) {
+				if (!(variable[1]! in variables)) throw new Error('Unstubbed public CI variable: ' + variable[1])
+				env[key] = variables[variable[1]!]!
+			} else {
+				if (value.includes('${{')) throw new Error('Unsupported automatic CI expression: ' + value)
+				env[key] = value
+			}
+		}
+		const result = await runProbe({ executable: 'bash', args: ['-e', '-c', step.run], cwd: project, env, inheritEnvironment: false })
+		await writeFile(join(root, task + '.json'), JSON.stringify({ command: step.run, workflowEnvironment: { ...workflow.env, ...job.env, ...step.env }, resolvedPublicEnvironment: Object.fromEntries(Object.entries(env).filter(([key]) => key.startsWith('PUBLIC_'))), inheritedCredentials: false, ...result }, null, 2))
+		requirePassed(result, 'automatic PR ' + task)
+		results.push('automatic-pr-' + task)
+	}
+	await writeFile(join(root, 'summary.json'), JSON.stringify({ results, dependencySetup: 'Dependencies installed separately by the workspace verifier; actual emitted typecheck, lint and build steps executed with only their declared public inputs.' }, null, 2))
+	return results
+}
+
+async function verifyPreviewCredentialBoundary(project: string, api: Record<string, unknown>): Promise<string[]> {
+	const root = join(project, '.wrangler/verify-preview-credential-boundary')
+	await resetDirectory(root)
+	const staging = Bun.YAML.parse(await readFile(join(project, '.github/workflows/deploy-staging.yml'), 'utf8')) as AuthorizationWorkflow
+	const ci = Bun.YAML.parse(await readFile(join(project, '.github/workflows/check-pr.yml'), 'utf8')) as AuthorizationWorkflow
+	const cleanup = Bun.YAML.parse(await readFile(join(project, '.github/workflows/cleanup-staging.yml'), 'utf8')) as AuthorizationWorkflow
+	for (const name of ['preview-ingress', 'preview-db', 'deploy']) if (staging.jobs[name]?.environment !== 'cloudflare-preview') throw new Error(`${name} lacks the external preview credential boundary`)
+	if (cleanup.jobs.cleanup?.environment !== 'cloudflare-preview') throw new Error('Cleanup cannot access protected preview credentials')
+	if (staging.jobs.authorize?.environment || staging.jobs['build-preview']?.environment || ci.jobs.check?.environment) throw new Error('Authorization or untrusted checks can request preview credentials')
+	if (!cleanup.jobs.cleanup.steps.some((step) => step.id === 'credential_policy' && step.run === 'node scripts/verify-cloudflare-preview-policy.mjs --verify')) throw new Error('Cleanup does not verify credential protection')
+	const reference = staging.jobs['preview-ingress']!.steps.find((step) => step.env?.CLOUDFLARE_API_TOKEN)?.env?.CLOUDFLARE_API_TOKEN
+	if (reference !== '${{ secrets.PREVIEW_CLOUDFLARE_API_TOKEN }}') throw new Error('Preview credential reference has an unsafe legacy fallback')
+	const environmentPolicy = api['/repos/owner/repository/environments/cloudflare-preview/deployment-branch-policies'] as { branch_policies: Array<{ name: string; type: string }> }
+	const policies = environmentPolicy.branch_policies
+	const receipts: Array<{ name: string; credentials: number; receipts: number; exitCode: number }> = []
+	for (const scenario of [
+		{ name: 'writer-branch-dispatch', ref: 'refs/heads/feature', environment: 'cloudflare-preview', workflow: staging, allowed: false },
+		{ name: 'writer-same-repository-pr', ref: 'refs/pull/181/merge', environment: 'cloudflare-preview', workflow: ci, allowed: false },
+		{ name: 'writer-removes-environment', ref: 'refs/heads/feature', environment: '', workflow: staging, allowed: false },
+		{ name: 'writer-selects-unconfigured-environment', ref: 'refs/heads/feature', environment: 'writer-preview', workflow: staging, allowed: false },
+		{ name: 'writer-tag-named-main', ref: 'refs/tags/main', environment: 'cloudflare-preview', workflow: staging, allowed: false },
+		{ name: 'trusted-default-branch-credential-access', ref: 'refs/heads/main', environment: 'cloudflare-preview', workflow: staging, allowed: true }
+	]) {
+		const directory = join(root, scenario.name)
+		await mkdir(directory)
+		const receipt = join(directory, 'privileged-receipts.log')
+		await writeFile(receipt, '')
+		const modified = structuredClone(scenario.workflow)
+		modified.jobs['independent-writer-job'] = {
+			environment: scenario.environment,
+			steps: [{ run: 'test -n "$CLOUDFLARE_API_TOKEN"\nprintf "privileged\\n" >> "$RECEIPT"', env: { CLOUDFLARE_API_TOKEN: reference } }]
+		}
+		await writeFile(join(directory, 'modified-workflow.json'), JSON.stringify(modified, null, 2))
+		const injected = modified.jobs['independent-writer-job']!
+		// Model only GitHub's documented environment/ref secret release, never the application gate.
+		const released = injected.environment === 'cloudflare-preview' && policies.some((policy) => policy.type === 'branch' && scenario.ref === 'refs/heads/' + policy.name)
+		const result = await runProbe({ executable: 'bash', args: ['-e', '-c', injected.steps[0]!.run!], cwd: directory, env: { CLOUDFLARE_API_TOKEN: released ? 'synthetic-provider-token' : '', RECEIPT: receipt } })
+		const reached = Boolean(await readOptional(receipt))
+		await writeFile(join(directory, 'result.json'), JSON.stringify({ ...result, released, reached }, null, 2))
+		if (released !== scenario.allowed || reached !== scenario.allowed) throw new Error(`${scenario.name} violated the external credential boundary`)
+		receipts.push({ name: scenario.name, credentials: Number(released), receipts: Number(reached), exitCode: result.exitCode })
+	}
+	await writeFile(join(root, 'summary.json'), JSON.stringify({ receipts, limitation: 'Synthetic GitHub environment/ref release model with actual emitted credential references and modified workflows. Not live GitHub scheduling. Trusted default-branch source integrity is checked separately by the emitted policy script; writer branch modifications never become trusted default source.' }, null, 2))
+	return receipts.map(({ name }) => 'credential-boundary-' + name)
+}
+
+export async function verifyPreviewAuthorization(project: string): Promise<string[]> {
+	const workflow = Bun.YAML.parse(await readFile(join(project, '.github/workflows/deploy-staging.yml'), 'utf8')) as AuthorizationWorkflow
+	const root = join(project, '.wrangler/verify-preview-authorization')
+	await resetDirectory(root)
+	const preload = join(root, 'github-fixture.mjs')
+	await writeFile(preload, `import { readFileSync } from 'node:fs'
+globalThis.fetch = async (url, options) => {
+ if (!String(url).startsWith('https://api.github.com/') || options.headers.Authorization !== 'Bearer synthetic-github-token') throw new Error('Unexpected API request')
+ const fixtures = JSON.parse(readFileSync(process.env.API_FIXTURE, 'utf8'))
+ const path = new URL(url).pathname
+ if (!(path in fixtures)) throw new Error('Unstubbed GitHub request: ' + path)
+ const payload = fixtures[path]
+ return Response.json(payload, { status: payload === null ? 503 : 200 })
+}
+`)
+	const sha = 'a'.repeat(40)
+	const trusted = 'b'.repeat(40)
+	const repository = { id: 123456, full_name: 'owner/repository', default_branch: 'main' }
+	const actor = { id: 42, login: 'maintainer', type: 'User' }
+	const event = { repository, inputs: { pr_number: '181', head_sha: sha } }
+	const fixtures = {
+		'/repos/owner/repository/environments/cloudflare-preview/secrets': { total_count: [...new Set(JSON.stringify(workflow).match(/secrets\.PREVIEW_(?!POLICY_TOKEN)[A-Z_]+/g))].length, secrets: [...new Set(JSON.stringify(workflow).match(/secrets\.PREVIEW_(?!POLICY_TOKEN)[A-Z_]+/g))].map((name) => ({ name: name.slice(8) })) },
+		'/repos/owner/repository/environments/cloudflare-preview': { name: 'cloudflare-preview', deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } },
+		'/repos/owner/repository/environments/cloudflare-preview/deployment-branch-policies': { total_count: 1, branch_policies: [{ name: 'main', type: 'branch' }] },
+		'/repos/owner/repository/branches/main/protection': { enforce_admins: { enabled: true }, allow_force_pushes: { enabled: false }, allow_deletions: { enabled: false }, restrictions: { users: [actor], teams: [], apps: [] } },
+		'/repos/owner/repository/actions/secrets': { total_count: 1, secrets: [{ name: 'PREVIEW_POLICY_TOKEN' }] },
+		'/repos/owner/repository/actions/organization-secrets': { total_count: 0, secrets: [] },
+		'/repos/owner/repository': repository,
+		'/repos/contributor/fork': { id: 654321, full_name: 'contributor/fork' },
+		'/repos/owner/repository/pulls/181': { number: 181, state: 'open', base: { repo: repository, ref: 'main' }, head: { sha, repo: { id: 654321, full_name: 'contributor/fork' } } },
+		'/repos/owner/repository/collaborators/maintainer/permission': { permission: 'write', role_name: 'maintain', user: actor },
+		'/repos/owner/repository/actions/runs/777': { id: 777, event: 'workflow_dispatch', path: '.github/workflows/deploy-staging.yml', repository, head_sha: trusted, head_branch: 'main', actor, triggering_actor: actor, run_attempt: 1 }
+	}
+	const baseEnv = {
+		GITHUB_EVENT_NAME: 'workflow_dispatch', GITHUB_REPOSITORY: repository.full_name,
+		GITHUB_REPOSITORY_ID: String(repository.id), GITHUB_REF: 'refs/heads/main',
+		GITHUB_SHA: trusted, GITHUB_WORKFLOW_SHA: trusted,
+		GITHUB_WORKFLOW_REF: 'owner/repository/.github/workflows/deploy-staging.yml@refs/heads/main',
+		GITHUB_ACTOR: actor.login, GITHUB_ACTOR_ID: String(actor.id), GITHUB_TRIGGERING_ACTOR: actor.login,
+		GITHUB_RUN_ID: '777', GITHUB_RUN_ATTEMPT: '1', GH_TOKEN: 'synthetic-github-token', PREVIEW_POLICY_TOKEN: 'synthetic-github-token',
+		PREVIEW_HEAD_SHA: sha, PREVIEW_PR_NUMBER: '181', NODE_OPTIONS: `--import=${preload}`
+	}
+	const gate = workflow.jobs.authorize?.steps.find(({ id }) => id === 'authorization')?.run ?? ':'
+	await mkdir(join(project, 'trusted-source/scripts'), { recursive: true })
+	for (const script of ['authorize-cloudflare-preview.mjs', 'verify-cloudflare-preview-policy.mjs']) await writeFile(join(project, 'trusted-source/scripts', script), await readFile(join(project, 'scripts', script)))
+	async function probe({ name, env = {}, api = fixtures, payload = event, contract = '', command = gate, denied = true }: {
+		name: string; env?: Record<string, string>; api?: unknown; payload?: unknown; contract?: string; command?: string; denied?: boolean
+	}) {
+		const directory = join(root, name)
+		await mkdir(directory)
+		const receipt = join(directory, 'privileged-receipts.log')
+		const output = join(directory, 'github-output.txt')
+		await writeFile(receipt, '')
+		await writeFile(join(directory, 'event.json'), JSON.stringify(payload))
+		await writeFile(join(directory, 'api.json'), JSON.stringify(api))
+		const result = await runProbe({
+			executable: 'bash', args: ['-e', '-c', `${command}\nprintf 'privileged\\n' >> "$RECEIPT"`], cwd: project,
+			env: { ...baseEnv, GITHUB_EVENT_PATH: join(directory, 'event.json'), API_FIXTURE: join(directory, 'api.json'), GITHUB_OUTPUT: output, AUTHORIZED_REVISION: contract, RECEIPT: receipt, ...env }
+		})
+		await writeFile(join(directory, 'result.json'), JSON.stringify(result, null, 2))
+		const receipts = await readOptional(receipt)
+		if (denied && receipts) throw new Error(`${name} reached privileged work`)
+		if (denied && result.exitCode === 0) throw new Error(`${name} unexpectedly passed`)
+		if (denied && !/Preview authorization denied:|Invalid preview authorization input:/.test(result.stderr)) throw new Error(`${name} failed outside the authorization gate: ${result.stderr}`)
+		if (!denied) requirePassed(result, name)
+		return await readOptional(output)
+	}
+	await probe({ name: 'unsafe-credential-environment', api: { ...fixtures, '/repos/owner/repository/environments/cloudflare-preview': { name: 'cloudflare-preview', deployment_branch_policy: null } } })
+	await probe({ name: 'missing-sha', env: { PREVIEW_HEAD_SHA: '' } })
+	await probe({ name: 'write-permission', api: { ...fixtures, '/repos/owner/repository/collaborators/maintainer/permission': { permission: 'write', role_name: 'write', user: actor } } })
+	const output = await probe({ name: 'valid-maintainer', denied: false })
+	const managedActor = { ...actor, login: 'maintainer_acme' }
+	const managedEnv = { GITHUB_ACTOR: managedActor.login, GITHUB_TRIGGERING_ACTOR: managedActor.login }
+	const managedApi = {
+		...fixtures,
+		'/repos/owner/repository/collaborators/maintainer_acme/permission': { permission: 'write', role_name: 'maintain', user: managedActor },
+		'/repos/owner/repository/actions/runs/777': { ...fixtures['/repos/owner/repository/actions/runs/777'], actor: managedActor, triggering_actor: managedActor }
+	}
+	await probe({ name: 'valid-managed-maintainer', denied: false, env: managedEnv, api: managedApi })
+	const managedPushApi = { ...fixtures, '/repos/owner/repository/collaborators/maintainer_acme/permission': managedApi['/repos/owner/repository/collaborators/maintainer_acme/permission'], '/repos/owner/repository/branches/main/protection': { ...fixtures['/repos/owner/repository/branches/main/protection'], restrictions: { users: [managedActor], teams: [], apps: [] } } }
+	await probe({ name: 'valid-managed-push-user', denied: false, api: managedPushApi })
+	const managedResults = ['valid-managed-maintainer', 'valid-managed-push-user']
+	for (const [role, permission] of [['maintain', 'write'], ['admin', 'admin'], ['write', 'write'], ['read', 'read']] as const) {
+		const denied = role === 'write' || role === 'read'
+		const permissionResponse = { role_name: role, permission, user: managedActor }
+		for (const boundary of ['actor', 'push-user'] as const) {
+			const name = 'managed-' + boundary + '-' + role
+			await probe({ name, denied, env: boundary === 'actor' ? managedEnv : {}, api: { ...(boundary === 'actor' ? managedApi : managedPushApi), '/repos/owner/repository/collaborators/maintainer_acme/permission': permissionResponse } })
+			managedResults.push(name)
+		}
+	}
+	const managedOutput = await probe({ name: 'managed-authorized-revision', denied: false, env: managedEnv, api: managedApi })
+	const managedContract = managedOutput.split('\n').find((line) => line.startsWith('revision='))?.slice(9)
+	if (!managedContract || JSON.parse(managedContract).actor !== managedActor.login) throw new Error('Managed actor identity lost from revision contract')
+	await probe({ name: 'managed-rerun-same-actor', denied: false, command: 'node scripts/authorize-cloudflare-preview.mjs --recheck', contract: managedContract, env: { ...managedEnv, GITHUB_RUN_ATTEMPT: '2' }, api: { ...managedApi, '/repos/owner/repository/actions/runs/777': { ...managedApi['/repos/owner/repository/actions/runs/777'], run_attempt: 2 } } })
+	for (const [name, changes] of [['numeric-id-mismatch', { id: 99 }], ['bot-identity', { type: 'Bot' }]] as const) {
+		await probe({ name: 'managed-' + name, env: managedEnv, api: { ...managedApi, '/repos/owner/repository/collaborators/maintainer_acme/permission': { permission: 'write', role_name: 'maintain', user: { ...managedActor, ...changes } } } })
+		managedResults.push('managed-' + name)
+	}
+	await probe({ name: 'managed-rerun-other-actor', env: { ...managedEnv, GITHUB_TRIGGERING_ACTOR: 'other_acme' }, api: managedApi })
+	managedResults.push('managed-authorized-revision', 'managed-rerun-same-actor', 'managed-rerun-other-actor')
+	const contract = output.split('\n').find((line) => line.startsWith('revision='))?.slice(9)
+	if (!contract) throw new Error('Authorization did not emit an immutable revision contract')
+	const resolved = JSON.parse(contract)
+	if (resolved.headSha !== sha || resolved.trustedSha !== trusted || resolved.prNumber !== '181' || resolved.alias !== 'pr-181' || resolved.repositoryId !== '123456' || resolved.headRepository !== 'contributor/fork') throw new Error('Resolved preview identity mismatch')
+	const attacks: Array<{ name: string; env?: Record<string, string>; api?: unknown; payload?: unknown }> = [
+		{ name: 'missing-policy-token', env: { PREVIEW_POLICY_TOKEN: '' } },
+		{ name: 'missing-preview-secrets', api: { ...fixtures, '/repos/owner/repository/environments/cloudflare-preview/secrets': { total_count: 0, secrets: [] } } },
+		{ name: 'repository-secret-fallback', api: { ...fixtures, '/repos/owner/repository/actions/secrets': { total_count: 2, secrets: [{ name: 'PREVIEW_POLICY_TOKEN' }, { name: 'CLOUDFLARE_API_TOKEN' }] } } },
+		{ name: 'organization-secret-fallback', api: { ...fixtures, '/repos/owner/repository/actions/organization-secrets': { total_count: 1, secrets: [{ name: 'PREVIEW_CLOUDFLARE_API_TOKEN' }] } } },
+		{ name: 'truncated-secret-inventory', api: { ...fixtures, '/repos/owner/repository/actions/secrets': { total_count: 101, secrets: [] } } },
+		{ name: 'writer-default-branch-access', api: { ...fixtures, '/repos/owner/repository/branches/main/protection': { ...fixtures['/repos/owner/repository/branches/main/protection'], restrictions: { users: [{ id: 43, login: 'writer', type: 'User' }], teams: [], apps: [] } }, '/repos/owner/repository/collaborators/writer/permission': { permission: 'write', role_name: 'write', user: { id: 43, login: 'writer', type: 'User' } } } },
+		{ name: 'malformed-sha', env: { PREVIEW_HEAD_SHA: 'abc' } },
+		{ name: 'zero-sha', env: { PREVIEW_HEAD_SHA: '0'.repeat(40) } },
+		{ name: 'missing-pr', env: { PREVIEW_PR_NUMBER: '' } },
+		{ name: 'malformed-pr', env: { PREVIEW_PR_NUMBER: '181;echo injected' } },
+		{ name: 'wrong-pr-input', env: { PREVIEW_PR_NUMBER: '182' } },
+		{ name: 'wrong-repository', env: { GITHUB_REPOSITORY: 'other/repository' } },
+		{ name: 'wrong-repository-id', env: { GITHUB_REPOSITORY_ID: '999' } },
+		{ name: 'wrong-ref', env: { GITHUB_REF: 'refs/heads/feature' } },
+		{ name: 'wrong-workflow-ref', env: { GITHUB_WORKFLOW_REF: 'owner/repository/.github/workflows/evil.yml@refs/heads/main' } },
+		{ name: 'wrong-trusted-sha', env: { GITHUB_WORKFLOW_SHA: sha } },
+		{ name: 'inputless-dispatch', payload: { repository, inputs: {} } },
+		{ name: 'pull-request-target', env: { GITHUB_EVENT_NAME: 'pull_request_target' } },
+		{ name: 'synchronize', env: { GITHUB_EVENT_NAME: 'pull_request' }, payload: { ...event, action: 'synchronize' } },
+		{ name: 'unexpected-rerun-actor', env: { GITHUB_TRIGGERING_ACTOR: 'other-maintainer', GITHUB_RUN_ATTEMPT: '2' } }
+	]
+	for (const [name, changes] of [
+		['closed-pr', { state: 'closed' }], ['wrong-pr-response', { number: 182 }],
+		['stale-head', { head: { ...fixtures['/repos/owner/repository/pulls/181'].head, sha: 'c'.repeat(40) } }],
+		['wrong-pr-base', { base: { repo: { ...repository, id: 999 }, ref: 'main' } }],
+		['missing-head-repository', { head: { sha, repo: null } }]
+	] as const) attacks.push({ name, api: { ...fixtures, '/repos/owner/repository/pulls/181': { ...fixtures['/repos/owner/repository/pulls/181'], ...changes } } })
+	for (const [name, policy] of [
+		['wildcard-environment-branch', { total_count: 1, branch_policies: [{ name: '*', type: 'branch' }] }],
+		['tag-environment-policy', { total_count: 1, branch_policies: [{ name: 'main', type: 'tag' }] }],
+		['pr-environment-policy', { total_count: 2, branch_policies: [{ name: 'main', type: 'branch' }, { name: 'refs/pull/*/merge', type: 'branch' }] }],
+		['missing-environment-branch-policy', { total_count: 0, branch_policies: [] }]
+	] as const) attacks.push({ name, api: { ...fixtures, '/repos/owner/repository/environments/cloudflare-preview/deployment-branch-policies': policy } })
+	for (const [name, protection] of [
+		['unprotected-default-branch', {}], ['admin-protection-bypass', { enforce_admins: { enabled: false } }],
+		['force-push-enabled', { allow_force_pushes: { enabled: true } }], ['branch-deletion-enabled', { allow_deletions: { enabled: true } }],
+		['unrestricted-default-branch', { restrictions: null }], ['team-push-access', { restrictions: { users: [], teams: [{ id: 1 }], apps: [] } }],
+		['app-push-access', { restrictions: { users: [], teams: [], apps: [{ id: 1 }] } }]
+	] as const) attacks.push({ name, api: { ...fixtures, '/repos/owner/repository/branches/main/protection': name === 'unprotected-default-branch' ? protection : { ...fixtures['/repos/owner/repository/branches/main/protection'], ...protection } } })
+	for (const endpoint of Object.keys(fixtures)) attacks.push({ name: 'api-failure-' + endpoint.replace('/repos/', '').replaceAll('/', '-'), api: { ...fixtures, [endpoint]: null } })
+	attacks.push({ name: 'revoked-permission', api: { ...fixtures, '/repos/owner/repository/collaborators/maintainer/permission': { permission: 'read', role_name: 'read', user: actor } } })
+	attacks.push({ name: 'missing-permission-identity', api: { ...fixtures, '/repos/owner/repository/collaborators/maintainer/permission': { permission: 'admin', role_name: 'admin', user: null } } })
+	attacks.push({ name: 'custom-role', api: { ...fixtures, '/repos/owner/repository/collaborators/maintainer/permission': { permission: 'write', role_name: 'custom', user: actor } } })
+	attacks.push({ name: 'api-rerun-actor-mismatch', api: { ...fixtures, '/repos/owner/repository/actions/runs/777': { ...fixtures['/repos/owner/repository/actions/runs/777'], triggering_actor: { ...actor, id: 999 } } } })
+	for (const attack of attacks) await probe(attack)
+	await probe({ name: 'valid-admin-self-approval', denied: false, api: { ...fixtures, '/repos/owner/repository/collaborators/maintainer/permission': { permission: 'admin', role_name: 'admin', user: actor }, '/repos/owner/repository/pulls/181': { ...fixtures['/repos/owner/repository/pulls/181'], user: actor } } })
+	const recheck = 'node scripts/authorize-cloudflare-preview.mjs --recheck'
+	await probe({ name: 'valid-rerun-same-actor', denied: false, command: recheck, contract, env: { GITHUB_RUN_ATTEMPT: '2' }, api: { ...fixtures, '/repos/owner/repository/actions/runs/777': { ...fixtures['/repos/owner/repository/actions/runs/777'], run_attempt: 2 } } })
+	await probe({ name: 'missing-contract', command: recheck })
+	await probe({ name: 'forged-contract', command: recheck, contract: JSON.stringify({ ...resolved, headSha: trusted }) })
+	if (Object.keys(workflow.on).join(',') !== 'workflow_dispatch') throw new Error('Preview has an automatic event bypass')
+	if (!workflow.jobs.authorize?.if?.includes("github.event_name == 'workflow_dispatch'")) throw new Error('Authorization job lacks trusted dispatch scheduling')
+	const boundaryCommands: string[] = []
+	for (const jobName of ['preview-ingress', 'preview-db', 'deploy']) {
+		const job = workflow.jobs[jobName]!
+		if (![job.needs].flat().includes('authorize') || job.env?.AUTHORIZED_REVISION !== '${{ needs.authorize.outputs.revision }}') throw new Error(`${jobName} is not downstream of authorization`)
+		for (const [index, step] of job.steps.entries()) {
+			const privileged = Object.values(step.env ?? {}).some((value) => value.includes('secrets.') || value.includes('outputs.database_url')) || step.uses?.startsWith('neondatabase/')
+			if (!privileged) continue
+			const command = step.run ?? job.steps[index - 1]?.run ?? ''
+			if (!command.includes('authorize-cloudflare-preview.mjs --recheck')) throw new Error(`${step.name} lacks a credential-boundary recheck`)
+			boundaryCommands.push(command.replaceAll(/\$\{\{[^}]+\}\}/g, 'synthetic-preview-value'))
+		}
+	}
+	if (boundaryCommands.length < 4) throw new Error('Missing credential boundary scenarios')
+	const receiptsOnly = `node() { case "$1" in *authorize-cloudflare-preview.mjs) command node "$@" ;; *) printf 'node:%s\\n' "$1" >> "$RECEIPT" ;; esac; }\nnpx() { printf 'provider\\n' >> "$RECEIPT"; }\nsh() { printf 'publisher\\n' >> "$RECEIPT"; }\n`
+	for (const [index, command] of boundaryCommands.entries()) {
+		for (const name of ['stale-head', 'revoked-permission', 'api-failure-owner-repository-collaborators-maintainer-permission', 'unexpected-rerun-actor', 'writer-default-branch-access', 'repository-secret-fallback', 'wildcard-environment-branch']) {
+			const attack = attacks.find((candidate) => candidate.name === name)!
+			await probe({ ...attack, name: `boundary-${index}-${name}`, command: receiptsOnly + command, contract, env: { ...attack.env, RUNNER_TEMP: root } })
+		}
+	}
+	const cleanupWorkflow = Bun.YAML.parse(await readFile(join(project, '.github/workflows/cleanup-staging.yml'), 'utf8')) as AuthorizationWorkflow
+	const cleanupPolicy = cleanupWorkflow.jobs.cleanup?.steps.find(({ id }) => id === 'credential_policy')?.run
+	if (!cleanupPolicy) throw new Error('Cleanup policy execution seam is missing')
+	await probe({ name: 'cleanup-valid-closed-pr', command: cleanupPolicy, denied: false, env: { GITHUB_EVENT_NAME: 'pull_request_target', PREVIEW_HEAD_SHA: '' }, api: { ...fixtures, '/repos/owner/repository/pulls/181': { ...fixtures['/repos/owner/repository/pulls/181'], state: 'closed' } } })
+	await probe({ name: 'cleanup-unsafe-protection', command: cleanupPolicy, api: { ...fixtures, '/repos/owner/repository/branches/main/protection': {} } })
+	await probe({ name: 'preinstallation-protection-check', command: 'node scripts/verify-cloudflare-preview-policy.mjs --check-protection', denied: false, api: { ...fixtures, '/repos/owner/repository/environments/cloudflare-preview/secrets': { total_count: 0, secrets: [] } } })
+	const credentialBoundaryResults = await verifyPreviewCredentialBoundary(project, fixtures)
+	const results = [...credentialBoundaryResults, 'credential-policy-cleanup-valid-closed-pr', 'credential-policy-cleanup-unsafe-protection', 'credential-policy-preinstallation-check', 'authorization-unsafe-credential-environment', 'authorization-missing-sha', 'authorization-write-permission', 'authorization-valid-maintainer', ...managedResults.map((name) => 'authorization-' + name), ...attacks.map(({ name }) => 'authorization-' + name), 'authorization-valid-admin-self-approval', 'authorization-valid-rerun-same-actor', 'authorization-immutable-contract', `authorization-${boundaryCommands.length}-credential-boundaries`]
+	await writeFile(join(root, 'summary.json'), JSON.stringify({ results, revision: resolved }, null, 2))
+	return results
 }
 
 export async function verifyPreviewSecurityContracts({
@@ -1047,12 +1361,16 @@ export async function verifyPreviewSecurityContracts({
 	const cleanupResultSource = steps.find(({ id }) => id === 'cleanup_result')?.run
 	if (!inventorySource || !databaseSource || !cleanupResultSource) throw new Error('preview cleanup workflow is missing a security verification seam')
 
-	const results = await verifyWorkerCleanup({ project, workers, alias })
+	const results = await verifyPreviewAuthorization(project)
+	results.push(...await verifyPreviewCleanup(project))
+	results.push(...await verifyPreviewMigrations(project))
+	results.push(...await verifyWorkerCleanup({ project, workers, alias }))
 	results.push(
 		...(await verifyLegacyInventoryAuthentication({
 			project,
 			source: inventorySource,
 			alias,
+			provider: database.provider,
 			repositoryId
 		})),
 		await verifyCleanupResult({ project, source: cleanupResultSource, alias }),
@@ -1079,4 +1397,24 @@ export async function verifyPreviewSecurityContracts({
 		}))
 	)
 	return results
+}
+
+if (import.meta.main) {
+	const cleanupOnly = process.argv.includes('--cleanup-only')
+	const args = process.argv.slice(2).filter((arg) => arg !== '--cleanup-only')
+	if (args.length !== 4 || args[0] !== '--fixture' || args[2] !== '--output' || !/^[a-z0-9-]+$/.test(args[1]!)) throw new Error('Usage: bun scripts/verify-gateway-preview-security.ts --fixture <fixture> --output <new-owned-directory> [--cleanup-only]')
+	const project = resolve(args[3]!)
+	const cfg = GvKitConfig.parse(parseJsonc(await readFile(resolve('fixtures', args[1]! + '.jsonc'), 'utf8')))
+	if (cfg.choices.backend !== 'hono' || cfg.choices.deploy !== 'cf-workers') throw new Error('Preview migration verification requires a Hono Cloudflare fixture')
+	await mkdir(dirname(project), { recursive: true })
+	await mkdir(project)
+	for (const entry of runGenerators(cfg)) {
+		await mkdir(dirname(join(project, entry.path)), { recursive: true })
+		await writeFile(join(project, entry.path), entry.content)
+	}
+	console.log(await verifyPreviewCleanup(project))
+	if (!cleanupOnly) {
+		console.log(await verifyPreviewAuthorization(project))
+		console.log(await verifyPreviewMigrations(project))
+	}
 }

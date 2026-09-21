@@ -8,6 +8,7 @@ export type OpenApiDocument = {
 	paths: Record<string, JsonObject>
 	components?: Record<string, Record<string, JsonValue>>
 	servers?: { url: string }[]
+	security?: Record<string, string[]>[]
 	tags?: JsonObject[]
 }
 
@@ -318,7 +319,14 @@ function mergePaths({
 	fragment: OpenApiFragment
 	parameterComponents: Record<string, JsonValue> | undefined
 }): void {
-	for (const [path, incoming] of Object.entries(fragment.document.paths)) {
+	for (const [path, pathItem] of Object.entries(fragment.document.paths)) {
+		const incoming = structuredClone(pathItem)
+		if (fragment.document.security !== undefined) {
+			for (const [method, operation] of Object.entries(incoming)) {
+				if (!HTTP_METHODS.has(method) || !isJsonObject(operation) || Object.hasOwn(operation, 'security')) continue
+				operation.security = structuredClone(fragment.document.security)
+			}
+		}
 		const identity = path.replaceAll(/\{[^}]+\}/g, '{}')
 		const equivalentPath = pathIdentities.get(identity)
 		if (equivalentPath && equivalentPath !== path) throw new Error(`path collision between templates "${equivalentPath}" and "${path}"`)

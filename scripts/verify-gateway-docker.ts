@@ -12,6 +12,7 @@ import {
 } from './gateway-verification-evidence.js'
 import { installUsersStreamingProbe, verifyNativeIngresses } from './gateway-native-probes.js'
 import { verifyUsersServerProfile } from './verify-gateway-local.js'
+import { verifyDockerProductionHealth } from './verify-gateway-docker-health.js'
 
 const PNPM_VERSION = '11.1.1'
 let webOrigin = 'http://localhost:3000'
@@ -93,18 +94,20 @@ export function createDockerRuntimeEnvironment({
 	}
 }
 
-function parseArgs(argv: string[]): { contract: boolean; fixture: string; output: string } {
+function parseArgs(argv: string[]): { contract: boolean; productionOrigins: boolean; fixture: string; output: string } {
 	let contract = false
+	let productionOrigins = false
 	let fixture = 'hono-docker-emailotp-only'
 	let output = resolve('.scratch/gateway-docker')
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index]
 		if (arg === '--contract') contract = true
+		else if (arg === '--production-origins') productionOrigins = true
 		else if (arg === '--fixture') fixture = argv[++index] ?? fixture
 		else if (arg === '--output') output = resolve(argv[++index] ?? output)
 		else throw new Error(`Unknown argument: ${arg}`)
 	}
-	return { contract, fixture, output }
+	return { contract, productionOrigins, fixture, output }
 }
 
 async function materialize(fixture: string, output: string) {
@@ -834,6 +837,7 @@ async function assertCleanup(project: string, env: NodeJS.ProcessEnv) {
 
 async function main(): Promise<void> {
 	const args = parseArgs(process.argv.slice(2))
+	if (args.productionOrigins) return verifyDockerProductionHealth(args.fixture, args.output)
 	const generated = await materialize(args.fixture, args.output)
 	await installUsersStreamingProbe(generated.project)
 	const hasAuth = generated.config.choices.auth.length > 0

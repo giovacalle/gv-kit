@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { runInNewContext } from 'node:vm'
 import { describe, expect, test } from 'bun:test'
 import { unsafeArtifactFindings } from '../../scripts/gateway-verification-evidence.js'
 import {
 	reportDockerVerifierFailure,
 	signInWithDockerOtp
 } from '../../scripts/verify-gateway-docker.js'
+import { dockerHealthClientEnvironment } from '../../scripts/verify-gateway-docker-health.js'
 import { generateDeploy } from '../../src/generators/deploy.js'
 import { runGenerators } from '../../src/generators/index.js'
 import type { Choices, GvKitConfig } from '../../src/schema/config.js'
@@ -55,6 +57,15 @@ function composeServices(): Record<string, Record<string, unknown>> {
 }
 
 describe('Docker gateway verifier diagnostics', () => {
+	test('isolates the production-origin Docker client and requires a local endpoint', () => {
+		expect(dockerHealthClientEnvironment('unix:///tmp/verify.sock', '/owned/project')).toEqual({
+			HOME: '/owned/project/.verify-home',
+			DOCKER_CONFIG: '/owned/project/.verify-home/docker',
+			DOCKER_HOST: 'unix:///tmp/verify.sock'
+		})
+		for (const endpoint of [undefined, '', 'tcp://localhost:2375', 'ssh://remote', 'unix://relative', 'unix:///tmp/socket?query']) expect(() => dockerHealthClientEnvironment(endpoint, '/owned/project')).toThrow('absolute local Unix socket')
+	})
+
 	test('redacts every occurrence of the extracted OTP from sign-in failures', async () => {
 		const otp = '731946'
 		let requestCount = 0
@@ -129,6 +140,70 @@ describe('Docker gateway verifier diagnostics', () => {
 })
 
 describe('Docker gateway topology', () => {
+	for (const source of [config, noAuthConfig]) {
+		test(`emitted health probe authenticates production origins with auth=${source.choices.auth.length > 0}`, async () => {
+			const entries = runGenerators(source)
+			const app = entries.find(({ path }) => path === 'apps/api/src/app.ts')!.content
+			const javascript = new Bun.Transpiler({ loader: 'ts', target: 'bun' }).transformSync(
+				app.replace("from 'hono'", `from '${import.meta.resolve('hono')}'`)
+			)
+			const url = URL.createObjectURL(new Blob([javascript], { type: 'text/javascript' }))
+			try {
+				const { createGateway } = await import(url)
+				const gateway = createGateway({}, {
+					openApiDocument: { openapi: '3.0.0', info: {}, paths: {} },
+					canonicalApiOrigin: 'https://api.example.test:8443',
+					publicOrigins: 'https://app.example.test,https://api.example.test:8443',
+					trustedIngressSecret: 'synthetic-probe-secret',
+					logger: () => undefined
+				})
+				const compose = Bun.YAML.parse(entries.find(({ path }) => path === 'docker-compose.yml')!.content) as {
+					services: { gateway: { healthcheck: { test: string[] } } }
+				}
+				const probe = compose.services.gateway.healthcheck.test
+				const responses: number[] = []
+				let exitCode: number | undefined
+				const fetchGateway = async (input: string, init?: RequestInit) => {
+					const request = new Request(input, init)
+					expect(new URL(request.url).origin).toBe('http://127.0.0.1:8786')
+					const response = await gateway.fetch(request)
+					responses.push(response.status)
+					return response
+				}
+				if (probe[1] === 'wget') {
+					// Exercise the previous emitted request without allowing network I/O in tests.
+					const response = await fetchGateway(probe.at(-1)!)
+					exitCode = response.ok ? 0 : 1
+				} else {
+					expect(probe.slice(0, 3)).toEqual(['CMD', 'node', '--eval'])
+					await runInNewContext(probe[3]!, {
+						URL, AbortSignal, fetch: fetchGateway,
+						process: { env: { API_PUBLIC_ORIGIN: 'https://api.example.test:8443', GATEWAY_TRUSTED_INGRESS_SECRET: 'synthetic-probe-secret' }, exit: (code: number) => { exitCode = code } }
+					})
+				}
+				expect(responses).toEqual([200])
+				expect(exitCode).toBe(0)
+				for (const [name, environment] of Object.entries({
+					missingSecret: { API_PUBLIC_ORIGIN: 'https://api.example.test:8443' },
+					wrongSecret: { API_PUBLIC_ORIGIN: 'https://api.example.test:8443', GATEWAY_TRUSTED_INGRESS_SECRET: 'wrong' },
+					unknownOrigin: { API_PUBLIC_ORIGIN: 'https://evil.example.test', GATEWAY_TRUSTED_INGRESS_SECRET: 'synthetic-probe-secret' },
+					wrongScheme: { API_PUBLIC_ORIGIN: 'http://api.example.test:8443', GATEWAY_TRUSTED_INGRESS_SECRET: 'synthetic-probe-secret' }
+				})) {
+					responses.length = 0
+					exitCode = undefined
+					await runInNewContext(probe[3]!, {
+						URL, AbortSignal, fetch: fetchGateway,
+						process: { env: environment, exit: (code: number) => { exitCode = code } }
+					})
+					expect(responses, name).toEqual([421])
+					expect(Number(exitCode), name).toBe(1)
+				}
+			} finally {
+				URL.revokeObjectURL(url)
+			}
+		})
+	}
+
 	test('publishes only ingress and gateway while keeping auth and users private', () => {
 		const services = composeServices()
 

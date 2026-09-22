@@ -508,7 +508,7 @@ describe('Cloudflare gateway production topology', () => {
 			const pkg = JSON.parse(entry(entries, path)) as { scripts: Record<string, string> }
 			expect(pkg.scripts.build, path).toBeDefined()
 			expect(pkg.scripts['deploy:production'], path).toContain('wrangler deploy')
-			expect(pkg.scripts['deploy:staging'], path).toContain('wrangler deploy')
+			expect(pkg.scripts['deploy:staging'], path).toContain('node ../../scripts/deploy-cloudflare-staging.mjs')
 		}
 	})
 

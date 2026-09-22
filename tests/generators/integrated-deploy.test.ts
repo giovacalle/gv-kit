@@ -33,6 +33,17 @@ function compose(cfg: GvKitConfig): string {
 }
 
 describe('generateIntegratedDeploy — Cloudflare Worker names', () => {
+	test('pins the credential-bearing Neon branch action to the reviewed v6 commit', () => {
+		const staging = generateIntegratedDeploy(
+			makeCfg({ deploy: 'cf-workers', db: 'postgres' })
+		).find((entry) => entry.path === '.github/workflows/deploy-staging.yml')!.content
+
+		expect(staging).toContain('# v6')
+		expect(staging).toContain(
+			'neondatabase/create-branch-action@fb620d43d4c565abaf088b848a4e28e5c4ea4d9c'
+		)
+	})
+
 	test('keeps legacy preview cleanup targets after bounding production config names', () => {
 		const project = `a${'b'.repeat(254)}`
 		const cleanup = generateIntegratedDeploy(

@@ -25,6 +25,8 @@ const PACKAGE_JSON =
 			exports: { '.': './src/index.ts' },
 			scripts: {
 				codegen: 'openapi-ts',
+				'codegen:check':
+					`tmp=$(mktemp -d); cp -R src/generated "$tmp/generated"; trap 'rm -rf src/generated; mv "$tmp/generated" src/generated; rmdir "$tmp"' EXIT; openapi-ts; diff -ru "$tmp/generated" src/generated`,
 				lint: 'eslint .'
 			},
 			dependencies: {

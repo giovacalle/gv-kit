@@ -47,6 +47,30 @@ function content(entries: FileEntry[], path: string): string {
 }
 
 describe('generateRoot — Astro project shape', () => {
+	test.each(['hey-api', 'skip'] as const)('Hono builds check OpenAPI and hash external fragments with client %s', (apiClient) => {
+		const entries = generateRoot(makeCfg({ apiClient }))
+		const pkg = JSON.parse(content(entries, 'package.json'))
+		const turbo = JSON.parse(content(entries, 'turbo.json'))
+		expect(pkg.scripts.build).toBe(
+			`pnpm ${apiClient === 'hey-api' ? 'codegen:check' : 'openapi:check'} && turbo run build`
+		)
+		expect(turbo.tasks['@demo/api-gateway#build']).toEqual({
+			dependsOn: ['^build'],
+			inputs: ['$TURBO_DEFAULT$', '$TURBO_ROOT$/services/*/openapi.json'],
+			outputs: turbo.tasks.build.outputs
+		})
+	})
+
+	test('integrated builds keep their original command and task inputs', () => {
+		const entries = generateRoot(makeCfg({ backend: 'inside-frontend', apiClient: 'skip' }))
+		const pkg = JSON.parse(content(entries, 'package.json'))
+		const turbo = JSON.parse(content(entries, 'turbo.json'))
+		expect(pkg.scripts.build).toBe('turbo run build')
+		expect(pkg.scripts['openapi:check']).toBeUndefined()
+		expect(turbo.tasks['@demo/api-gateway#build']).toBeUndefined()
+		expect(turbo.tasks.build.inputs).toBeUndefined()
+	})
+
 	test('generated workspace pins Node 24 and formats Astro files', () => {
 		const pkg = JSON.parse(content(generateRoot(makeCfg()), 'package.json')) as {
 			engines: { node: string }
@@ -115,6 +139,10 @@ describe('generateRoot — Astro project shape', () => {
 		expect(pkg.scripts.codegen).toBe(
 			'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen'
 		)
+		expect(pkg.scripts['codegen:check']).toBe(
+			'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen:check'
+		)
+		expect(pkg.scripts.build).toBe('pnpm codegen:check && turbo run build')
 		expect(pkg.scripts['openapi:compose']).toContain('openapi:compose')
 		expect(pkg.scripts['openapi:check']).toContain('openapi:check')
 	})

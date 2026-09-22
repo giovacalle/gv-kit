@@ -31,13 +31,13 @@
 .husky/pre-commit  41ceea3ad087b3b4
 .prettierignore  e6a7d108df20b155
 AGENTS.md  7885401c7d1c51f4
-Dockerfile  6ad0b5db68f05a7d
+Dockerfile  e6b20eb7c0c512ff
 LICENSE  508a77d2e7b51d98
 README.md  4e1e81f1fa2da10c
 apps/api/README.md  1aed5f032abdc7e9
 apps/api/openapi.json  a184971417cca11f
-apps/api/package.json  f72c210000f43aa1
-apps/api/scripts/compose-openapi.ts  48a661b00831c0aa
+apps/api/package.json  dfc3bc0d1b6f6390
+apps/api/scripts/compose-openapi.ts  9c84897a345c02ef
 apps/api/src/app.ts  a8a07c2772a7478d
 apps/api/src/client-ip.ts  090073318f9920c2
 apps/api/src/index.ts  3654fa37741eca5d
@@ -85,10 +85,10 @@ apps/web/static/favicon.svg  0b4b302394834bcd
 apps/web/svelte.config.js  5c32ff96e10d06c8
 apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  e086e99de7be4159
-docker-compose.yml  93908e82f7492126
+docker-compose.yml  d1361d84e8ef1b30
 docker/ingress.conf.template  d76a6d1286ddaf00
 eslint.config.js  cfd85b071f7c820c
-package.json  aa5369de22c1da7b
+package.json  06cabe06ec67315f
 packages/backend/package.json  bb33cd33c03ac00e
 packages/backend/src/core/data-access/users.ts  3cee1df896a23f1b
 packages/backend/src/core/types.ts  ba34cd9886b09156
@@ -135,7 +135,7 @@ packages/mailer/tsconfig.json  e4fea59f1128156d
 packages/mailer/tsup.config.ts  e0972532bc769c60
 packages/openapi-client/README.md  36a7ebdbd5c420fd
 packages/openapi-client/openapi-ts.config.ts  d59449c09f848e52
-packages/openapi-client/package.json  c81e3b028380a243
+packages/openapi-client/package.json  7fd8fe85872e3026
 packages/openapi-client/src/generated/index.ts  7992a39d6cde5e05
 packages/openapi-client/src/index.ts  6916e18cebd77fa6
 packages/openapi-client/tsconfig.json  84222be0fa190e11
@@ -305,4 +305,4 @@ services/users/src/routes/me/schema.ts  dfb72772dfcd8402
 services/users/tsconfig.json  f5cee125f468d286
 services/users/tsup.config.ts  4098f426518bc0ab
 tsconfig.json  b0d46bed5bbdee97
-turbo.json  8dd495fcd7937706
+turbo.json  22a7b69a6e998980

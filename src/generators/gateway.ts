@@ -36,16 +36,13 @@ function deriveRuntime(deploy: GvKitConfig['choices']['deploy']): Runtime {
 }
 
 export function generateGateway(cfg: GvKitConfig): FileEntry[] {
-	return generateGatewayForTopology({ cfg, services: HONO_SERVICES })
+	return generateGatewayForTopology(cfg, HONO_SERVICES)
 }
 
-export function generateGatewayForTopology({
-	cfg,
-	services
-}: {
-	cfg: GvKitConfig
+export function generateGatewayForTopology(
+	cfg: GvKitConfig,
 	services: readonly HonoServiceTopology[]
-}): FileEntry[] {
+): FileEntry[] {
 	const project = cfg.choices.name
 	const runtime = deriveRuntime(cfg.choices.deploy)
 	const routes = honoPublicRoutes(services)
@@ -64,19 +61,19 @@ export function generateGatewayForTopology({
 		})
 	})
 	const entries: FileEntry[] = [
-		{ path: 'apps/api/package.json', content: renderGatewayPackageJson({ project, runtime }) },
+		{ path: 'apps/api/package.json', content: renderGatewayPackageJson(project, runtime) },
 		{ path: 'apps/api/tsconfig.json', content: renderGatewayTsconfig(runtime) },
 		{ path: 'apps/api/openapi.json', content: stringifyOpenApi(checkedOpenApi) },
 		{
 			path: 'apps/api/scripts/compose-openapi.ts',
-			content: renderGatewayOpenApiComposerSource({ project, runtime, services })
+			content: renderGatewayOpenApiComposerSource(project, services)
 		},
-		{ path: 'apps/api/src/app.ts', content: renderGatewayAppSource({ routes, services }) },
+		{ path: 'apps/api/src/app.ts', content: renderGatewayAppSource(routes, services) },
 		{
 			path: 'apps/api/src/index.ts',
-			content: renderGatewayEntrySource({ runtime, services })
+			content: renderGatewayEntrySource(runtime, services)
 		},
-		{ path: 'apps/api/README.md', content: renderGatewayReadme({ routes, runtime }) }
+		{ path: 'apps/api/README.md', content: renderGatewayReadme(routes, runtime) }
 	]
 
 	if (runtime === 'node') {
@@ -101,7 +98,7 @@ export function generateGatewayForTopology({
 	return entries
 }
 
-function renderGatewayPackageJson({ project, runtime }: { project: string; runtime: Runtime }): string {
+function renderGatewayPackageJson(project: string, runtime: Runtime): string {
 	const dependencies: Record<string, string> = { hono: '^4.6.0' }
 	const devDependencies: Record<string, string> = {
 		'@repo/tooling-typescript': 'workspace:*',
@@ -121,17 +118,17 @@ function renderGatewayPackageJson({ project, runtime }: { project: string; runti
 		devDependencies['@cloudflare/workers-types'] = '^5.20260825.1'
 		scripts['cf-typegen'] = CLOUDFLARE_TYPEGEN_SCRIPT
 		scripts.dev = `pnpm cf-typegen && wrangler dev --host api.localhost:${HONO_GATEWAY.development.port}`
-		scripts.build = 'wrangler deploy --dry-run --outdir=dist'
+		scripts.build = 'pnpm openapi:check && wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:staging'] =
-			'pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}"'
+			'pnpm cf-typegen && node ../../scripts/deploy-cloudflare-staging.mjs'
 		scripts.typecheck = 'tsc --noEmit'
 	} else {
 		dependencies['@hono/node-server'] = '^1.13.0'
 		devDependencies.tsup = '^8.3.0'
 		scripts.dev = 'tsx watch src/index.ts'
-		scripts.build = 'tsup src/index.ts --format esm --target=node24 --out-dir dist'
+		scripts.build = 'pnpm openapi:check && tsup src/index.ts --format esm --target=node24 --out-dir dist'
 		scripts.start = 'node dist/index.js'
 	}
 
@@ -171,13 +168,10 @@ function renderGatewayTsconfig(runtime: Runtime): string {
 	)}\n`
 }
 
-function renderGatewayAppSource({
-	routes,
-	services
-}: {
-	routes: readonly HonoPublicRoute[]
+function renderGatewayAppSource(
+	routes: readonly HonoPublicRoute[],
 	services: readonly HonoServiceTopology[]
-}): string {
+): string {
 	const gatewayTargets = services
 		.map((service) => `\t${service.internalTarget}?: GatewayTarget`)
 		.join('\n')
@@ -628,13 +622,10 @@ export function withAuthenticatedClientIp({
 `
 }
 
-function renderGatewayEntrySource({
-	runtime,
-	services
-}: {
-	runtime: Runtime
+function renderGatewayEntrySource(
+	runtime: Runtime,
 	services: readonly HonoServiceTopology[]
-}): string {
+): string {
 	if (runtime === 'cf-workers') {
 		return `import openApiDocument from '../openapi.json' with { type: 'json' }
 
@@ -853,15 +844,10 @@ ${serviceBindings}
 `
 }
 
-function renderGatewayOpenApiComposerSource({
-	project,
-	runtime,
-	services
-}: {
-	project: string
-	runtime: Runtime
+function renderGatewayOpenApiComposerSource(
+	project: string,
 	services: readonly HonoServiceTopology[]
-}): string {
+): string {
 	const renderPublicRouteContract = !hasLegacyHonoPublicRouteTable(services)
 	const fragmentFiles = services
 		.filter(
@@ -897,6 +883,7 @@ type OpenApiDocument = {
 	paths: Record<string, JsonObject>
 	components?: Record<string, Record<string, JsonValue>>
 	servers?: { url: string }[]
+	security?: Record<string, string[]>[]
 }
 type LoadedFragment = {
 	owner: string
@@ -1101,7 +1088,8 @@ export function composeOpenApi(fragments: readonly LoadedFragment[]): OpenApiDoc
 				if (target[name] === undefined) target[name] = structuredClone(value)
 			}
 		}
-		for (const [path, incoming] of Object.entries(fragment.document.paths)) {
+		for (const [path, pathItem] of Object.entries(fragment.document.paths)) {
+			const incoming = structuredClone(pathItem)
 ${pathOwnership}
 			const pathIdentity = path.replaceAll(/\\{[^}]+\\}/g, '{}')
 			const equivalentPath = pathIdentities.get(pathIdentity)
@@ -1156,6 +1144,7 @@ ${pathOwnership}
 				const owner = operationOwners.get(operationId)
 				if (owner) throw new Error('duplicate operationId "' + operationId + '" in "' + owner + '" and "' + fragment.owner + '"')
 				operationOwners.set(operationId, fragment.owner)
+				if (fragment.document.security !== undefined && !Object.hasOwn(operation, 'security')) operation.security = structuredClone(fragment.document.security)
 			}
 			const current = paths[path]
 			if (!current) {
@@ -1213,16 +1202,13 @@ async function main(): Promise<void> {
 	console.log('Wrote apps/api/openapi.json (sha256:' + hash + ')')
 }
 
-${renderGatewayOpenApiMainSource(runtime)}
+${renderGatewayOpenApiMainSource()}
 `
 }
 
-function renderGatewayOpenApiMainSource(runtime: Runtime): string {
-	const guard =
-		runtime === 'cf-workers'
-			? 'const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)\nif (isMain)'
-			: 'if (import.meta.main)'
-	return `${guard} {
+function renderGatewayOpenApiMainSource(): string {
+	return `const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+if (isMain) {
 \tmain().catch((error: unknown) => {
 \t\tconsole.error(error instanceof Error ? error.message : String(error))
 \t\tprocess.exitCode = 1
@@ -1230,13 +1216,10 @@ function renderGatewayOpenApiMainSource(runtime: Runtime): string {
 }`
 }
 
-function renderGatewayReadme({
-	routes,
-	runtime
-}: {
-	routes: readonly HonoPublicRoute[]
+function renderGatewayReadme(
+	routes: readonly HonoPublicRoute[],
 	runtime: Runtime
-}): string {
+): string {
 	const cloudflareDeployment =
 		runtime === 'cf-workers'
 			? `

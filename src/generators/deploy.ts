@@ -11,6 +11,13 @@ import {
 	USERS_SERVICE
 } from './hono-topology.js'
 import { generateIntegratedDeploy } from './integrated-deploy.js'
+import { previewAuthorizationScript } from './preview-authorization.js'
+import {
+	previewMigrationPackageLock,
+	previewMigrationScript
+} from './preview-migrations.js'
+import { previewCredentialPolicyScript } from './preview-credential-policy.js'
+import { stagingDestinationScript } from './staging-destination.js'
 
 export function generateDeploy(cfg: GvKitConfig): FileEntry[] {
 	if (cfg.choices.backend === 'inside-frontend') return generateIntegratedDeploy(cfg)
@@ -41,9 +48,20 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		},
 		{
 			path: '.github/workflows/deploy-staging.yml',
-			content: deployStagingWorkflow({ project, db, cfg })
+			content: previewEnvironmentSecrets(deployStagingWorkflow({ project, db, cfg }))
 		},
-		{ path: '.github/workflows/cleanup-staging.yml', content: cleanupStagingWorkflow(db) },
+		{ path: '.github/workflows/cleanup-staging.yml', content: previewEnvironmentSecrets(cleanupStagingWorkflow(db)) },
+		{
+			path: 'scripts/verify-cloudflare-preview-policy.mjs',
+			content: previewCredentialPolicyScript(['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', ...(db === 'postgres' ? ['NEON_API_KEY'] : []), ...previewAuthSecretKeys(cfg)].map((key) => 'PREVIEW_' + key))
+		},
+		{ path: '.github/workflows/check-pr.yml', content: checkPullRequestWorkflow(cfg) },
+		{ path: 'scripts/authorize-cloudflare-preview.mjs', content: previewAuthorizationScript() },
+		{ path: 'scripts/migrate-cloudflare-preview.mjs', content: previewMigrationScript(db === 'sqlite' ? 'd1' : 'neon') },
+		{
+			path: 'scripts/preview-migration-package-lock.json',
+			content: previewMigrationPackageLock(db === 'sqlite' ? 'd1' : 'neon')
+		},
 		{
 			path: 'scripts/cloudflare-preview-name.mjs',
 			content: cloudflarePreviewNameScript(cfg)
@@ -55,6 +73,10 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		{
 			path: 'scripts/prepare-cloudflare-preview.mjs',
 			content: prepareCloudflarePreviewScript()
+		},
+		{
+			path: 'scripts/deploy-cloudflare-staging.mjs',
+			content: stagingDestinationScript(cfg)
 		},
 		{
 			path: 'scripts/cleanup-cloudflare-preview-workers.sh',
@@ -77,6 +99,42 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 			content: resolveCloudflareDeployRangeScript()
 		}
 	]
+}
+
+function previewEnvironmentSecrets(workflow: string): string {
+	return workflow.replaceAll(/secrets\.(?!PREVIEW_POLICY_TOKEN\b)([A-Z_]+)/g, 'secrets.PREVIEW_$1')
+}
+
+function checkPullRequestWorkflow(cfg: GvKitConfig): string {
+	return `name: check-pr
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      CI: 'true'${workflowVariableEnv(marketingPublicEnvKeys(cfg)).replaceAll('          ', '      ')}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm lint
+      - run: pnpm build
+`
 }
 
 function resolveCloudflareDeployRangeScript(): string {
@@ -921,7 +979,7 @@ function honoDeploymentSteps({
 			const isMarketing = label === 'marketing'
 			return `      - name: Deploy ${label} Worker
         run: |
-${isMarketing && marketingVariableChecks ? `${marketingVariableChecks}\n` : ''}          if [ "$DEPLOY_ALL" = "true" ]; then
+${cfg.choices.apiClient === 'hey-api' ? '          pnpm codegen:check\n' : ''}${isMarketing && marketingVariableChecks ? `${marketingVariableChecks}\n` : ''}          if [ "$DEPLOY_ALL" = "true" ]; then
             pnpm turbo run build --filter=${packageName}
             pnpm --filter ${packageName} deploy:${stage}
           else
@@ -1060,10 +1118,9 @@ function deployStagingWorkflow({
 		? ['PUBLIC_TURNSTILE_SITE_KEY']
 		: []
 	const previewIngressGate = honoPreviewIngressGateJob(previewPublicKeys)
-	const previewDbJob = (db === 'sqlite' ? d1PreviewDbJob() : neonPreviewDbJob()).replace(
-		'  preview-db:\n',
-		'  preview-db:\n    needs: preview-ingress\n'
-	)
+	const previewDbJob = (db === 'sqlite' ? d1PreviewDbJob() : neonPreviewDbJob())
+		.replace('  preview-db:\n', '  preview-db:\n    environment: cloudflare-preview\n    needs: [authorize, preview-ingress]\n' + previewAuthorizationEnv())
+		.replace('    steps:\n', '    steps:\n' + previewAuthorizationCheckout('') + previewAuthorizationRecheck(''))
 	const stagingConfigStep = writeStagingWranglerConfigStep(db)
 	const buildTargets = [
 		{
@@ -1122,6 +1179,7 @@ function deployStagingWorkflow({
           set -euo pipefail
           secret_dir="$RUNNER_TEMP/gateway-preview-secrets"
           umask 077
+          node trusted-source/scripts/authorize-cloudflare-preview.mjs --recheck
           node trusted-source/scripts/write-cloudflare-preview-secrets.mjs "$secret_dir"
           echo "directory=$secret_dir" >> "$GITHUB_OUTPUT"
         env:
@@ -1142,23 +1200,49 @@ ${privateSecretEnv}
 name: deploy-staging
 
 on:
-  pull_request_target:
-    types: [opened, synchronize, reopened]
-    paths-ignore:
-      - '**.md'
-      - '.github/**'
   workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Open PR number to authorize
+        required: true
+        type: string
+      head_sha:
+        description: Full 40-character PR head SHA reviewed by the maintainer
+        required: true
+        type: string
 
 concurrency:
-  group: staging-pr-\${{ github.event.pull_request.number || github.run_id }}
+  group: staging-pr-\${{ inputs.pr_number }}
   cancel-in-progress: true
 
 jobs:
+  authorize:
+    if: github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+${previewAuthorizationEnv(false)}    outputs:
+      revision: \${{ steps.authorization.outputs.revision }}
+      pr_number: \${{ steps.authorization.outputs.pr_number }}
+      head_sha: \${{ steps.authorization.outputs.head_sha }}
+      head_repository: \${{ steps.authorization.outputs.head_repository }}
+      repository_id: \${{ steps.authorization.outputs.repository_id }}
+      trusted_sha: \${{ steps.authorization.outputs.trusted_sha }}
+      alias: \${{ steps.authorization.outputs.alias }}
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: \${{ github.workflow_sha }}
+          persist-credentials: false
+      - id: authorization
+        run: node scripts/authorize-cloudflare-preview.mjs --authorize
 ${previewIngressGate}
 ${previewDbJob}
 
   build-preview:
-    needs: preview-db
+    needs: [authorize, preview-db]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -1173,11 +1257,13 @@ ${previewDbJob}
         with:
           fetch-depth: 0
           filter: blob:none
-          ref: \${{ github.event.pull_request.head.sha || github.sha }}
+          repository: \${{ needs.authorize.outputs.head_repository }}
+          ref: \${{ needs.authorize.outputs.head_sha }}
+          persist-credentials: false
       - id: meta
         run: echo "short_sha=$(printf '%s' "$PREVIEW_SHA" | cut -c1-7)" >> "$GITHUB_OUTPUT"
         env:
-          PREVIEW_SHA: \${{ github.event.pull_request.head.sha || github.sha }}
+          PREVIEW_SHA: \${{ needs.authorize.outputs.head_sha }}
       - uses: pnpm/action-setup@v4
         with:
           version: 11.1.1
@@ -1191,7 +1277,7 @@ ${stagingConfigStep}
 
       - name: Build untrusted preview source and package passive Worker bundles
         run: |
-          pnpm turbo run build${buildFilters}
+${cfg.choices.apiClient === 'hey-api' ? '          pnpm codegen:check\n' : ''}          pnpm turbo run build${buildFilters}
 ${bundleCommands}
         env:
           STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}${buildPublicEnv}
@@ -1199,16 +1285,19 @@ ${bundleCommands}
       - name: Upload passive preview bundle
         uses: actions/upload-artifact@v4
         with:
-          name: cloudflare-preview-build-\${{ needs.preview-db.outputs.alias }}-\${{ github.run_id }}
+          name: cloudflare-preview-build-\${{ needs.authorize.outputs.alias }}-\${{ needs.authorize.outputs.head_sha }}-\${{ github.run_id }}
           path: |
 ${artifactPaths}
           include-hidden-files: true
+          overwrite: true
           if-no-files-found: error
           retention-days: 1
 
   deploy:
-    needs: [preview-db, build-preview]
+    needs: [authorize, preview-db, build-preview]
+    environment: cloudflare-preview
     runs-on: ubuntu-latest
+${previewAuthorizationEnv()}
     permissions:
       actions: read
       contents: read
@@ -1218,21 +1307,24 @@ ${artifactPaths}
         uses: actions/checkout@v4
         with:
           path: trusted-source
-          ref: \${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
+          ref: \${{ needs.authorize.outputs.trusted_sha }}
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
       - name: Download passive preview bundle
         uses: actions/download-artifact@v4
         with:
-          name: cloudflare-preview-build-\${{ needs.preview-db.outputs.alias }}-\${{ github.run_id }}
+          name: cloudflare-preview-build-\${{ needs.authorize.outputs.alias }}-\${{ needs.authorize.outputs.head_sha }}-\${{ github.run_id }}
           path: preview-artifact
 
 ${migrationStep}
 
 ${privateSecretsStep}
       - name: Publish prebuilt preview Workers from trusted code
-        run: sh trusted-source/scripts/publish-cloudflare-preview.sh
+        run: |
+          node trusted-source/scripts/authorize-cloudflare-preview.mjs --recheck
+          sh trusted-source/scripts/publish-cloudflare-preview.sh
         env:
           PREVIEW_ARTIFACT: \${{ github.workspace }}/preview-artifact
           PREVIEW_SECRETS_DIR: \${{ steps.preview_secrets.outputs.directory }}
@@ -1262,14 +1354,15 @@ ${privateSecretsStep}
             node trusted-source/scripts/cloudflare-preview-name.mjs --validate-name "$worker_name" "$alias" >/dev/null
           done
           mkdir -p "$RUNNER_TEMP/trusted-preview-inventory"
-          jq --arg repository_id "$repository_id" '
-            .schemaVersion = 2 | .repositoryId = $repository_id
+          jq --arg repository_id "$repository_id" --argjson revision "$AUTHORIZED_REVISION" '
+            .schemaVersion = 2 | .repositoryId = $repository_id | .authorizedRevision = $revision
           ' "$manifest" > "$RUNNER_TEMP/trusted-preview-inventory/cloudflare-preview-manifest.json"
       - name: Record exact preview deployment inventory
         uses: actions/upload-artifact@v4
         with:
           name: cloudflare-preview-inventory-\${{ needs.preview-db.outputs.alias }}
           path: \${{ runner.temp }}/trusted-preview-inventory/cloudflare-preview-manifest.json
+          overwrite: true
           if-no-files-found: error
           retention-days: 90
 
@@ -1278,8 +1371,8 @@ ${privateSecretsStep}
         run: rm -rf "$RUNNER_TEMP/gateway-preview-secrets"
 
       - uses: marocchino/sticky-pull-request-comment@v2
-        if: github.event_name == 'pull_request_target'
         with:
+          number: \${{ needs.authorize.outputs.pr_number }}
           header: staging-deploy
           message: |
             **Staging deployed**
@@ -1290,7 +1383,7 @@ ${privateSecretsStep}
             | canonical API | \`\${{ needs.build-preview.outputs.api_origin }}\` |
 
             **Commit**: \`\${{ needs.build-preview.outputs.short_sha }}\`
-            **Updated**: \${{ github.event.pull_request.updated_at }}
+            **Authorized SHA**: \${{ needs.authorize.outputs.head_sha }}
 `
 }
 
@@ -1314,44 +1407,49 @@ function writeStagingWranglerConfigStep(db: GvKitConfig['choices']['db']): strin
 ${envLines}`
 }
 
+function previewAuthorizationEnv(recheck = true): string {
+	return `    env:
+      GH_TOKEN: \${{ github.token }}
+      PREVIEW_POLICY_TOKEN: \${{ secrets.PREVIEW_POLICY_TOKEN }}
+      GITHUB_WORKFLOW_SHA: \${{ github.workflow_sha }}
+      GITHUB_WORKFLOW_REF: \${{ github.workflow_ref }}
+      GITHUB_TRIGGERING_ACTOR: \${{ github.triggering_actor }}
+      PREVIEW_PR_NUMBER: \${{ inputs.pr_number }}
+      PREVIEW_HEAD_SHA: \${{ inputs.head_sha }}
+${recheck ? '      AUTHORIZED_REVISION: ${{ needs.authorize.outputs.revision }}\n' : ''}`
+}
+
+function previewAuthorizationCheckout(prefix: string): string {
+	return `      - uses: actions/checkout@v4
+        with:
+          ref: \${{ needs.authorize.outputs.trusted_sha }}
+          persist-credentials: false
+${prefix ? `          path: ${prefix}\n` : ''}`
+}
+
+function previewAuthorizationRecheck(prefix: string): string {
+	return `      - name: Revalidate authorized preview revision
+        run: node ${prefix ? prefix + '/' : ''}scripts/authorize-cloudflare-preview.mjs --recheck
+`
+}
+
 function trustedPreviewMigrationStep(db: GvKitConfig['choices']['db']): string {
-	if (db === 'sqlite') {
-		return `      - name: Apply preview D1 migrations with a trusted pinned tool
+	return `      - name: Apply preview ${db === 'sqlite' ? 'D1' : 'Neon'} migrations with a trusted pinned tool
         run: |
           set -euo pipefail
-          cat > trusted-source/packages/db/wrangler.preview-migrations.jsonc <<'JSON'
-          {
-            "name": "preview-migrations",
-            "compatibility_date": "2026-08-24",
-            "d1_databases": [{
-              "binding": "DB",
-              "database_name": "\${{ needs.preview-db.outputs.d1_database_name }}",
-              "database_id": "\${{ needs.preview-db.outputs.d1_database_id }}",
-              "migrations_dir": "migrations"
-            }]
-          }
-          JSON
-          npx wrangler@${WRANGLER_VERSION} d1 migrations apply "\${{ needs.preview-db.outputs.d1_database_name }}" --remote --config trusted-source/packages/db/wrangler.preview-migrations.jsonc
+          node trusted-source/scripts/authorize-cloudflare-preview.mjs --recheck
+          node trusted-source/scripts/migrate-cloudflare-preview.mjs
         env:
+          STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}${db === 'sqlite' ? `
+          STAGING_D1_DATABASE_NAME: \${{ needs.preview-db.outputs.d1_database_name }}
+          STAGING_D1_DATABASE_ID: \${{ needs.preview-db.outputs.d1_database_id }}
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}`
-	}
-	return `      - name: Apply preview Neon migrations with a trusted pinned tool
-        run: |
-          set -euo pipefail
-          cat > "$RUNNER_TEMP/drizzle.preview.config.mjs" <<'JS'
-          export default {
-            out: process.env.PREVIEW_MIGRATIONS,
-            dialect: 'postgresql',
-            dbCredentials: { url: process.env.DATABASE_URL },
-            strict: true,
-            verbose: true
-          }
-          JS
-          npx drizzle-kit@0.31.8 migrate --config "$RUNNER_TEMP/drizzle.preview.config.mjs"
-        env:
-          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}
-          PREVIEW_MIGRATIONS: \${{ github.workspace }}/trusted-source/packages/db/migrations`
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}` : `
+          STAGING_NEON_BRANCH_NAME: \${{ needs.preview-db.outputs.neon_branch_name }}
+          STAGING_NEON_BRANCH_ID: \${{ needs.preview-db.outputs.neon_branch_id }}
+          NEON_PROJECT_ID: \${{ vars.NEON_PROJECT_ID }}
+          NEON_API_KEY: \${{ secrets.NEON_API_KEY }}
+          DATABASE_URL: \${{ needs.preview-db.outputs.database_url }}`}`
 }
 
 function honoPreviewIngressGateJob(publicKeys: string[]): string {
@@ -1364,17 +1462,18 @@ ${publicKeys.map((key) => `          test -n "$${key}"`).join('\n')}
         env:${workflowVariableEnv(publicKeys)}
 `
 	return `  preview-ingress:
-    if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    environment: cloudflare-preview
+    needs: authorize
     runs-on: ubuntu-latest
-    permissions:
+${previewAuthorizationEnv()}    permissions:
       contents: read
+      pull-requests: read
+      actions: read
     steps:
-      - name: Checkout trusted ingress verification
-        uses: actions/checkout@v4
-        with:
-          ref: \${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}
-${publicVariableValidation}      - name: Verify managed preview ingress
-        run: node scripts/verify-cloudflare-preview-ingress.mjs
+${previewAuthorizationCheckout('')}${publicVariableValidation}      - name: Verify managed preview ingress
+        run: |
+          node scripts/authorize-cloudflare-preview.mjs --recheck
+          node scripts/verify-cloudflare-preview-ingress.mjs
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_PREVIEW_WEB_DOMAIN: \${{ vars.CLOUDFLARE_PREVIEW_WEB_DOMAIN }}
@@ -1383,7 +1482,7 @@ ${publicVariableValidation}      - name: Verify managed preview ingress
 `
 }
 
-const PREVIEW_ALIAS_SCRIPT = `preview_id="\${{ github.event.pull_request.number || github.run_id }}"
+const PREVIEW_ALIAS_SCRIPT = `preview_id="\${{ needs.authorize.outputs.pr_number }}"
           if ! printf '%s' "$preview_id" | grep -Eq '^[1-9][0-9]*$' || [ "\${#preview_id}" -gt 29 ]; then
             echo "Preview id must be a bounded positive integer." >&2
             exit 1
@@ -1401,6 +1500,8 @@ function d1PreviewDbJob(): string {
       d1_database_id: \${{ steps.d1.outputs.database_id }}
     permissions:
       contents: read
+      pull-requests: read
+      actions: read
     steps:
       - id: meta
         run: |
@@ -1412,6 +1513,7 @@ function d1PreviewDbJob(): string {
         name: Create or reuse D1 preview database
         run: |
           set -euo pipefail
+          node scripts/authorize-cloudflare-preview.mjs --recheck
           db_name="preview-\${{ github.repository_id }}-d1-\${{ steps.meta.outputs.alias }}"
           db_id=$(npx wrangler@${WRANGLER_VERSION} d1 list --json | jq -r --arg name "$db_name" '.[] | select(.name == $name) | (.uuid // .id // "")' | head -n 1)
           if [ -z "$db_id" ]; then
@@ -1439,6 +1541,8 @@ function neonPreviewDbJob(): string {
       database_url: \${{ steps.create_neon_branch.outputs.db_url_pooled }}
     permissions:
       contents: read
+      pull-requests: read
+      actions: read
     steps:
       - id: meta
         run: |
@@ -1446,15 +1550,18 @@ function neonPreviewDbJob(): string {
           echo "neon_branch_name=preview-\${{ github.repository_id }}-neon-$alias" >> "$GITHUB_OUTPUT"
       - id: expiration
         run: echo "expires_at=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
-      - id: create_neon_branch
+${previewAuthorizationRecheck('')}      - id: create_neon_branch
         name: Create or reuse Neon preview branch
-        uses: neondatabase/create-branch-action@v6
+        # v6
+        uses: neondatabase/create-branch-action@fb620d43d4c565abaf088b848a4e28e5c4ea4d9c
         with:
           project_id: \${{ vars.NEON_PROJECT_ID }}
           branch_name: \${{ steps.meta.outputs.neon_branch_name }}
           api_key: \${{ secrets.NEON_API_KEY }}
           expires_at: \${{ steps.expiration.outputs.expires_at }}`
 }
+
+const previewCleanupCondition = "always() && steps.trusted_checkout.outcome == 'success' && steps.trusted_inventory.outcome == 'success' && steps.node_setup.outcome == 'success' && steps.credential_policy.outcome == 'success' && steps.alias.outcome == 'success'"
 
 function cleanupStagingWorkflow(db: GvKitConfig['choices']['db']): string {
 	const previewDbCleanupStep =
@@ -1479,6 +1586,7 @@ concurrency:
 
 jobs:
   cleanup:
+    environment: cloudflare-preview
     if: github.event_name != 'workflow_dispatch' || github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     permissions:
@@ -1486,20 +1594,28 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      - name: Checkout trusted preview inventory
+      - id: trusted_checkout
+        name: Checkout trusted preview inventory
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
           ref: \${{ github.event.repository.default_branch }}
-      - name: Require trusted preview inventory
+      - id: trusted_inventory
+        name: Require trusted preview inventory
         run: |
           if [ ! -f scripts/cloudflare-preview-name.mjs ] || [ ! -f scripts/cleanup-cloudflare-preview-workers.sh ]; then
             echo "Trusted default-branch code is incomplete; preview cleanup cannot inventory resources." >&2
             exit 1
           fi
-      - uses: actions/setup-node@v4
+      - id: node_setup
+        uses: actions/setup-node@v4
         with:
           node-version: '24'
+      - id: credential_policy
+        name: Verify external preview credential protection
+        run: node scripts/verify-cloudflare-preview-policy.mjs --verify
+        env:
+          PREVIEW_POLICY_TOKEN: \${{ secrets.PREVIEW_POLICY_TOKEN }}
       - id: alias
         name: Validate preview alias
         run: |
@@ -1513,9 +1629,10 @@ jobs:
         run: |
           set -euo pipefail
           inventory_dir="$RUNNER_TEMP/cloudflare-preview-inventories"
-          mkdir -p "$inventory_dir"
+          rm -rf "$inventory_dir"
+          pending_dir=$(mktemp -d "$RUNNER_TEMP/cloudflare-preview-inventories.XXXXXX")
           pages=$(mktemp)
-          trap 'rm -f "$pages" "$RUNNER_TEMP"/cloudflare-preview-inventory-*.zip' EXIT HUP INT TERM
+          trap 'rm -rf "$pending_dir"; rm -f "$pages" "$RUNNER_TEMP"/cloudflare-preview-inventory-*.zip' EXIT HUP INT TERM
           gh api --paginate --slurp "/repos/$GITHUB_REPOSITORY/actions/artifacts?per_page=100" > "$pages"
           if ! jq -e 'type == "array" and length <= 100 and all(.[]; (.artifacts | type) == "array")' "$pages" >/dev/null; then
             echo "GitHub returned a malformed preview inventory artifact listing." >&2
@@ -1540,7 +1657,7 @@ jobs:
             run=$(gh api "/repos/$GITHUB_REPOSITORY/actions/runs/$run_id")
             if ! printf '%s' "$run" | jq -e --arg repository_id "$EXPECTED_REPOSITORY_ID" --arg default_branch "$EXPECTED_DEFAULT_BRANCH" --arg preview_alias "\${{ steps.alias.outputs.alias }}" '
               .name == "deploy-staging" and .path == ".github/workflows/deploy-staging.yml" and
-              .status == "completed" and .conclusion == "success" and
+              .status == "completed" and
               (.repository.id | tostring) == $repository_id and
               (
                 .event == "pull_request_target" or
@@ -1553,7 +1670,7 @@ jobs:
                 )
               )
             ' >/dev/null; then
-              echo "Preview inventory artifact $artifact_id has no trusted successful deployment run." >&2
+              echo "Preview inventory artifact $artifact_id has no trusted completed deployment run." >&2
               exit 1
             fi
             event=$(printf '%s' "$run" | jq -r '.event')
@@ -1568,10 +1685,28 @@ jobs:
               exit 1
             fi
             zip="$RUNNER_TEMP/cloudflare-preview-inventory-$artifact_id.zip"
-            manifest="$inventory_dir/$artifact_id.$event.json"
+            manifest="$pending_dir/$artifact_id.$event.json"
             gh api "/repos/$GITHUB_REPOSITORY/actions/artifacts/$artifact_id/zip" > "$zip"
             if ! unzip -p "$zip" cloudflare-preview-manifest.json > "$manifest"; then
               echo "Preview inventory artifact $artifact_id is malformed." >&2
+              exit 1
+            fi
+            if ! jq -se --arg alias "\${{ steps.alias.outputs.alias }}" --arg repository_id "$EXPECTED_REPOSITORY_ID" --arg event "$event" '
+              length == 1 and (.[0] |
+              type == "object" and .alias == $alias and
+              (.project | type == "string" and test("^[a-z0-9]+(-[a-z0-9]+)*$") and length <= 255) and
+              (.workers | type == "array" and all(.[]; (.name | type) == "string")) and
+              .database.kind == "${db === 'sqlite' ? 'd1' : 'neon'}" and
+              (.database.id | type == "string" and test("${db === 'sqlite' ? '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$' : '^br-[A-Za-z0-9_-]+$'}")) and
+              (
+                ($event == "pull_request" and .schemaVersion == 1 and .database.name == (.project + "-db-" + $alias)) or
+                (($event == "pull_request_target" or $event == "workflow_dispatch") and .schemaVersion == 2 and
+                  .repositoryId == $repository_id and
+                  (.database.name | type == "string" and test("^preview-" + $repository_id + "-[a-z0-9]+(-[a-z0-9]+)*-" + $alias + "$")))
+              )
+              )
+            ' "$manifest" >/dev/null; then
+              echo "Preview inventory artifact $artifact_id has an invalid manifest identity." >&2
               exit 1
             fi
             if [ "$event" = "pull_request" ]; then
@@ -1587,6 +1722,7 @@ jobs:
               fi
             fi
           done
+          mv "$pending_dir" "$inventory_dir"
           echo "authenticated_count=$artifact_count" >> "$GITHUB_OUTPUT"
         env:
           EXPECTED_DEFAULT_BRANCH: \${{ github.event.repository.default_branch }}
@@ -1595,6 +1731,7 @@ jobs:
 
       - id: worker_cleanup
         name: Delete staging Workers
+        if: ${previewCleanupCondition}
         run: sh scripts/cleanup-cloudflare-preview-workers.sh "\${{ steps.alias.outputs.alias }}"
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -1607,6 +1744,10 @@ ${previewDbCleanupStep}
         if: always()
         run: |
           failures=0
+          if [ "$INVENTORY_OUTCOME" != "success" ]; then
+            echo "Preview inventory collection outcome: $INVENTORY_OUTCOME" >&2
+            failures=$((failures + 1))
+          fi
           if [ "$WORKER_CLEANUP_OUTCOME" != "success" ]; then
             echo "Worker cleanup outcome: $WORKER_CLEANUP_OUTCOME" >&2
             failures=$((failures + 1))
@@ -1625,6 +1766,7 @@ ${previewDbCleanupStep}
           fi
           echo "Preview cleanup removed every discovered resource."
         env:
+          INVENTORY_OUTCOME: \${{ steps.preview_inventories.outcome }}
           WORKER_CLEANUP_OUTCOME: \${{ steps.worker_cleanup.outcome }}
           DATABASE_CLEANUP_OUTCOME: \${{ steps.database_cleanup.outcome }}
           AUTHENTICATED_INVENTORY_COUNT: \${{ steps.preview_inventories.outputs.authenticated_count }}
@@ -1644,7 +1786,7 @@ ${previewDbCleanupStep}
 function d1PreviewDbCleanupStep(): string {
 	return `      - id: database_cleanup
         name: Delete preview D1 databases
-        if: always() && steps.alias.outcome == 'success'
+        if: ${previewCleanupCondition}
         run: |
           set -euo pipefail
           repository_id="\${{ github.repository_id }}"
@@ -1736,13 +1878,13 @@ function d1PreviewDbCleanupStep(): string {
         env:
           CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-          PREVIEW_MANIFEST_DIR: \${{ runner.temp }}/cloudflare-preview-inventories`
+          PREVIEW_MANIFEST_DIR: \${{ steps.preview_inventories.outcome == 'success' && format('{0}/cloudflare-preview-inventories', runner.temp) || '' }}`
 }
 
 function neonPreviewDbCleanupStep(): string {
 	return `      - id: database_cleanup
         name: Delete preview Neon branches
-        if: always() && steps.alias.outcome == 'success'
+        if: ${previewCleanupCondition}
         run: |
           set -euo pipefail
           repository_id="\${{ github.repository_id }}"
@@ -1860,7 +2002,7 @@ function neonPreviewDbCleanupStep(): string {
         env:
           NEON_PROJECT_ID: \${{ vars.NEON_PROJECT_ID }}
           NEON_API_KEY: \${{ secrets.NEON_API_KEY }}
-          PREVIEW_MANIFEST_DIR: \${{ runner.temp }}/cloudflare-preview-inventories`
+          PREVIEW_MANIFEST_DIR: \${{ steps.preview_inventories.outcome == 'success' && format('{0}/cloudflare-preview-inventories', runner.temp) || '' }}`
 }
 
 interface DockerOpts {
@@ -1874,6 +2016,7 @@ interface DockerOpts {
 	wantsUmami: boolean
 	wantsPosthog: boolean
 	emailProvider: 'resend' | 'notifuse' | null
+	hasApiClient: boolean
 }
 
 function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
@@ -1887,7 +2030,8 @@ function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
 		wantsEmailOTP: cfg.choices.auth.includes('emailOTP'),
 		wantsUmami: cfg.choices.monitoring.includes('umami'),
 		wantsPosthog: cfg.choices.monitoring.includes('posthog'),
-		emailProvider: cfg.choices.email === 'skip' ? null : cfg.choices.email
+		emailProvider: cfg.choices.email === 'skip' ? null : cfg.choices.email,
+		hasApiClient: cfg.choices.apiClient === 'hey-api'
 	}
 
 	return [
@@ -2011,7 +2155,7 @@ ${publicBuildEnv}
 COPY . .
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \\
     --mount=type=cache,id=turbo,target=/repo/.turbo \\
-    pnpm exec turbo run build --filter=\${TURBO_FILTER}
+${opts.hasApiClient ? '    pnpm codegen:check && \\\n' : ''}    pnpm exec turbo run build --filter=\${TURBO_FILTER}
 
 FROM builder AS deployer
 ARG TURBO_FILTER
@@ -2228,7 +2372,12 @@ function gatewayService(opts: DockerOpts): string {
         condition: service_healthy
       ${USERS_SERVICE.transport.docker.serviceName}:
         condition: service_healthy
-${healthcheckLines(HONO_GATEWAY.development.port, '/api/healthz').join('\n')}`
+    healthcheck:
+      test: ${JSON.stringify(['CMD', 'node', '--eval', `(async () => { const origin = new URL(process.env.API_PUBLIC_ORIGIN); const response = await fetch('http://127.0.0.1:${HONO_GATEWAY.development.port}/api/healthz', { headers: { 'x-forwarded-host': origin.host, 'x-forwarded-proto': origin.protocol.slice(0, -1), 'x-gateway-ingress-secret': process.env.GATEWAY_TRUSTED_INGRESS_SECRET ?? '' }, signal: AbortSignal.timeout(2000), redirect: 'error' }); process.exit(response.ok ? 0 : 1); })().catch(() => process.exit(1))`])}
+      interval: 15s
+      timeout: 3s
+      retries: 3
+      start_period: 10s`
 }
 
 function ingressService(): string {

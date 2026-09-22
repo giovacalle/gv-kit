@@ -23,7 +23,7 @@
 .env.example  d397669d142208d5
 .github/workflows/cleanup-staging.yml  b01571768d43d324
 .github/workflows/deploy-production.yml  ac42f6686a3e4fe6
-.github/workflows/deploy-staging.yml  cbfe479673c6461e
+.github/workflows/deploy-staging.yml  72e8c660f1b756d8
 .gitignore  a25779a56f76a8b9
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4

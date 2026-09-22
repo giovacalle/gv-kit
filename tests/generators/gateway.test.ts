@@ -29,6 +29,20 @@ function content(entries: ReturnType<typeof generateGateway>, path: string): str
 }
 
 describe('generateGateway', () => {
+	test.each(['hono-cf-workers-passwordless', 'hono-docker-full', 'hono-skip-deploy'])(
+		'%s validates the checked contract before bundling and has a Node-compatible main entry',
+		(fixture) => {
+			const entries = generateFixture(fixture)
+			const pkg = JSON.parse(content(entries, 'apps/api/package.json'))
+			expect(pkg.scripts.build).toMatch(/^pnpm openapi:check && (wrangler|tsup) /)
+			expect(pkg.scripts['openapi:check']).toBe('tsx scripts/compose-openapi.ts --check')
+			expect(pkg.scripts['openapi:compose']).toBe('tsx scripts/compose-openapi.ts')
+			const composer = content(entries, 'apps/api/scripts/compose-openapi.ts')
+			expect(composer).toContain('resolve(process.argv[1]) === fileURLToPath(import.meta.url)')
+			expect(composer).not.toContain('import.meta.main')
+		}
+	)
+
 	test('Node entry keeps bodyless response explanations on one line', () => {
 		const consecutiveComments = /^[\t ]*\/\/[^\n]*\n[\t ]*\/\//m
 		const originalExplanation = [
@@ -80,7 +94,7 @@ describe('generateGateway', () => {
 			{ ...USERS_SERVICE, publicPrefixes: ['/api/v1/users', '/api/profiles'] }
 		])
 		const configuredComposer = content(
-			generateGatewayForTopology({ cfg, services: configuredServices }),
+			generateGatewayForTopology(cfg, configuredServices),
 			'apps/api/scripts/compose-openapi.ts'
 		)
 
@@ -99,7 +113,7 @@ describe('generateGateway', () => {
 			{ ...AUTH_SERVICE, publicPrefixes: ['/api/v1/invoices'] },
 			{ ...USERS_SERVICE, publicPrefixes: ['/api/v1/users'] }
 		])
-		const entries = generateGatewayForTopology({ cfg, services })
+		const entries = generateGatewayForTopology(cfg, services)
 		const composer = content(entries, 'apps/api/scripts/compose-openapi.ts')
 		const transpiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' })
 		const composerUrl = URL.createObjectURL(
@@ -149,7 +163,7 @@ describe('generateGateway', () => {
 			},
 			{ ...USERS_SERVICE, publicPrefixes: ['/api/v1/users', '/api/profiles'] }
 		])
-		const entries = generateGatewayForTopology({ cfg, services })
+		const entries = generateGatewayForTopology(cfg, services)
 		const appSource = content(entries, 'apps/api/src/app.ts')
 		const composer = content(entries, 'apps/api/scripts/compose-openapi.ts')
 		const readme = content(entries, 'apps/api/README.md')

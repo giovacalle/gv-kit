@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { verifyGatewayBuildContract } from './verify-gateway-build-contract.js'
 import { createHash } from 'node:crypto'
 import { access, mkdir, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { basename, dirname, join, relative, resolve } from 'node:path'
@@ -981,6 +982,7 @@ type WorkflowRunDefaults = {
 }
 
 type WorkflowJob = {
+	environment?: string
 	defaults?: WorkflowRunDefaults
 	env?: Record<string, string>
 	needs?: string | string[]
@@ -1006,28 +1008,29 @@ type CloudflareWorkflowStructure = {
 }
 
 const TRUSTED_PREVIEW_REF =
-	'${{ github.event.pull_request.base.sha || github.event.repository.default_branch }}'
+	'${{ needs.authorize.outputs.trusted_sha }}'
 const CREDENTIAL_REFERENCE =
 	/\$\{\{(?:(?!\}\})[\s\S])*\bsecrets\b(?:(?!\}\})[\s\S])*\}\}|\bneeds\s*(?:\.|\[)[^}]*\bdatabase_url\b/
 const TRUSTED_PREVIEW_BUILD_HASHES = new Set([
-	'68dd1c0ebf22ccfde1384b944dace657672a3c65a07e97a2a8b44e655186b6aa',
-	'2346d7df60877bab7bf7876faf3662eed696eaed0fbd8dbcc4dcdf3748620f8b',
-	'8186ca72b2213506d91c9f02b1d3cf3c8a115bf5dfc8ab35cd6ffca8f156fa3d'
+	'f6ca788d55f400203d0e7897de05afaaaba67006a436da774d597adecd9c419e',
+	'b25ef1b614042daa88d3b71dd4d2a2f1891911d4a9512c8ca354ec73f29dc691',
+	'8a6d64add06a2a0f6616d5278863fce0146f4ece14668b5ae6e37825b95ed7ba'
 ])
 const TRUSTED_CREDENTIAL_STEP_HASHES: Record<string, string[]> = {
-	'Verify managed preview ingress': ['124c50cdddcfc16422308f95d49de00958720fbb6607e91f4d076b6d7baedf5e'],
-	'Create or reuse Neon preview branch': ['ae00d992be77dd4bc616b66bfd0689fdecfd5590bb5e2954884ca26b1a3e9725'],
-	'Create or reuse D1 preview database': ['7fb92cb9e04ec7c618382a9c7fbb3b299c80b0c9b23320ab3780fd04a2cac5b2'],
-	'Apply preview Neon migrations with a trusted pinned tool': ['97131c2f2e1a9ba00fb6368da22b37f1471d87733031c3fca6d82a8d96f86417'],
-	'Apply preview D1 migrations with a trusted pinned tool': ['c799e2b179a3db48d817066abc14d19beed53b6d95837a3efe06aa4edbe76dc0'],
+	'Verify managed preview ingress': ['fa0beff79d77850f94a1163db6b4b3b12b9d2a58811c35a052aa5d8755995f69'],
+	'Create or reuse Neon preview branch': ['855b8b757a67eaff08696f07501c42dd1ee88641a9407d33dde1146f8ef9b56c'],
+	'Create or reuse D1 preview database': ['8a4d7d159ef4deabd836a9f2e81a1870bbb7b87fb44b476da426591d3b024753'],
+	'Apply preview Neon migrations with a trusted pinned tool': ['3046d3381c74a93ce42794b2e67792b89494ae1eeffb9da7aca13b6f2e8f0a9b'],
+	'Apply preview D1 migrations with a trusted pinned tool': ['dc302c86806864660c425c30e019b0a285cd9bd8529762082d63cac0aebed55b'],
 	'Write private Worker preview secret files from trusted code': [
-		'a90cfd3115298aca2981225685c4d8b733ed54f54dd2e17e38899a4471f71015',
-		'445114b3d91476f2316409a2150c942a57c08299cf09fc51213e339a9932e49f',
-		'090ecb7d9b5b7f772eb7a24d25a86c835aa41b79af8f53cc8a4741d49ab4908c'
+		'e9109cfdd4410fb769737b4b8e6cbbad95b4fb436c3eb3ef2cdf9588d328d9be',
+		'cf7978cac7afc8324e4242fc2153e8ccff98eeeb172172c1ae159e613be6dabd',
+		'0e3dae679b411b42e68f475c10febff9dcc25c38d0170010dc671f7c4fe9e8d5',
+		'36821fe392eb05711dd410a62396dbc23a9bd1fe4b7525ee13086a92c1e39b9c'
 	],
 	'Publish prebuilt preview Workers from trusted code': [
-		'19efdb1e7a9c2b3ce5e742664b017cef2be335ccc36495a1bf94d1ad6106743e',
-		'20c28796fbfaa6c83432ecb2d81d3d0e17312e4bd739dd145e3b7f3dfcb23c78'
+		'89a888fb7b72c0463048f89d6328ff75b0e3f8e81473c5a87363b7b8100af7b6',
+		'a1c5fbe9877e9ebe321272e8aea83c0e833c1177ea63d353615e49045c22194c'
 	]
 }
 
@@ -1082,15 +1085,25 @@ function assertTrustedCredentialBoundary(staging: Workflow): void {
 	if (CREDENTIAL_REFERENCE.test(JSON.stringify(staging.env))) throw new Error('preview workflow exposes provider credentials at workflow scope')
 	if (staging.defaults?.run) throw new Error('preview workflow overrides execution for credentialed steps')
 	for (const [jobName, job] of Object.entries(staging.jobs ?? {})) {
-		const { steps = [], ...jobConfiguration } = job
-		if (CREDENTIAL_REFERENCE.test(JSON.stringify(jobConfiguration))) throw new Error(`${jobName} exposes provider credentials at job scope`)
+		const { steps = [], env, ...jobConfiguration } = job
+		const { PREVIEW_POLICY_TOKEN, ...providerEnvironment } = env ?? {}
+		const trustedJob = ['authorize', 'preview-ingress', 'preview-db', 'deploy'].includes(jobName)
+		if (PREVIEW_POLICY_TOKEN !== undefined && (!trustedJob || PREVIEW_POLICY_TOKEN !== '${{ secrets.PREVIEW_POLICY_TOKEN }}')) throw new Error(`${jobName} has an unsafe policy metadata token mapping`)
+		if (trustedJob && PREVIEW_POLICY_TOKEN === undefined) throw new Error(`${jobName} lacks the policy metadata token`)
+		if (CREDENTIAL_REFERENCE.test(JSON.stringify({ ...jobConfiguration, env: providerEnvironment }))) throw new Error(`${jobName} exposes provider credentials at job scope`)
 		const credentialStepIndexes = steps.flatMap((step, index) =>
 			CREDENTIAL_REFERENCE.test(JSON.stringify(step)) ? [index] : []
 		)
 		if (jobName === 'build-preview' && credentialStepIndexes.length > 0) throw new Error('PR-controlled preview build receives provider credentials')
 		if (credentialStepIndexes.length > 0 && job.defaults?.run) throw new Error(`${jobName} overrides execution for credentialed steps`)
 		for (const index of credentialStepIndexes) if (!isTrustedCredentialStep(jobName, steps[index]!)) throw new Error(`${jobName} exposes provider credentials to an untrusted step`)
-		if (!['preview-ingress', 'deploy'].includes(jobName) || credentialStepIndexes.length === 0) continue
+		if (!['preview-ingress', 'preview-db', 'deploy'].includes(jobName) || credentialStepIndexes.length === 0) continue
+		if (job.environment !== 'cloudflare-preview') throw new Error(`${jobName} lacks the protected preview environment`)
+		if (!normalizedNeeds(job.needs).includes('authorize') || job.env?.AUTHORIZED_REVISION !== '${{ needs.authorize.outputs.revision }}') throw new Error(`${jobName} is not bound to an authorized revision`)
+		for (const index of credentialStepIndexes) {
+			const recheck = steps[index]?.run ?? steps[index - 1]?.run ?? ''
+			if (!recheck.includes('authorize-cloudflare-preview.mjs --recheck')) throw new Error(`${jobName} omits a credential-boundary authorization recheck`)
+		}
 		const checkoutIndex = steps.findIndex(
 			(step) =>
 				step.uses === 'actions/checkout@v4' && step.with?.ref === TRUSTED_PREVIEW_REF
@@ -1121,9 +1134,9 @@ export async function validateCloudflareWorkflowStructure(
 		'Deploy web Worker'
 	])
 	const stagingNeeds = normalizedNeeds(staging.jobs?.deploy?.needs)
-	if (JSON.stringify(stagingNeeds) !== JSON.stringify(['preview-db', 'build-preview'])) throw new Error('staging deploy must depend on preview-db and build-preview')
-	if (JSON.stringify(normalizedNeeds(staging.jobs?.['build-preview']?.needs)) !== '["preview-db"]') throw new Error('preview build does not wait for preview-db')
-	const usesTrustedWorkflowDefinition = staging.on && Object.hasOwn(staging.on, 'pull_request_target') && !Object.hasOwn(staging.on, 'pull_request')
+	if (JSON.stringify(stagingNeeds) !== JSON.stringify(['authorize', 'preview-db', 'build-preview'])) throw new Error('staging deploy must depend on authorize, preview-db and build-preview')
+	if (JSON.stringify(normalizedNeeds(staging.jobs?.['build-preview']?.needs)) !== '["authorize","preview-db"]') throw new Error('preview build does not wait for authorization and preview-db')
+	const usesTrustedWorkflowDefinition = staging.on && Object.keys(staging.on).join(',') === 'workflow_dispatch'
 	if (!usesTrustedWorkflowDefinition) throw new Error('preview deployment does not use a trusted workflow definition')
 
 	const allStagingSteps = Object.values(staging.jobs ?? {}).flatMap((job) => job.steps ?? [])
@@ -1142,7 +1155,7 @@ export async function validateCloudflareWorkflowStructure(
 	const untrustedCheckout = buildSteps.find(
 		(step) => step.name === 'Checkout untrusted preview source without provider credentials'
 	)
-	if (untrustedCheckout?.with?.ref !== '${{ github.event.pull_request.head.sha || github.sha }}') throw new Error('preview build does not check out the requested untrusted head')
+	if (untrustedCheckout?.with?.ref !== '${{ needs.authorize.outputs.head_sha }}' || untrustedCheckout.with.repository !== '${{ needs.authorize.outputs.head_repository }}' || untrustedCheckout.with['persist-credentials'] !== false) throw new Error('preview build does not check out the requested untrusted head')
 	const bundleStep = buildSteps.find(
 		(step) => step.name === 'Build untrusted preview source and package passive Worker bundles'
 	)
@@ -1154,9 +1167,12 @@ export async function validateCloudflareWorkflowStructure(
 		'apps/web'
 	]
 	const bundleLines = (bundleStep?.run ?? '').split('\n').filter(Boolean)
+	const codegenOffset = entry.apiClient === 'hey-api' ? 1 : 0
+	const hasRequiredCodegenGate =
+		codegenOffset === 0 || bundleLines[0] === 'pnpm codegen:check'
 	const buildCommandPattern = /^pnpm turbo run build(?: --filter=[@a-z0-9-/]+)+$/
 	const passiveBundleCommandPattern = /^pnpm --filter [@a-z0-9-/]+ exec wrangler deploy --config wrangler\.staging\.jsonc --dry-run --outdir=\.preview-bundle$/
-	const buildsOnlyPassiveBundles = bundleLines.length === 1 + passiveTargets.length * 2 && buildCommandPattern.test(bundleLines[0] ?? '') && passiveTargets.every((target, index) => passiveBundleCommandPattern.test(bundleLines[index * 2 + 1] ?? '') && bundleLines[index * 2 + 2] === `test -d ${target}/.preview-bundle`)
+	const buildsOnlyPassiveBundles = hasRequiredCodegenGate && bundleLines.length === codegenOffset + 1 + passiveTargets.length * 2 && buildCommandPattern.test(bundleLines[codegenOffset] ?? '') && passiveTargets.every((target, index) => passiveBundleCommandPattern.test(bundleLines[codegenOffset + index * 2 + 1] ?? '') && bundleLines[codegenOffset + index * 2 + 2] === `test -d ${target}/.preview-bundle`)
 	if (!buildsOnlyPassiveBundles) throw new Error('untrusted preview build does not produce only passive Worker bundles')
 	const unexpectedWorkerDeploy = allStagingSteps.find(
 		(step) => step !== bundleStep && /\bwrangler deploy\b/.test(step.run ?? '')
@@ -1172,7 +1188,7 @@ export async function validateCloudflareWorkflowStructure(
 		...(entry.marketing === 'astro' ? ['apps/marketing/dist'] : [])
 	]
 	const expectedArtifactName =
-		'cloudflare-preview-build-${{ needs.preview-db.outputs.alias }}-${{ github.run_id }}'
+		'cloudflare-preview-build-${{ needs.authorize.outputs.alias }}-${{ needs.authorize.outputs.head_sha }}-${{ github.run_id }}'
 	const upload = buildSteps.find((step) => step.name === 'Upload passive preview bundle')
 	const artifactPaths = String(upload?.with?.path ?? '')
 		.trim()
@@ -1200,22 +1216,22 @@ export async function validateCloudflareWorkflowStructure(
 	const downloadsPassivePreviewArtifact = download?.uses === 'actions/download-artifact@v4' && download.with?.name === expectedArtifactName && download.with.path === 'preview-artifact'
 	if (!downloadsPassivePreviewArtifact) throw new Error('trusted publisher does not download the passive preview artifact')
 	const migration = stagingSteps.find((step) => step.name === migrationName)
-	const usesTrustedMigrationInput = JSON.stringify(migration).includes('trusted-source/packages/db/') && !JSON.stringify(migration).includes('preview-artifact/packages/db/')
+	const usesTrustedMigrationInput = migration?.run?.includes('node trusted-source/scripts/migrate-cloudflare-preview.mjs') && !JSON.stringify(migration).includes('preview-artifact/packages/db/')
 	if (!usesTrustedMigrationInput) throw new Error('preview database migration does not use trusted migration input')
 	const publisherSteps = allStagingSteps.filter((step) =>
 		(step.run ?? '').includes('trusted-source/scripts/publish-cloudflare-preview.sh')
 	)
 	if (publisherSteps.length !== 1) throw new Error('staging workflow must have one trusted publisher')
 	const publisher = publisherSteps[0]!
-	const executesTrustedPublicationCode = publisher.name === 'Publish prebuilt preview Workers from trusted code' && publisher.run === 'sh trusted-source/scripts/publish-cloudflare-preview.sh'
+	const executesTrustedPublicationCode = publisher.name === 'Publish prebuilt preview Workers from trusted code' && publisher.run === 'node trusted-source/scripts/authorize-cloudflare-preview.mjs --recheck\nsh trusted-source/scripts/publish-cloudflare-preview.sh\n'
 	if (!executesTrustedPublicationCode) throw new Error('trusted publisher does not execute trusted publication code')
 	const requiredPublisherEnv = {
 		PREVIEW_ARTIFACT: '${{ github.workspace }}/preview-artifact',
 		PREVIEW_SECRETS_DIR: '${{ steps.preview_secrets.outputs.directory }}',
 		TRUSTED_SOURCE: '${{ github.workspace }}/trusted-source',
 		STAGING_ALIAS: '${{ needs.preview-db.outputs.alias }}',
-		CLOUDFLARE_API_TOKEN: '${{ secrets.CLOUDFLARE_API_TOKEN }}',
-		CLOUDFLARE_ACCOUNT_ID: '${{ secrets.CLOUDFLARE_ACCOUNT_ID }}'
+		CLOUDFLARE_API_TOKEN: '${{ secrets.PREVIEW_CLOUDFLARE_API_TOKEN }}',
+		CLOUDFLARE_ACCOUNT_ID: '${{ secrets.PREVIEW_CLOUDFLARE_ACCOUNT_ID }}'
 	}
 	for (const [name, value] of Object.entries(requiredPublisherEnv)) if (publisher.env?.[name] !== value) throw new Error(`trusted publisher does not map ${name}`)
 	const mapsPreviewD1Identity = publisher.env?.STAGING_D1_DATABASE_NAME === '${{ needs.preview-db.outputs.d1_database_name }}' && publisher.env.STAGING_D1_DATABASE_ID === '${{ needs.preview-db.outputs.d1_database_id }}'
@@ -1505,7 +1521,14 @@ async function assertRetainedArtifactSafety(
 }
 
 async function main(): Promise<void> {
-	const args = parseArgs(process.argv.slice(2))
+	const argv = process.argv.slice(2)
+	if (argv.includes('--build-contract')) {
+		const output = argv[argv.indexOf('--output') + 1]
+		if (!argv.includes('--output') || !output) throw new Error('--build-contract requires a new owned --output directory')
+		await verifyGatewayBuildContract(resolve(output), argv.includes('--case') ? argv[argv.indexOf('--case') + 1] : undefined)
+		return
+	}
+	const args = parseArgs(argv)
 	if (args.list) {
 		listMatrix()
 		return

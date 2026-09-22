@@ -7,6 +7,7 @@ import {
 	unsafeArtifactFindings
 } from '../../scripts/gateway-verification-evidence.js'
 import { createDockerRuntimeEnvironment } from '../../scripts/verify-gateway-docker.js'
+import { BUILD_CONTRACT_CASES } from '../../scripts/verify-gateway-build-contract.js'
 import {
 	buildRunMetadata,
 	COVERAGE_RATIONALE,
@@ -51,6 +52,22 @@ function generatedCloudflareWorkflows(entry: GatewayMatrixEntry): CloudflareWork
 }
 
 describe('gateway generated-workspace verification matrix', () => {
+	test('build-contract execution covers every deployment with and without Hey API', () => {
+		expect(BUILD_CONTRACT_CASES.map(({ id }) => id)).toEqual([
+			'cf-workers-hey-api', 'cf-workers-skip', 'docker-hey-api', 'docker-skip', 'skip-hey-api', 'skip-skip'
+		])
+		for (const { deploy, apiClient } of BUILD_CONTRACT_CASES) {
+			const config = GvKitConfig.parse({ configVersion: 2, choices: {
+				name: 'contract-check', frontend: 'sveltekit', marketing: 'inside-web', backend: 'hono',
+				i18n: 'skip', monitoring: [], db: 'postgres', auth: [], email: 'skip', aiTooling: [], deploy, apiClient
+			} })
+			const plan = buildScaffoldPlan(config)
+			const pkg = JSON.parse(plan.find(({ path }) => path === 'apps/api/package.json')!.content)
+			expect(pkg.scripts.build).toStartWith('pnpm openapi:check && ')
+			expect(plan.some(({ path }) => path === 'packages/openapi-client/package.json')).toBe(apiClient === 'hey-api')
+		}
+	})
+
 	test('isolates Docker runtime origins from conflicting matrix settings at every ingress port', () => {
 		const conflictingParent = {
 			PATH: '/usr/bin',
@@ -242,23 +259,23 @@ describe('gateway generated-workspace verification matrix', () => {
 				matrixEntry
 			)
 
-			expect(result.stagingNeeds, matrixEntry.id).toEqual(['preview-db', 'build-preview'])
+			expect(result.stagingNeeds, matrixEntry.id).toEqual(['authorize', 'preview-db', 'build-preview'])
 			expect(result.stagingSteps, matrixEntry.id).toContain(
 				'Publish prebuilt preview Workers from trusted code'
 			)
 		}
 	})
 
-	test('D1 migration validation trusts only the reviewed JSONC step', async () => {
+	test('D1 migration validation trusts only the reviewed migration runner step', async () => {
 		const matrixEntry = cloudflareMatrixEntry('sqlite')
 		const { production, staging } = generatedCloudflareWorkflows(matrixEntry)
 		await expect(validateCloudflareWorkflowStructure({ production, staging }, matrixEntry)).resolves.toBeDefined()
-		expect(staging.split('wrangler.preview-migrations.jsonc')).toHaveLength(3)
-		const legacyNames = staging.replaceAll('wrangler.preview-migrations.jsonc', 'wrangler.preview-migrations.json')
-		const alteredTool = staging.replace('npx wrangler@4.125.0 d1 migrations apply', 'npx wrangler@latest d1 migrations apply')
+		expect(staging).toContain('node trusted-source/scripts/migrate-cloudflare-preview.mjs')
+		const legacyNames = staging.replace('node trusted-source/scripts/migrate-cloudflare-preview.mjs', 'node preview-artifact/scripts/migrate-cloudflare-preview.mjs')
+		const alteredTool = staging.replace('node trusted-source/scripts/migrate-cloudflare-preview.mjs', 'npx wrangler@latest d1 migrations apply')
 		for (const altered of [legacyNames, alteredTool]) {
 			expect(altered).not.toBe(staging)
-			await expect(validateCloudflareWorkflowStructure({ production, staging: altered }, matrixEntry)).rejects.toThrow('deploy exposes provider credentials to an untrusted step')
+			await expect(validateCloudflareWorkflowStructure({ production, staging: altered }, matrixEntry)).rejects.toThrow('preview database migration does not use trusted migration input')
 		}
 	})
 
@@ -336,12 +353,12 @@ describe('gateway generated-workspace verification matrix', () => {
 			'\nenv:\n  EXPOSED_SECRETS: ${{ toJSON(secrets) }}\n\njobs:\n'
 		)
 		const jobScopedCredential = staging.replace(
-			'  deploy:\n    needs: [preview-db, build-preview]\n    runs-on: ubuntu-latest',
-			'  deploy:\n    needs: [preview-db, build-preview]\n    runs-on: ubuntu-latest\n    env:\n      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}'
+			'  deploy:\n    needs: [authorize, preview-db, build-preview]\n    environment: cloudflare-preview\n    runs-on: ubuntu-latest\n    env:',
+			'  deploy:\n    needs: [authorize, preview-db, build-preview]\n    environment: cloudflare-preview\n    runs-on: ubuntu-latest\n    env:\n      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}'
 		)
 		const jobScopedSecretContext = staging.replace(
-			'  deploy:\n    needs: [preview-db, build-preview]\n    runs-on: ubuntu-latest',
-			'  deploy:\n    needs: [preview-db, build-preview]\n    runs-on: ubuntu-latest\n    env:\n      EXPOSED_SECRETS: ${{ toJSON(secrets) }}'
+			'  deploy:\n    needs: [authorize, preview-db, build-preview]\n    environment: cloudflare-preview\n    runs-on: ubuntu-latest\n    env:',
+			'  deploy:\n    needs: [authorize, preview-db, build-preview]\n    environment: cloudflare-preview\n    runs-on: ubuntu-latest\n    env:\n      EXPOSED_SECRETS: ${{ toJSON(secrets) }}'
 		)
 		const unrelatedActionCredential = staging.replace(
 			'      - uses: marocchino/sticky-pull-request-comment@v2\n',
@@ -356,16 +373,16 @@ describe('gateway generated-workspace verification matrix', () => {
 			'          node trusted-source/scripts/write-cloudflare-preview-secrets.mjs "$secret_dir"\n          node preview-artifact/exfiltrate.mjs'
 		)
 		const alteredMigration = staging.replace(
-			'          npx drizzle-kit@0.31.8 migrate --config "$RUNNER_TEMP/drizzle.preview.config.mjs"',
-			'          npx drizzle-kit@0.31.8 migrate --config "$RUNNER_TEMP/drizzle.preview.config.mjs"\n          node preview-artifact/exfiltrate.mjs'
+			'          node trusted-source/scripts/migrate-cloudflare-preview.mjs',
+			'          node trusted-source/scripts/migrate-cloudflare-preview.mjs\n          node preview-artifact/exfiltrate.mjs'
 		)
 		const maliciousStepShell = staging.replace(
-			'        run: sh trusted-source/scripts/publish-cloudflare-preview.sh',
-			'        run: sh trusted-source/scripts/publish-cloudflare-preview.sh\n        shell: node preview-artifact/exfiltrate.mjs {0}'
+			'      - name: Publish prebuilt preview Workers from trusted code',
+			'      - name: Publish prebuilt preview Workers from trusted code\n        shell: node preview-artifact/exfiltrate.mjs {0}'
 		)
 		const jobRunDefaults = staging.replace(
-			'  deploy:\n    needs: [preview-db, build-preview]',
-			'  deploy:\n    defaults:\n      run:\n        shell: node preview-artifact/exfiltrate.mjs {0}\n    needs: [preview-db, build-preview]'
+			'  deploy:\n    needs: [authorize, preview-db, build-preview]',
+			'  deploy:\n    defaults:\n      run:\n        shell: node preview-artifact/exfiltrate.mjs {0}\n    needs: [authorize, preview-db, build-preview]'
 		)
 		const workflowRunDefaults = staging.replace(
 			'\njobs:\n',
@@ -415,8 +432,8 @@ describe('gateway generated-workspace verification matrix', () => {
 		const matrixEntry = cloudflareMatrixEntry('postgres')
 		const { production, staging } = generatedCloudflareWorkflows(matrixEntry)
 		const untrustedTrigger = staging.replace(
-			'  pull_request_target:',
-			'  pull_request:\n    # pull_request_target:'
+			'  workflow_dispatch:',
+			'  pull_request:\n    # workflow_dispatch:'
 		)
 		const duplicatePublisher = staging.replace(
 			'      - name: Validate and seal exact preview deployment inventory',
@@ -460,8 +477,8 @@ describe('gateway generated-workspace verification matrix', () => {
 			'Deploy auth Worker'
 		)
 		const obsoletePackageDeploy = generatedStaging.replace(
-			'run: sh trusted-source/scripts/publish-cloudflare-preview.sh',
-			'run: pnpm --filter @repo/auth-worker deploy:staging'
+			'sh trusted-source/scripts/publish-cloudflare-preview.sh',
+			'pnpm --filter @repo/auth-worker deploy:staging'
 		)
 
 		await expect(

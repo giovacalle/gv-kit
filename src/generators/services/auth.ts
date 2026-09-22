@@ -173,9 +173,7 @@ function pkgJson({
 		scripts.build = 'wrangler deploy --dry-run --outdir=dist'
 		scripts.deploy = 'pnpm cf-typegen && wrangler deploy'
 		scripts['deploy:production'] = 'pnpm cf-typegen && wrangler deploy'
-		scripts['deploy:staging'] = hasAuth
-			? 'pnpm cf-typegen && test -n "$STAGING_ALIAS" && test -n "$STAGING_SECRETS_FILE" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}" --secrets-file "$STAGING_SECRETS_FILE"'
-			: 'pnpm cf-typegen && test -n "$STAGING_ALIAS" && wrangler deploy --config "${STAGING_WRANGLER_CONFIG:-wrangler.jsonc}"'
+		scripts['deploy:staging'] = 'pnpm cf-typegen && node ../../scripts/deploy-cloudflare-staging.mjs'
 		scripts.typecheck = 'tsc --noEmit'
 	} else {
 		dependencies['@hono/node-server'] = '^1.13.0'

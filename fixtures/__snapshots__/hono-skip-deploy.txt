@@ -70,7 +70,7 @@ apps/web/svelte.config.js  5c32ff96e10d06c8
 apps/web/tsconfig.json  5d63902c7bfd2935
 apps/web/vite.config.ts  0a45dc271573782d
 eslint.config.js  cfd85b071f7c820c
-package.json  b6242d449b5f996f
+package.json  d5ea099b584bda57
 packages/backend/package.json  896460895e5e7ca4
 packages/backend/src/helpers/index.test.ts  f22bad1a349c8ea8
 packages/backend/src/helpers/index.ts  13422e3abf7de3a8
@@ -92,7 +92,7 @@ packages/db/src/schema/sample.ts  77dbb23fb54706d5
 packages/db/tsconfig.json  d91487a4887bf974
 packages/openapi-client/README.md  36a7ebdbd5c420fd
 packages/openapi-client/openapi-ts.config.ts  d59449c09f848e52
-packages/openapi-client/package.json  c81e3b028380a243
+packages/openapi-client/package.json  7fd8fe85872e3026
 packages/openapi-client/src/generated/index.ts  7992a39d6cde5e05
 packages/openapi-client/src/index.ts  6916e18cebd77fa6
 packages/openapi-client/tsconfig.json  84222be0fa190e11

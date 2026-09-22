@@ -401,14 +401,25 @@ async function assertPreviewDeployScripts(
 	project: string,
 	workers: WorkerTarget[]
 ): Promise<Record<string, string>> {
+	const wrapperPath = join(project, 'scripts/deploy-cloudflare-staging.mjs')
+	const wrapper = await readFile(wrapperPath, 'utf8')
+	for (const contract of [
+		"if (process.argv.length !== 2) throw new Error('Staging deployment does not accept command-line overrides')",
+		"const configPath = process.env.STAGING_WRANGLER_CONFIG",
+		"if (!isDeepStrictEqual(config, expected)) throw new Error('Unsafe staging configuration: use the prepared package configuration with matching preview inputs')",
+		"const args = ['deploy', '--config', configPath]",
+		"result = spawnSync('wrangler', args, { stdio: 'inherit', env: environment })"
+	]) if (!wrapper.includes(contract)) throw new Error(`trusted staging wrapper is missing contract: ${contract}`)
+
 	const commands: Record<string, string> = {}
 	for (const worker of workers) {
 		const packageJson = JSON.parse(
 			await readFile(join(project, worker.directory, 'package.json'), 'utf8')
 		) as { scripts?: Record<string, string> }
 		const command = packageJson.scripts?.['deploy:staging']
-		if (!command?.includes('wrangler deploy --config')) throw new Error(`${worker.name} staging deploy does not use its prepared config`)
-		if (command.includes('--name')) throw new Error(`${worker.name} staging deploy overrides its prepared config name`)
+		const expected = `${worker.name === 'marketing' ? '' : 'pnpm cf-typegen && '}node ../../scripts/deploy-cloudflare-staging.mjs`
+		if (command !== expected) throw new Error(`${worker.name} staging deploy does not use the exact trusted wrapper command`)
+		if (!wrapper.includes(`${JSON.stringify(worker.directory)}: {`)) throw new Error(`${worker.name} is absent from the trusted staging wrapper policy`)
 		commands[worker.name] = command
 	}
 	return commands

@@ -24,6 +24,15 @@ export async function verifyPreviewCredentialPolicy(protectionOnly = false) {
 	requirePolicy(env.GITHUB_REF === 'refs/heads/' + repo.default_branch, 'trusted default branch required')
 	const environment = await github('/environments/cloudflare-preview')
 	requirePolicy(environment.name === 'cloudflare-preview' && environment.deployment_branch_policy?.protected_branches === false && environment.deployment_branch_policy?.custom_branch_policies === true, 'selected default branch environment required')
+	const environments = await github('/environments?per_page=100')
+	requirePolicy(Array.isArray(environments.environments) && environments.total_count === environments.environments.length && environments.total_count <= 100 && environments.environments.filter((candidate) => candidate.name === 'cloudflare-preview').length === 1, 'complete environment metadata listing required')
+	for (const candidate of environments.environments) {
+		requirePolicy(typeof candidate.name === 'string' && candidate.name.length > 0, 'environment identity unavailable')
+		if (candidate.name === 'cloudflare-preview') continue
+		const listing = await github('/environments/' + encodeURIComponent(candidate.name) + '/secrets?per_page=100')
+		requirePolicy(Array.isArray(listing.secrets) && listing.total_count === listing.secrets.length && listing.total_count <= 100, 'complete environment secret metadata listing required')
+		requirePolicy(listing.secrets.every((secret) => !requiredSecrets.includes(secret.name)), 'preview credential copied to another environment: ' + candidate.name)
+	}
 	const branches = await github('/environments/cloudflare-preview/deployment-branch-policies?per_page=100')
 	requirePolicy(branches.total_count === 1 && branches.branch_policies?.length === 1 && branches.branch_policies[0].name === repo.default_branch && branches.branch_policies[0].type === 'branch', 'only the literal default branch may receive preview secrets; no tags or PR refs')
 	const protection = await github('/branches/' + encodeURIComponent(repo.default_branch) + '/protection')

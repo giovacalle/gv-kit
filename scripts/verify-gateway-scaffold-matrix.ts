@@ -1012,13 +1012,13 @@ const TRUSTED_PREVIEW_REF =
 const CREDENTIAL_REFERENCE =
 	/\$\{\{(?:(?!\}\})[\s\S])*\bsecrets\b(?:(?!\}\})[\s\S])*\}\}|\bneeds\s*(?:\.|\[)[^}]*\bdatabase_url\b/
 const TRUSTED_PREVIEW_BUILD_HASHES = new Set([
-	'e610b992e132d43a0bbd2041ca4cda566cd9c5f0ea9e307ca7d82302ff731fe4',
-	'ccf08fa90129db3686c8ae7e8150dc32a729a796ca560aa2f508b934e26c98f2',
-	'53c213165edf60c82e38861a794c381f4114052169e1a934ff8370cce565e941'
+	'f6ca788d55f400203d0e7897de05afaaaba67006a436da774d597adecd9c419e',
+	'b25ef1b614042daa88d3b71dd4d2a2f1891911d4a9512c8ca354ec73f29dc691',
+	'8a6d64add06a2a0f6616d5278863fce0146f4ece14668b5ae6e37825b95ed7ba'
 ])
 const TRUSTED_CREDENTIAL_STEP_HASHES: Record<string, string[]> = {
 	'Verify managed preview ingress': ['fa0beff79d77850f94a1163db6b4b3b12b9d2a58811c35a052aa5d8755995f69'],
-	'Create or reuse Neon preview branch': ['8fb4b9c8fa4f80e37b85482276ef447d62bfdd270032a452f53ab118a2965dc7'],
+	'Create or reuse Neon preview branch': ['855b8b757a67eaff08696f07501c42dd1ee88641a9407d33dde1146f8ef9b56c'],
 	'Create or reuse D1 preview database': ['8a4d7d159ef4deabd836a9f2e81a1870bbb7b87fb44b476da426591d3b024753'],
 	'Apply preview Neon migrations with a trusted pinned tool': ['3046d3381c74a93ce42794b2e67792b89494ae1eeffb9da7aca13b6f2e8f0a9b'],
 	'Apply preview D1 migrations with a trusted pinned tool': ['dc302c86806864660c425c30e019b0a285cd9bd8529762082d63cac0aebed55b'],
@@ -1167,9 +1167,12 @@ export async function validateCloudflareWorkflowStructure(
 		'apps/web'
 	]
 	const bundleLines = (bundleStep?.run ?? '').split('\n').filter(Boolean)
+	const codegenOffset = entry.apiClient === 'hey-api' ? 1 : 0
+	const hasRequiredCodegenGate =
+		codegenOffset === 0 || bundleLines[0] === 'pnpm codegen:check'
 	const buildCommandPattern = /^pnpm turbo run build(?: --filter=[@a-z0-9-/]+)+$/
 	const passiveBundleCommandPattern = /^pnpm --filter [@a-z0-9-/]+ exec wrangler deploy --config wrangler\.staging\.jsonc --dry-run --outdir=\.preview-bundle$/
-	const buildsOnlyPassiveBundles = bundleLines.length === 1 + passiveTargets.length * 2 && buildCommandPattern.test(bundleLines[0] ?? '') && passiveTargets.every((target, index) => passiveBundleCommandPattern.test(bundleLines[index * 2 + 1] ?? '') && bundleLines[index * 2 + 2] === `test -d ${target}/.preview-bundle`)
+	const buildsOnlyPassiveBundles = hasRequiredCodegenGate && bundleLines.length === codegenOffset + 1 + passiveTargets.length * 2 && buildCommandPattern.test(bundleLines[codegenOffset] ?? '') && passiveTargets.every((target, index) => passiveBundleCommandPattern.test(bundleLines[codegenOffset + index * 2 + 1] ?? '') && bundleLines[codegenOffset + index * 2 + 2] === `test -d ${target}/.preview-bundle`)
 	if (!buildsOnlyPassiveBundles) throw new Error('untrusted preview build does not produce only passive Worker bundles')
 	const unexpectedWorkerDeploy = allStagingSteps.find(
 		(step) => step !== bundleStep && /\bwrangler deploy\b/.test(step.run ?? '')

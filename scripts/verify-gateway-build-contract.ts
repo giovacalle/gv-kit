@@ -86,6 +86,16 @@ export async function verifyGatewayBuildContract(output: string, selected?: stri
 			await succeed('root-baseline', ['build'])
 			const warm = await succeed('root-warm', ['build'])
 			if (!/api-gateway:build: cache hit/.test(warm)) throw new Error('Gateway warm-cache hit was not observed')
+			if (entry.apiClient === 'hey-api') {
+				const generatedClientPath = join(project, 'packages/openapi-client/src/generated/index.ts')
+				const generatedClient = await readFile(generatedClientPath, 'utf8')
+				const staleClient = `${generatedClient}\nexport const staleBuildContractClient = true\n`
+				await writeFile(generatedClientPath, staleClient)
+				const staleResult = await run('root-stale-client', ['build'])
+				if (staleResult.exitCode === 0 || !/diff|staleBuildContractClient/.test(staleResult.text)) throw new Error('Current OpenAPI with a stale generated client passed the build')
+				if ((await readFile(generatedClientPath, 'utf8')) !== staleClient) throw new Error('Client drift check rewrote the stale generated source')
+				await writeFile(generatedClientPath, generatedClient)
+			}
 			const fragmentPath = join(project, 'services/users/openapi.json')
 			const checkedPath = join(project, 'apps/api/openapi.json')
 			const original = await readFile(fragmentPath, 'utf8')
@@ -136,6 +146,11 @@ export async function verifyGatewayBuildContract(output: string, selected?: stri
 			const updated = await readFile(checkedPath, 'utf8')
 			if (!updated.includes('usersBuildContractProbe') || updated === checked) throw new Error('Explicit composition did not update the contract')
 			await succeed('package-recovered', ['--dir', 'apps/api', 'build'])
+			if (entry.apiClient === 'hey-api') {
+				const staleAfterComposition = await run('root-rejects-stale-client-after-composition', ['build'])
+				if (staleAfterComposition.exitCode === 0) throw new Error('Updated OpenAPI with a stale generated client passed the build')
+				await succeed('explicit-client-regeneration', ['codegen'])
+			}
 			await succeed('root-recovered', ['build'])
 			const bundle = await readFile(join(project, 'apps/api/dist/index.js'), 'utf8')
 			if (!bundle.includes('usersBuildContractProbe')) throw new Error('Recovered bundle omits the updated contract')

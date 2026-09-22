@@ -417,7 +417,8 @@ function renderNeonPreviewDatabaseJob(project: string): string {
         run: echo "expires_at=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
       - id: create_neon_branch
         name: Create or reuse Neon preview branch
-        uses: neondatabase/create-branch-action@v6
+        # v6
+        uses: neondatabase/create-branch-action@fb620d43d4c565abaf088b848a4e28e5c4ea4d9c
         with:
           project_id: \${{ vars.NEON_PROJECT_ID }}
           branch_name: \${{ steps.meta.outputs.neon_branch_name }}

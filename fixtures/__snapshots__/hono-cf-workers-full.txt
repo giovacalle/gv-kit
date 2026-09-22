@@ -29,8 +29,8 @@
 .env.example  4f0b5de806f8e9eb
 .github/workflows/check-pr.yml  c8c95defcdc262ae
 .github/workflows/cleanup-staging.yml  e0ce4ac157b0f013
-.github/workflows/deploy-production.yml  7abd3414c36155f4
-.github/workflows/deploy-staging.yml  10d07becdf286934
+.github/workflows/deploy-production.yml  2e2be7c99340ae7e
+.github/workflows/deploy-staging.yml  61a6419830c0bbd5
 .gitignore  6ebdabe6e1116615
 .husky/commit-msg  8e774865c063495d
 .husky/pre-commit  41ceea3ad087b3b4
@@ -94,7 +94,7 @@ apps/web/worker-configuration.bootstrap.d.ts  d767dca7e4dc9ba8
 apps/web/wrangler.jsonc  9e02568097992434
 eslint.config.js  cfd85b071f7c820c
 opencode.json  b82a2b5eb3e8ef6c
-package.json  48900ebb27ac39b3
+package.json  5b53e5e2da546538
 packages/backend/package.json  a307dd802bb0bcd8
 packages/backend/src/core/data-access/users.ts  3cee1df896a23f1b
 packages/backend/src/core/types.ts  ba34cd9886b09156
@@ -140,7 +140,7 @@ packages/mailer/tsconfig.json  e4fea59f1128156d
 packages/mailer/tsup.config.ts  e0972532bc769c60
 packages/openapi-client/README.md  36a7ebdbd5c420fd
 packages/openapi-client/openapi-ts.config.ts  d59449c09f848e52
-packages/openapi-client/package.json  c81e3b028380a243
+packages/openapi-client/package.json  7fd8fe85872e3026
 packages/openapi-client/src/generated/index.ts  7992a39d6cde5e05
 packages/openapi-client/src/index.ts  6916e18cebd77fa6
 packages/openapi-client/tsconfig.json  84222be0fa190e11
@@ -290,12 +290,13 @@ scripts/cleanup-cloudflare-preview-workers.sh  821472f1af1a2739
 scripts/cloudflare-preview-name.mjs  62928dbb81c69c1b
 scripts/deploy-cloudflare-staging.mjs  0d6e302c69c28cbb
 scripts/local.mjs  fbae0fc01cdeae49
-scripts/migrate-cloudflare-preview.mjs  1b2bb86812bddd2b
+scripts/migrate-cloudflare-preview.mjs  64eb6481be9b667f
 scripts/prepare-cloudflare-preview.mjs  b73ae641d89bba5c
+scripts/preview-migration-package-lock.json  b6330c00551b8d96
 scripts/publish-cloudflare-preview.sh  582861089ebf63e1
 scripts/resolve-cloudflare-deploy-range.sh  5a1efeaeeb11ebb8
 scripts/verify-cloudflare-preview-ingress.mjs  d679b9884fed1dc2
-scripts/verify-cloudflare-preview-policy.mjs  80a31d32770c8933
+scripts/verify-cloudflare-preview-policy.mjs  29d63a58e3bf43e5
 scripts/write-cloudflare-preview-secrets.mjs  c538262dd3ffb716
 services/auth/README.md  12641d15238dc25d
 services/auth/package.json  eb6e7d776e260cb5

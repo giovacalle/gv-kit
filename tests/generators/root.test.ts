@@ -51,7 +51,9 @@ describe('generateRoot — Astro project shape', () => {
 		const entries = generateRoot(makeCfg({ apiClient }))
 		const pkg = JSON.parse(content(entries, 'package.json'))
 		const turbo = JSON.parse(content(entries, 'turbo.json'))
-		expect(pkg.scripts.build).toBe('pnpm openapi:check && turbo run build')
+		expect(pkg.scripts.build).toBe(
+			`pnpm ${apiClient === 'hey-api' ? 'codegen:check' : 'openapi:check'} && turbo run build`
+		)
 		expect(turbo.tasks['@demo/api-gateway#build']).toEqual({
 			dependsOn: ['^build'],
 			inputs: ['$TURBO_DEFAULT$', '$TURBO_ROOT$/services/*/openapi.json'],
@@ -137,6 +139,10 @@ describe('generateRoot — Astro project shape', () => {
 		expect(pkg.scripts.codegen).toBe(
 			'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen'
 		)
+		expect(pkg.scripts['codegen:check']).toBe(
+			'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen:check'
+		)
+		expect(pkg.scripts.build).toBe('pnpm codegen:check && turbo run build')
 		expect(pkg.scripts['openapi:compose']).toContain('openapi:compose')
 		expect(pkg.scripts['openapi:check']).toContain('openapi:check')
 	})

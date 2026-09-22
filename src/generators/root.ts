@@ -38,7 +38,10 @@ export function generateRoot(cfg: GvKitConfig): FileEntry[] {
 function renderRootPackageJson(cfg: GvKitConfig): string {
 	const scripts: Record<string, string> = {
 		dev: cfg.choices.backend === 'hono' ? 'node scripts/local.mjs dev' : 'turbo run dev',
-		build: cfg.choices.backend === 'hono' ? 'pnpm openapi:check && turbo run build' : 'turbo run build',
+		build:
+			cfg.choices.backend === 'hono'
+				? `pnpm ${cfg.choices.apiClient === 'hey-api' ? 'codegen:check' : 'openapi:check'} && turbo run build`
+				: 'turbo run build',
 		test: 'turbo run test',
 		typecheck: 'turbo run typecheck',
 		lint: 'turbo run lint',
@@ -51,7 +54,11 @@ function renderRootPackageJson(cfg: GvKitConfig): string {
 		scripts['openapi:compose'] = `pnpm --filter ${gatewayPackage} openapi:compose`
 		scripts['openapi:check'] = `pnpm --filter ${gatewayPackage} openapi:check`
 	}
-	if (cfg.choices.apiClient === 'hey-api') scripts.codegen = 'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen'
+	if (cfg.choices.apiClient === 'hey-api') {
+		scripts.codegen = 'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen'
+		scripts['codegen:check'] =
+			'pnpm openapi:check && pnpm --filter @repo/openapi-client codegen:check'
+	}
 
 	const postinstall: string[] = []
 	if (cfg.choices.i18n === 'paraglide') {

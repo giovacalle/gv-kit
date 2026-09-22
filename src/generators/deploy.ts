@@ -12,7 +12,10 @@ import {
 } from './hono-topology.js'
 import { generateIntegratedDeploy } from './integrated-deploy.js'
 import { previewAuthorizationScript } from './preview-authorization.js'
-import { previewMigrationScript } from './preview-migrations.js'
+import {
+	previewMigrationPackageLock,
+	previewMigrationScript
+} from './preview-migrations.js'
 import { previewCredentialPolicyScript } from './preview-credential-policy.js'
 import { stagingDestinationScript } from './staging-destination.js'
 
@@ -55,6 +58,10 @@ function cfWorkersArtifacts(cfg: GvKitConfig): FileEntry[] {
 		{ path: '.github/workflows/check-pr.yml', content: checkPullRequestWorkflow(cfg) },
 		{ path: 'scripts/authorize-cloudflare-preview.mjs', content: previewAuthorizationScript() },
 		{ path: 'scripts/migrate-cloudflare-preview.mjs', content: previewMigrationScript(db === 'sqlite' ? 'd1' : 'neon') },
+		{
+			path: 'scripts/preview-migration-package-lock.json',
+			content: previewMigrationPackageLock(db === 'sqlite' ? 'd1' : 'neon')
+		},
 		{
 			path: 'scripts/cloudflare-preview-name.mjs',
 			content: cloudflarePreviewNameScript(cfg)
@@ -972,7 +979,7 @@ function honoDeploymentSteps({
 			const isMarketing = label === 'marketing'
 			return `      - name: Deploy ${label} Worker
         run: |
-${isMarketing && marketingVariableChecks ? `${marketingVariableChecks}\n` : ''}          if [ "$DEPLOY_ALL" = "true" ]; then
+${cfg.choices.apiClient === 'hey-api' ? '          pnpm codegen:check\n' : ''}${isMarketing && marketingVariableChecks ? `${marketingVariableChecks}\n` : ''}          if [ "$DEPLOY_ALL" = "true" ]; then
             pnpm turbo run build --filter=${packageName}
             pnpm --filter ${packageName} deploy:${stage}
           else
@@ -1270,7 +1277,7 @@ ${stagingConfigStep}
 
       - name: Build untrusted preview source and package passive Worker bundles
         run: |
-          pnpm turbo run build${buildFilters}
+${cfg.choices.apiClient === 'hey-api' ? '          pnpm codegen:check\n' : ''}          pnpm turbo run build${buildFilters}
 ${bundleCommands}
         env:
           STAGING_ALIAS: \${{ needs.preview-db.outputs.alias }}${buildPublicEnv}
@@ -1545,7 +1552,8 @@ function neonPreviewDbJob(): string {
         run: echo "expires_at=$(date -u --date '+14 days' +'%Y-%m-%dT%H:%M:%SZ')" >> "$GITHUB_OUTPUT"
 ${previewAuthorizationRecheck('')}      - id: create_neon_branch
         name: Create or reuse Neon preview branch
-        uses: neondatabase/create-branch-action@v6
+        # v6
+        uses: neondatabase/create-branch-action@fb620d43d4c565abaf088b848a4e28e5c4ea4d9c
         with:
           project_id: \${{ vars.NEON_PROJECT_ID }}
           branch_name: \${{ steps.meta.outputs.neon_branch_name }}
@@ -2008,6 +2016,7 @@ interface DockerOpts {
 	wantsUmami: boolean
 	wantsPosthog: boolean
 	emailProvider: 'resend' | 'notifuse' | null
+	hasApiClient: boolean
 }
 
 function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
@@ -2021,7 +2030,8 @@ function dockerArtifacts(cfg: GvKitConfig): FileEntry[] {
 		wantsEmailOTP: cfg.choices.auth.includes('emailOTP'),
 		wantsUmami: cfg.choices.monitoring.includes('umami'),
 		wantsPosthog: cfg.choices.monitoring.includes('posthog'),
-		emailProvider: cfg.choices.email === 'skip' ? null : cfg.choices.email
+		emailProvider: cfg.choices.email === 'skip' ? null : cfg.choices.email,
+		hasApiClient: cfg.choices.apiClient === 'hey-api'
 	}
 
 	return [
@@ -2145,7 +2155,7 @@ ${publicBuildEnv}
 COPY . .
 RUN --mount=type=cache,id=pnpm,target=/root/.local/share/pnpm/store \\
     --mount=type=cache,id=turbo,target=/repo/.turbo \\
-    pnpm exec turbo run build --filter=\${TURBO_FILTER}
+${opts.hasApiClient ? '    pnpm codegen:check && \\\n' : ''}    pnpm exec turbo run build --filter=\${TURBO_FILTER}
 
 FROM builder AS deployer
 ARG TURBO_FILTER

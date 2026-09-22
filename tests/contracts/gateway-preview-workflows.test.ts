@@ -418,6 +418,9 @@ describe('Cloudflare gateway preview contracts', () => {
 	test('preview credentials have no legacy fallback and cleanup shares the protected environment', () => {
 		for (const db of ['sqlite', 'postgres'] as const) {
 			const entries = generateDeploy(makeCfg({ db }))
+			const policy = entry(entries, 'scripts/verify-cloudflare-preview-policy.mjs')
+			expect(policy).toContain("github('/environments?per_page=100')")
+			expect(policy).toContain("'preview credential copied to another environment: '")
 			for (const path of ['.github/workflows/deploy-staging.yml', '.github/workflows/cleanup-staging.yml']) {
 				const source = entry(entries, path)
 				const references = [...source.matchAll(/secrets\.([A-Z_]+)/g)].map((match) => match[1]!)
@@ -963,6 +966,16 @@ describe('Cloudflare gateway preview contracts', () => {
 			expect(migration).toContain("github('commits/' + revision.headSha)")
 			expect(migration).toContain("'4.125.0'")
 			expect(migration).toContain("'0.31.8'")
+			expect(migration).toContain("args: ['ci', '--ignore-scripts', '--no-audit', '--no-fund']")
+			const migrationLock = JSON.parse(
+				entry(entries, 'scripts/preview-migration-package-lock.json')
+			) as { lockfileVersion: number; packages: Record<string, { integrity?: string }> }
+			expect(migrationLock.lockfileVersion).toBe(3)
+			expect(
+				Object.entries(migrationLock.packages)
+					.slice(1)
+					.every(([, dependency]) => dependency.integrity?.startsWith('sha512-'))
+			).toBe(true)
 			const build = workflow.jobs['build-preview']!
 			expect(JSON.stringify(build)).not.toMatch(/secrets\.(?:CLOUDFLARE|NEON)/)
 			expect(JSON.stringify(build)).not.toContain('database_url')

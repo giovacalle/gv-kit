@@ -276,10 +276,15 @@ describe('generateDeploy — Dockerfile correctness', () => {
 		}
 	})
 
-	test('uses BuildKit cache mount for pnpm store', () => {
+	test('uses BuildKit cache mount and gates filtered Hey API builds on client drift', () => {
 		const entries = generateDeploy(makeCfg({}))
 		const dockerfile = findEntry(entries, 'Dockerfile')!.content
 		expect(dockerfile).toContain('--mount=type=cache')
+		expect(dockerfile).toContain(
+			'pnpm codegen:check && \\\n    pnpm exec turbo run build --filter=${TURBO_FILTER}'
+		)
+		const noClient = findEntry(generateDeploy(makeCfg({ apiClient: 'skip' })), 'Dockerfile')!.content
+		expect(noClient).not.toContain('pnpm codegen:check')
 		expect(dockerfile).toContain('/root/.local/share/pnpm/store')
 	})
 
@@ -591,6 +596,8 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const yml = findEntry(entries, '.github/workflows/deploy-production.yml')!.content
 		expect(yml).toMatch(/on:\s*\n\s+push:\s*\n\s+branches:\s*\[main\]/)
 		expect(yml).toContain('pnpm turbo run deploy:production --affected')
+		expect(yml.match(/pnpm codegen:check/g)).toHaveLength(4)
+		expect(yml).toContain('pnpm codegen:check\n          if [ "$DEPLOY_ALL" = "true" ]')
 		expect(yml).toContain('Run production database migrations')
 		expect(yml).toContain('pnpm --filter @repo/db db:migrate:production')
 		expect(yml).toContain('DATABASE_URL: ${{ secrets.DATABASE_URL }}')
@@ -672,7 +679,10 @@ describe('generateDeploy — cf-workers workflows', () => {
 		const yml = findEntry(entries, '.github/workflows/deploy-staging.yml')!.content
 		expect(yml).toContain('preview-db:')
 		expect(yml).toContain('needs: [authorize, preview-db]')
-		expect(yml).toContain('neondatabase/create-branch-action@v6')
+		expect(yml).toContain('# v6')
+		expect(yml).toContain(
+			'neondatabase/create-branch-action@fb620d43d4c565abaf088b848a4e28e5c4ea4d9c'
+		)
 		expect(yml).toContain('neon_branch_name=preview-${{ github.repository_id }}-neon-$alias')
 		expect(yml).toContain('branch_name: ${{ steps.meta.outputs.neon_branch_name }}')
 		expect(yml).toContain('expires_at: ${{ steps.expiration.outputs.expires_at }}')
@@ -682,7 +692,18 @@ describe('generateDeploy — cf-workers workflows', () => {
 		expect(yml).toContain('DATABASE_URL: ${{ needs.preview-db.outputs.database_url }}')
 		expect(yml).toContain('STAGING_DATABASE_URL: ${{ needs.preview-db.outputs.database_url }}')
 		expect(yml).toContain('node trusted-source/scripts/migrate-cloudflare-preview.mjs')
+		expect(yml).toContain(
+			'pnpm codegen:check\n          pnpm turbo run build --filter=@demo/auth-worker'
+		)
 		expect(findEntry(entries, 'scripts/migrate-cloudflare-preview.mjs')!.content).toContain("'drizzle-kit': '0.31.8'")
+		expect(findEntry(entries, 'scripts/migrate-cloudflare-preview.mjs')!.content).toContain(
+			"args: ['ci', '--ignore-scripts', '--no-audit', '--no-fund']"
+		)
+		const migrationLock = JSON.parse(
+			findEntry(entries, 'scripts/preview-migration-package-lock.json')!.content
+		) as { lockfileVersion: number; packages: Record<string, { integrity?: string }> }
+		expect(migrationLock.lockfileVersion).toBe(3)
+		expect(Object.entries(migrationLock.packages).slice(1).every(([, pkg]) => pkg.integrity?.startsWith('sha512-'))).toBe(true)
 		expect(yml).toContain('wrangler.staging.jsonc')
 		expect(yml.match(/pnpm install --frozen-lockfile/g)).toHaveLength(1)
 		expect(yml).not.toContain('wrangler d1 create')

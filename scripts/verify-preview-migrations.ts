@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { mkdir, readFile, writeFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, readFile, realpath, writeFile, readdir, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { Database } from 'bun:sqlite'
@@ -87,7 +87,13 @@ export async function verifyPreviewMigrations(project: string): Promise<string[]
 	 return Response.json(data[u.pathname], { status: data[u.pathname] === null ? 503 : 200 });
 	};`)
 	const migrationScript = await readFile(join(project, 'scripts/migrate-cloudflare-preview.mjs'), 'utf8').catch(() => '')
-	if (migrationScript) await writeFile(join(project, 'trusted-source/scripts/migrate-cloudflare-preview.mjs'), migrationScript)
+	if (migrationScript) {
+		await writeFile(join(project, 'trusted-source/scripts/migrate-cloudflare-preview.mjs'), migrationScript)
+		await writeFile(
+			join(project, 'trusted-source/scripts/preview-migration-package-lock.json'),
+			await readFile(join(project, 'scripts/preview-migration-package-lock.json'))
+		)
+	}
 	await mkdir(join(project, 'trusted-source/packages/db/migrations/meta'), { recursive: true })
 	await writeFile(join(project, 'trusted-source/packages/db/migrations/0000_base.sql'), baseSql)
 	await writeFile(join(project, 'trusted-source/packages/db/migrations/meta/_journal.json'), JSON.stringify({ ...JSON.parse(journal), entries: JSON.parse(journal).entries.slice(0, 1) }))
@@ -123,12 +129,12 @@ fs.writeFileSync(process.env.MIGRATION_RECEIPT, JSON.stringify({ args, folder, s
 	${driverProbe || 'const driver = null;'}
 	const args = process.argv.slice(2); const configPath = args[args.indexOf('--config')+1];
 	const config = fs.readFileSync(configPath,'utf8'); const folder = path.join(process.cwd(),'migrations');
-	fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ args, runner:process.argv[1], node:process.execPath, cwd:process.cwd(), config, driver, package:JSON.parse(fs.readFileSync('package.json')), databaseUrl:process.env.DATABASE_URL, sql:fs.readdirSync(folder).filter(p=>p.endsWith('.sql')).sort().map(p=>fs.readFileSync(path.join(folder,p),'utf8')), journal:JSON.parse(fs.readFileSync(path.join(folder,'meta/_journal.json'))) }));
+	fs.writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ args, runner:fs.realpathSync(process.argv[1]), node:process.execPath, cwd:fs.realpathSync(process.cwd()), config, driver, package:JSON.parse(fs.readFileSync('package.json')), databaseUrl:process.env.DATABASE_URL, sql:fs.readdirSync(folder).filter(p=>p.endsWith('.sql')).sort().map(p=>fs.readFileSync(path.join(folder,p),'utf8')), journal:JSON.parse(fs.readFileSync(path.join(folder,'meta/_journal.json'))) }));
 	process.exit(fs.existsSync(${JSON.stringify(join(root, 'fail-provider'))}) ? 1 : 0);`
 	await writeFile(join(bin, 'npm'), `#!/usr/bin/env node
 	import fs from 'node:fs'; import path from 'node:path';
 	if (process.env.DATABASE_URL || process.env.NEON_API_KEY || process.env.GH_TOKEN || process.env.CLOUDFLARE_API_TOKEN || process.env.NODE_OPTIONS) throw new Error('Installer received credentials or injected config');
-	fs.writeFileSync(${JSON.stringify(join(root, 'installer.json'))}, JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),package:JSON.parse(fs.readFileSync('package.json'))}));
+	fs.writeFileSync(${JSON.stringify(join(root, 'installer.json'))}, JSON.stringify({args:process.argv.slice(2),cwd:process.cwd(),package:JSON.parse(fs.readFileSync('package.json')),lock:JSON.parse(fs.readFileSync('package-lock.json'))}));
 	for (const file of ['wrangler/bin/wrangler.js','drizzle-kit/bin.cjs']) { const p=path.join('node_modules',file); fs.mkdirSync(path.dirname(p),{recursive:true}); fs.writeFileSync(p,${JSON.stringify(providerStub)}); }
 	`, {mode:0o755})
 	const env: Record<string, string> = {
@@ -166,11 +172,13 @@ fs.writeFileSync(process.env.MIGRATION_RECEIPT, JSON.stringify({ args, folder, s
 		if (!rejected) throw new Error('Base schema unexpectedly supports the head request')
 	} finally { baseDb.close() }
 	const installation = JSON.parse(await readFile(join(root,'installer.json'),'utf8'))
-	if (JSON.stringify(installation.args) !== JSON.stringify(['install','--ignore-scripts','--no-audit','--no-fund'])) throw new Error('Unsafe trusted tool installation command')
+	if (JSON.stringify(installation.args) !== JSON.stringify(['ci','--ignore-scripts','--no-audit','--no-fund'])) throw new Error('Unsafe trusted tool installation command')
+	if (installation.lock.lockfileVersion !== 3 || !Object.entries(installation.lock.packages as Record<string, { integrity?: unknown }>).slice(1).every(([, entry]) => typeof entry.integrity === 'string' && entry.integrity.startsWith('sha512-'))) throw new Error('Trusted migration lock is not integrity-pinned')
 	if (provider === 'neon' && (applied.package.dependencies['drizzle-orm'] !== '0.45.0' || applied.package.dependencies.postgres !== '3.4.7')) throw new Error('Neon migration drivers were not pinned')
 	if (applied.runner !== join(applied.cwd, provider === 'd1' ? 'node_modules/wrangler/bin/wrangler.js' : 'node_modules/drizzle-kit/bin.cjs')) throw new Error('Unexpected provider runner')
 	await writeFile(join(root,'valid-installer.json'),JSON.stringify(installation,null,2))
-	if (applied.cwd && !applied.cwd.startsWith(root + '/authorized-preview-migrations-')) throw new Error('Provider tool ran outside trusted temporary directory')
+	const canonicalRoot = await realpath(root)
+	if (applied.cwd && !applied.cwd.startsWith(canonicalRoot + '/authorized-preview-migrations-')) throw new Error('Provider tool ran outside trusted temporary directory')
 	if (applied.package?.dependencies?.[provider === 'd1' ? 'wrangler' : 'drizzle-kit'] !== (provider === 'd1' ? '4.125.0' : '0.31.8')) throw new Error('Migration tool was not pinned')
 	if (provider === 'd1' && (!applied.args.includes('preview-123456-d1-pr-181') || !applied.args.includes('--remote') || JSON.parse(applied.config).d1_databases[0].database_id !== values['needs.preview-db.outputs.d1_database_id'])) throw new Error('Wrong D1 invocation destination')
 	if (provider === 'neon' && (applied.databaseUrl !== values['needs.preview-db.outputs.database_url'] || applied.args[0] !== 'migrate' || !applied.config.includes("dialect: 'postgresql'"))) throw new Error('Wrong Neon invocation destination')

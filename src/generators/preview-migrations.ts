@@ -1,6 +1,13 @@
+import d1PackageLock from './preview-migration-d1-package-lock.json' with { type: 'json' }
+import neonPackageLock from './preview-migration-neon-package-lock.json' with { type: 'json' }
+
+export function previewMigrationPackageLock(provider: 'd1' | 'neon'): string {
+	return `${JSON.stringify(provider === 'd1' ? d1PackageLock : neonPackageLock, null, 2)}\n`
+}
+
 export function previewMigrationScript(provider: 'd1' | 'neon'): string {
 	return `import { createHash } from 'node:crypto'
-import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
@@ -100,12 +107,16 @@ try {
 	mkdirSync(join(directory, 'migrations/meta'), { recursive: true })
 	for (const [name, text] of files) writeFileSync(join(directory, 'migrations', name), text, { mode: 0o600, flag: 'wx' })
 	writeFileSync(join(directory, 'package.json'), JSON.stringify({ private: true, dependencies: provider === 'd1' ? { wrangler: '4.125.0' } : { 'drizzle-kit': '0.31.8', 'drizzle-orm': '0.45.0', postgres: '3.4.7' } }))
+	const packageLock = readFileSync(new URL('./preview-migration-package-lock.json', import.meta.url), 'utf8')
+	const parsedLock = JSON.parse(packageLock)
+	check(parsedLock.lockfileVersion === 3 && parsedLock.packages && Object.entries(parsedLock.packages).every(([path, entry]) => path === '' || (typeof entry.integrity === 'string' && entry.integrity.startsWith('sha512-'))), 'invalid trusted migration dependency lock')
+	writeFileSync(join(directory, 'package-lock.json'), packageLock, { mode: 0o600, flag: 'wx' })
 	const toolEnv = { PATH: env.PATH, HOME: directory, CI: 'true', npm_config_userconfig: '/dev/null', npm_config_cache: join(directory, '.npm'), WRANGLER_SEND_METRICS: 'false' }
 	function run(command, options) {
 		const result = spawnSync(command, options.args, { cwd: directory, env: options.env, stdio: 'inherit', timeout: 180000 })
 		check(!result.error && result.status === 0, 'trusted migration command failed')
 	}
-	run('npm', { args: ['install', '--ignore-scripts', '--no-audit', '--no-fund'], env: toolEnv })
+	run('npm', { args: ['ci', '--ignore-scripts', '--no-audit', '--no-fund'], env: toolEnv })
 	if (provider === 'd1') {
 		writeFileSync(join(directory, 'wrangler.jsonc'), JSON.stringify({ name: 'preview-migrations', compatibility_date: '2026-08-24', d1_databases: [destination] }))
 		run(process.execPath, { args: [join(directory, 'node_modules/wrangler/bin/wrangler.js'), 'd1', 'migrations', 'apply', expectedName, '--remote', '--config', join(directory, 'wrangler.jsonc')], env: { ...toolEnv, CLOUDFLARE_API_TOKEN: env.CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID: env.CLOUDFLARE_ACCOUNT_ID } })

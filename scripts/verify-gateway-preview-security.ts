@@ -1166,6 +1166,14 @@ globalThis.fetch = async (url, options) => {
 	const actor = { id: 42, login: 'maintainer', type: 'User' }
 	const event = { repository, inputs: { pr_number: '181', head_sha: sha } }
 	const fixtures = {
+		'/repos/owner/repository/environments': {
+			total_count: 2,
+			environments: [{ name: 'cloudflare-preview' }, { name: 'production' }]
+		},
+		'/repos/owner/repository/environments/production/secrets': {
+			total_count: 0,
+			secrets: []
+		},
 		'/repos/owner/repository/environments/cloudflare-preview/secrets': { total_count: [...new Set(JSON.stringify(workflow).match(/secrets\.PREVIEW_(?!POLICY_TOKEN)[A-Z_]+/g))].length, secrets: [...new Set(JSON.stringify(workflow).match(/secrets\.PREVIEW_(?!POLICY_TOKEN)[A-Z_]+/g))].map((name) => ({ name: name.slice(8) })) },
 		'/repos/owner/repository/environments/cloudflare-preview': { name: 'cloudflare-preview', deployment_branch_policy: { protected_branches: false, custom_branch_policies: true } },
 		'/repos/owner/repository/environments/cloudflare-preview/deployment-branch-policies': { total_count: 1, branch_policies: [{ name: 'main', type: 'branch' }] },
@@ -1255,6 +1263,8 @@ globalThis.fetch = async (url, options) => {
 		{ name: 'missing-preview-secrets', api: { ...fixtures, '/repos/owner/repository/environments/cloudflare-preview/secrets': { total_count: 0, secrets: [] } } },
 		{ name: 'repository-secret-fallback', api: { ...fixtures, '/repos/owner/repository/actions/secrets': { total_count: 2, secrets: [{ name: 'PREVIEW_POLICY_TOKEN' }, { name: 'CLOUDFLARE_API_TOKEN' }] } } },
 		{ name: 'organization-secret-fallback', api: { ...fixtures, '/repos/owner/repository/actions/organization-secrets': { total_count: 1, secrets: [{ name: 'PREVIEW_CLOUDFLARE_API_TOKEN' }] } } },
+		{ name: 'copied-environment-secret', api: { ...fixtures, '/repos/owner/repository/environments/production/secrets': { total_count: 1, secrets: [{ name: 'PREVIEW_CLOUDFLARE_API_TOKEN' }] } } },
+		{ name: 'truncated-environment-inventory', api: { ...fixtures, '/repos/owner/repository/environments': { total_count: 101, environments: [] } } },
 		{ name: 'truncated-secret-inventory', api: { ...fixtures, '/repos/owner/repository/actions/secrets': { total_count: 101, secrets: [] } } },
 		{ name: 'writer-default-branch-access', api: { ...fixtures, '/repos/owner/repository/branches/main/protection': { ...fixtures['/repos/owner/repository/branches/main/protection'], restrictions: { users: [{ id: 43, login: 'writer', type: 'User' }], teams: [], apps: [] } }, '/repos/owner/repository/collaborators/writer/permission': { permission: 'write', role_name: 'write', user: { id: 43, login: 'writer', type: 'User' } } } },
 		{ name: 'malformed-sha', env: { PREVIEW_HEAD_SHA: 'abc' } },

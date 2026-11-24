@@ -1,5 +1,8 @@
 # gv-kit
 
+> [!WARNING]
+> **Deprecated and archived.** This repository is no longer maintained and has been archived. Do not use `gv-kit` to scaffold new projects.
+
 Scaffolding CLI for full-stack product monorepos. Pick your project shape and stack, answer prompts, and get a project that compiles, tests, and deploys.
 
 ## Quickstart
